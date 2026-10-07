@@ -191,6 +191,12 @@ Fonts, sizes, underline, alignment, indents, named styles beyond headings, heade
 
 ## 7. Work plan
 
+v1 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with the whole set before adding a filter. The tag at M5 is `v0.1.0`.
+
+Each milestone is a branch `feature/mN-short-name` from `master`. A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
+
+The sections above are the specification. This section is the order of work. The sample letter in [brand/window.png](brand/window.png) is the chrome target at M0; its paragraphs, list, and table arrive with the milestones that own them.
+
 | Milestone | Done when |
 |---|---|
 | **M0 — Window** | Menus, both toolbars, ruler stub, empty page, About, status `Page n of m`. Matches the sketch. |
@@ -199,6 +205,69 @@ Fonts, sizes, underline, alignment, indents, named styles beyond headings, heade
 | **M3 — Page** | Tables, headers, footers, footnotes, images, columns, page setup. |
 | **M4 — Spell, print, templates** | Spell dialog (aspell). System print. An RTF starter file. Markdown lists and pipe tables, once those objects exist. |
 | **M5 — Package** | `debian/`, `scripts/release.sh` → `.deb`, tarball, AppImage. Tag `v0.1.0`. |
+
+### M0 — Window
+
+The Meson tree, the gtkmm window, and `scripts/lint.sh`. No document on disk.
+
+- Menus in order: File, Edit, View, Insert, Format, Tools, Table, Help, with the mnemonics from the window section. Items are visible. Commands that need a document are insensitive. Save stays sensitive.
+- Standard toolbar, then the format toolbar through alignment, then the style combo, bullets, and numbering. App-specific controls are visible and wait for their milestone.
+- Ruler stub. Empty white page on the `#808080` pasteboard. Page view is the selected radio. Draft is present and waits for M2.
+- Title `Write-It - Untitled`. First launch 960×700. The ini remembers `window-width` and `window-height`.
+- Status message, then `Page 1 of 1`, then the zoom. View → Zoom and the zoom cell share one list, including Fit width.
+- About Write-It: name, version, one sentence, the Unlicense, Close.
+- Close (Ctrl+W) and Exit (Ctrl+Q). The right-click menu starts with Cut, Copy, Paste.
+
+**Done when** the line in the table is true and the window matches [brand/window.png](brand/window.png) with an empty page.
+
+### M1 — File
+
+A document of paragraphs and character runs. This is the first slice that round-trips.
+
+- Type, select, and apply font, size, bold, italic, and underline. A new document starts at Sans 11. Sizes are the locked list. No font colour.
+- Undo and Redo for this slice. Find and Replace, one dialog, in the locked field order.
+- New, Open, Save, and Save As write RTF for paragraphs and character format. Dirty state is a trailing `*` on the title. Closing a dirty document asks Save, Don’t Save, Cancel, with Save as the default.
+- Open Recent, up to eight names, tooltip the full path, and the sentence “That file is missing.” Options… can set the recent-file count to 4, 8, or 12, and the default font family and size.
+- Plain `.txt` imports as paragraphs.
+- Markdown import and export cover headings, paragraphs, bold, and italic. Lists, tables, and image paths wait until those objects exist.
+
+**Done when** the M1 line in the table is true. A headless test round-trips a paragraph with character format through RTF, round-trips the Markdown subset, and imports a plain-text file as paragraphs.
+
+### M2 — Paragraph
+
+- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection.
+- Named styles. The style combo lists them and applies the chosen style. Style… edits a style.
+- Draft view hides the pagination chrome. Page stays the default and is still the view that prints.
+- RTF for this slice round-trips. Markdown lists wait until M4.
+
+**Done when** the M2 line in the table is true. A headless test round-trips indents, alignment, one bulleted list, one numbered list, and a named style through RTF.
+
+### M3 — Page
+
+- Tables, and the Table menu: insert a table, insert and delete rows and columns.
+- Headers, footers, and footnotes.
+- Images. Insert → Picture…. Markdown image paths export and import with this slice.
+- Columns and page setup: paper, orientation, margins.
+- The ruler reflects the page setup.
+
+**Done when** the M3 line in the table is true. A headless test round-trips a table, a header, a footer, a footnote, an image, and a two-column section through RTF.
+
+### M4 — Spell, print, templates
+
+- Spelling… (F7) is a dialog against a local aspell dictionary. Squiggles and grammar stay out of v1. Options… gains the dictionary name.
+- Print… opens the system print dialog. Page is the view that prints.
+- New from Template… picks an RTF starter shipped with the program.
+- Markdown import and export gain lists and GitHub pipe tables.
+
+**Done when** the M4 line in the table is true. A headless test covers the Markdown list and pipe-table slice, and the spelling check against a fixed word list with no network.
+
+### M5 — Package
+
+- `debian/`, a desktop file for `org.gmgauthier.WriteIt`, and `scripts/release.sh`.
+- The script produces the source tarball, the amd64 `.deb`, and the AppImage. The desktop `Name=` is the AppImage’s name.
+- Tag `v0.1.0` after `meson test` and lint are green.
+
+**Done when** the three artifacts exist for `0.1.0` and the tag points at that commit. Live with M0 through M5 before adding a filter. `.doc`, `.docx`, `.odt`, `.abw`, HTML, and LaTeX stay out of this tag.
 
 ## 8. Traps
 
