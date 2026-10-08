@@ -8,9 +8,9 @@ APP_ID: `org.gmgauthier.WriteIt`
 License: The Unlicense (`UNLICENSE`)  
 Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.com/gmgauthier/write-it
 
-## Status (2026-10-07)
+## Status (2026-10-08)
 
-**Specification.** This repository holds the plan. Source begins at M0. 1.0 is M0 through M5. Live with that release before adding a filter. Tag `v1.0.0` at M5.
+**M0.** The window is in this tree: menus, both toolbars, a ruler stub, an empty page, and About. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -73,7 +73,7 @@ The page sits on a neutral gray pasteboard, `#808080`.
 +------------------------------------------------------------------+
 ```
 
-Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
+Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
 
 Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items.
 
@@ -119,6 +119,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 |---|---|
 | Standard Toolbar | Check. On by default |
 | Format Toolbar | Check. On by default |
+| Side by side | Check. On by default. The two toolbars share one row. Off stacks them, standard above format |
 | Status Bar | Check. On by default |
 | Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width |
 | Page / Draft | Radio. Page is the default |
@@ -145,6 +146,8 @@ The standard toolbar never grows an app-specific button. Groups, left to right: 
 
 The format toolbar: font, size, bold, italic, underline, align left, align center, align right, then a separator, then the style combo, bullets, and numbering.
 
+View → Side by side is on by default, so the two toolbars share one row. Turning it off stacks them, with the standard toolbar above the format toolbar.
+
 ### Status bar
 
 The left side is a message (“Saved letter.rtf”) that stays until the next message. The rightmost cell is the zoom, and it pops the same list as View. The cell to its left is the page, “Page 2 of 4”.
@@ -153,7 +156,7 @@ The left side is a message (“Saved letter.rtf”) that stays until the next me
 
 `~/.config/write-it/write-it.ini`
 
-Keys: `window-width`, `window-height`, `recent`, `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `zoom`.
+Keys: `window-width`, `window-height`, `recent`, `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`.
 
 ## 5. Feature floor
 
@@ -199,7 +202,7 @@ The sections above are the specification. This section is the order of work. The
 
 | Milestone | Done when |
 |---|---|
-| **M0 — Window** | Menus, both toolbars, ruler stub, empty page, About, status `Page n of m`. Matches the sketch. |
+| **M0 — Window** | Menus, both toolbars on one row (View can stack them), ruler stub, empty page, About, status `Page n of m`. Matches the sketch. |
 | **M1 — File** | New / Open / Save RTF for paragraphs and character format. Recent files. Plain-text import. Markdown import and export for headings, paragraphs, bold, and italic. |
 | **M2 — Paragraph** | Indents, alignment, lists, named styles. Draft view. |
 | **M3 — Page** | Tables, headers, footers, footnotes, images, columns, page setup. |
@@ -211,9 +214,9 @@ The sections above are the specification. This section is the order of work. The
 The Meson tree, the gtkmm window, and `scripts/lint.sh`. No document on disk.
 
 - Menus in order: File, Edit, View, Insert, Format, Tools, Table, Help, with the mnemonics from the window section. Items are visible. Commands that need a document are insensitive. Save stays sensitive.
-- Standard toolbar, then the format toolbar through alignment, then the style combo, bullets, and numbering. App-specific controls are visible and wait for their milestone.
+- The standard toolbar and the format toolbar share one row. View → Side by side is on by default, and turning it off stacks them. The format toolbar runs through alignment, then the style combo, bullets, and numbering. App-specific controls are visible and wait for their milestone.
 - Ruler stub. Empty white page on the `#808080` pasteboard. Page view is the selected radio. Draft is present and waits for M2.
-- Title `Write-It - Untitled`. First launch 960×700. The ini remembers `window-width` and `window-height`.
+- Title `Write-It - Untitled`. First launch asks for 960×700. With the toolbars on one row, the window opens wide enough to show every control on that row. The ini remembers `window-width` and `window-height`.
 - Status message, then `Page 1 of 1`, then the zoom. View → Zoom and the zoom cell share one list, including Fit width.
 - About Write-It: name, version, one sentence, the Unlicense, Close.
 - Close (Ctrl+W) and Exit (Ctrl+Q). The right-click menu starts with Cut, Copy, Paste.
@@ -274,9 +277,23 @@ A document of paragraphs and character runs. This is the first slice that round-
 - Forking AbiWord, or linking libabiword as the document
 - `.doc`, `.docx`, `.odt`, `.abw`, or LaTeX as a v1 deliverable
 - Markdown as the file Save writes, or a source view of the markup
-- Collaboration, grammar checking, mail merge
-- A presentation view, a drawing canvas, or an outline that is really Show-It
+- Grammar checking or mail merge in 1.0. Both are later majors. Collaboration that needs an account stays out.
+- A presentation view, or an outline that is really Show-It. Drawing is a later major, and it is not a second Show-It.
 - WebKit as the page
 - A WordPerfect 5.1 function-key map, or Reveal Codes
 - A shared framework that has to exist before Write-It can save a file
 - Turning the Ephemeris Notepad into a second Write-It
+
+## 9. Roadmap
+
+The end zone is Word 97 as Office 97 Standard shipped it on 16 January 1997. 1.0 is not that. Each row after 1.0 is one major release, tagged `vX.0.0`, and it starts after Pay-It 1.0 has been lived with, in the rotation in the suite note. A patch release does not add the next row. VBA stays out. Save keeps writing RTF.
+
+| Version | Job |
+|---|---|
+| **1.0** | The work plan above. |
+| **2.0** | Font colour, highlight, strikethrough, superscript and subscript, paragraph spacing, borders and shading, tabs on a real ruler, and the format painter. |
+| **3.0** | Sections, page numbers, endnotes, captions, a table of contents, an index, bookmarks, and hyperlinks. |
+| **4.0** | Comments, track changes, AutoCorrect, AutoText, a thesaurus, a grammar dialog, and spelling as you type. The checkers are local. |
+| **5.0** | Mail merge, envelopes, and labels. The data source is a CSV. |
+| **6.0** | Text boxes, lines, autoshapes, and wrap around a picture. |
+| **7.0** | Open a Word 97 `.doc` and keep the formatting this program understands. |

@@ -12,7 +12,7 @@ LCOS itself: [https://github.com/BryanLunduke/LCOS](https://github.com/BryanLund
 
 ## Status
 
-**Specification.** No release yet. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md). The plan finishes at `v1.0.0`.
+**M0.** The window is in this tree. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Save writes RTF. Export writes Markdown.
 
