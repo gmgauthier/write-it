@@ -10,7 +10,7 @@ Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.co
 
 ## Status (2026-10-08)
 
-**M0.** The window is in this tree: menus, both toolbars, a ruler stub, an empty page, and About. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
+**M1.** Typing, font, size, bold, italic, underline, undo, find and replace, and RTF open and save are in this tree, on the M0 window. Recent files, plain-text import, and Markdown import and export cover headings, paragraphs, bold, and italic. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -156,7 +156,7 @@ The left side is a message (“Saved letter.rtf”) that stays until the next me
 
 `~/.config/write-it/write-it.ini`
 
-Keys: `window-width`, `window-height`, `recent`, `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`.
+Keys: `window-width`, `window-height`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`.
 
 ## 5. Feature floor
 

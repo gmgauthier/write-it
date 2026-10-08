@@ -3,6 +3,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace writeit {
 
@@ -16,6 +17,12 @@ struct Settings {
   bool show_statusbar = true;
   // True puts both toolbars on one row. False stacks the standard bar above the format bar.
   bool toolbars_side_by_side = true;
+  std::string default_font = "Sans";
+  int default_size = 11;
+  // 4, 8, or 12. Open Recent shows this many names.
+  int recent_count = 8;
+  std::string last_dir;
+  std::vector<std::string> recent;
 
   void load();
   void save() const;
