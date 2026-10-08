@@ -10,7 +10,7 @@ Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.co
 
 ## Status (2026-10-07)
 
-**Specification.** This repository holds the plan. Source begins at M0. v1 is M0 through M5. Live with that set before adding a filter. Tag `v0.1.0` at M5.
+**Specification.** This repository holds the plan. Source begins at M0. 1.0 is M0 through M5. Live with that release before adding a filter. Tag `v1.0.0` at M5.
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -35,7 +35,7 @@ Retro-Office is three applications with one window language: Write-It, Count-It 
 
 LCOS already ships AbiWord and Gnumeric. The gap this suite fills is coherence: a letter, a sheet, and a short deck that feel like one product. Show-It is the presentation peer the ISO does not have. Study AbiWord. Do not fork it, and do not link libabiword as the document. AbiWord is GPL. The house license is the Unlicense. Its weight sits in import filters.
 
-Write-It is the first codebase. Count-It and Show-It wait until this v1 has been lived with.
+Write-It is the first codebase. Count-It and Show-It wait until this 1.0 has been lived with.
 
 Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Notepad. Pictures stay with Lunduke Paint and Ristretto. Mail stays with Dispatch. The calculator stays galculator.
 
@@ -191,7 +191,7 @@ Fonts, sizes, underline, alignment, indents, named styles beyond headings, heade
 
 ## 7. Work plan
 
-v1 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with the whole set before adding a filter. The tag at M5 is `v0.1.0`.
+1.0 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with that release before adding a filter. M5 cuts `v1.0.0`.
 
 Each milestone is a branch `feature/mN-short-name` from `master`. A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
 
@@ -204,7 +204,7 @@ The sections above are the specification. This section is the order of work. The
 | **M2 — Paragraph** | Indents, alignment, lists, named styles. Draft view. |
 | **M3 — Page** | Tables, headers, footers, footnotes, images, columns, page setup. |
 | **M4 — Spell, print, templates** | Spell dialog (aspell). System print. An RTF starter file. Markdown lists and pipe tables, once those objects exist. |
-| **M5 — Package** | `debian/`, `scripts/release.sh` → `.deb`, tarball, AppImage. Tag `v0.1.0`. |
+| **M5 — 1.0** | `debian/`, `scripts/release.sh` → `.deb`, tarball, AppImage. Tag `v1.0.0` and publish it. |
 
 ### M0 — Window
 
@@ -254,20 +254,20 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M4 — Spell, print, templates
 
-- Spelling… (F7) is a dialog against a local aspell dictionary. Squiggles and grammar stay out of v1. Options… gains the dictionary name.
+- Spelling… (F7) is a dialog against a local aspell dictionary. Squiggles and grammar stay out of 1.0. Options… gains the dictionary name.
 - Print… opens the system print dialog. Page is the view that prints.
 - New from Template… picks an RTF starter shipped with the program.
 - Markdown import and export gain lists and GitHub pipe tables.
 
 **Done when** the M4 line in the table is true. A headless test covers the Markdown list and pipe-table slice, and the spelling check against a fixed word list with no network.
 
-### M5 — Package
+### M5 — 1.0
 
 - `debian/`, a desktop file for `org.gmgauthier.WriteIt`, and `scripts/release.sh`.
 - The script produces the source tarball, the amd64 `.deb`, and the AppImage. The desktop `Name=` is the AppImage’s name.
-- Tag `v0.1.0` after `meson test` and lint are green.
+- Tag `v1.0.0` after `meson test` and lint are green. Publish the tag and the three artifacts to Gitea and GitHub.
 
-**Done when** the three artifacts exist for `0.1.0` and the tag points at that commit. Live with M0 through M5 before adding a filter. `.doc`, `.docx`, `.odt`, `.abw`, HTML, and LaTeX stay out of this tag.
+**Done when** `v1.0.0` is tagged and the three artifacts are on both remotes. Live with that release before adding a filter. `.doc`, `.docx`, `.odt`, `.abw`, HTML, and LaTeX stay out of 1.0.
 
 ## 8. Traps
 

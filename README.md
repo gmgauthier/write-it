@@ -12,7 +12,7 @@ LCOS itself: [https://github.com/BryanLunduke/LCOS](https://github.com/BryanLund
 
 ## Status
 
-**Specification.** No release yet. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md). The package tag is `v0.1.0`.
+**Specification.** No release yet. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md). The plan finishes at `v1.0.0`.
 
 Save writes RTF. Export writes Markdown.
 
