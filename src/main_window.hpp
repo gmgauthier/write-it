@@ -101,7 +101,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   Run line_break_mark(int newline) const;
   void tag_line_breaks(int start, int end);
   void apply_run_edit(const std::function<void(Run&)>& edit);
-  void toggle_flag(bool Run::* flag);
+  enum class TextFlag { Bold, Italic, Underline };
+  static bool text_flag(const Run& run, TextFlag flag);
+  static void set_text_flag(Run& run, TextFlag flag, bool on);
+  void toggle_flag(TextFlag flag);
   void show_format(const Run& run);
   void sync_format_controls();
   void on_font_changed();

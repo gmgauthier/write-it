@@ -275,17 +275,17 @@ void MainWindow::connect_format()
       text_.grab_focus();
   });
   if (bold_toggle_)
-    bold_toggle_->signal_toggled().connect([this] { toggle_flag(&Run::bold); });
+    bold_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Bold); });
   if (italic_toggle_)
-    italic_toggle_->signal_toggled().connect([this] { toggle_flag(&Run::italic); });
+    italic_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Italic); });
   if (underline_toggle_)
-    underline_toggle_->signal_toggled().connect([this] { toggle_flag(&Run::underline); });
+    underline_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Underline); });
   if (bold_item_)
-    bold_item_->signal_activate().connect([this] { toggle_flag(&Run::bold); });
+    bold_item_->signal_activate().connect([this] { toggle_flag(TextFlag::Bold); });
   if (italic_item_)
-    italic_item_->signal_activate().connect([this] { toggle_flag(&Run::italic); });
+    italic_item_->signal_activate().connect([this] { toggle_flag(TextFlag::Italic); });
   if (underline_item_)
-    underline_item_->signal_activate().connect([this] { toggle_flag(&Run::underline); });
+    underline_item_->signal_activate().connect([this] { toggle_flag(TextFlag::Underline); });
 }
 
 void MainWindow::fill_font_combo(Gtk::ComboBoxText& combo, const std::string& active)
@@ -1175,14 +1175,42 @@ void MainWindow::apply_run_edit(const std::function<void(Run&)>& edit)
   text_.grab_focus();
 }
 
-void MainWindow::toggle_flag(bool Run::* flag)
+bool MainWindow::text_flag(const Run& run, TextFlag flag)
+{
+  switch (flag) {
+    case TextFlag::Bold:
+      return run.bold;
+    case TextFlag::Italic:
+      return run.italic;
+    case TextFlag::Underline:
+      return run.underline;
+  }
+  return false;
+}
+
+void MainWindow::set_text_flag(Run& run, TextFlag flag, bool on)
+{
+  switch (flag) {
+    case TextFlag::Bold:
+      run.bold = on;
+      break;
+    case TextFlag::Italic:
+      run.italic = on;
+      break;
+    case TextFlag::Underline:
+      run.underline = on;
+      break;
+  }
+}
+
+void MainWindow::toggle_flag(TextFlag flag)
 {
   if (suppress_format_)
     return;
   Gtk::TextBuffer::iterator start_iter;
   Gtk::TextBuffer::iterator end_iter;
   if (!buffer_->get_selection_bounds(start_iter, end_iter) || start_iter == end_iter) {
-    typing_.*flag = !(typing_.*flag);
+    set_text_flag(typing_, flag, !text_flag(typing_, flag));
     show_format(typing_);
     text_.grab_focus();
     return;
@@ -1193,7 +1221,7 @@ void MainWindow::toggle_flag(bool Run::* flag)
     if (iter.get_char() == '\n')
       continue;
     any = true;
-    if (!(format_of(iter).*flag)) {
+    if (!text_flag(format_of(iter), flag)) {
       all = false;
       break;
     }
@@ -1203,7 +1231,7 @@ void MainWindow::toggle_flag(bool Run::* flag)
     return;
   }
   const bool turn_on = !all;
-  apply_run_edit([flag, turn_on](Run& run) { run.*flag = turn_on; });
+  apply_run_edit([flag, turn_on](Run& run) { set_text_flag(run, flag, turn_on); });
 }
 
 void MainWindow::show_format(const Run& run)
