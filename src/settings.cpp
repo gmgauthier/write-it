@@ -7,6 +7,8 @@
 #include <glibmm/keyfile.h>
 #include <glibmm/miscutils.h>
 
+#include <vector>
+
 namespace writeit {
 namespace {
 
@@ -51,6 +53,39 @@ int zoom_from_text(const std::string& text, int fallback)
   return fallback;
 }
 
+bool allowed_size(int size)
+{
+  switch (size) {
+    case 8:
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+    case 14:
+    case 16:
+    case 18:
+    case 24:
+    case 36:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::vector<std::string> get_list(Glib::KeyFile& kf, const char* key)
+{
+  try {
+    if (!kf.has_key(kGroup, key))
+      return {};
+    std::vector<std::string> out;
+    for (const auto& item : kf.get_string_list(kGroup, key))
+      out.emplace_back(item);
+    return out;
+  } catch (const Glib::Error&) {
+    return {};
+  }
+}
+
 }  // namespace
 
 std::string Settings::config_path()
@@ -89,6 +124,22 @@ void Settings::load_from(const std::string& path)
   show_format_toolbar = get_bool(kf, "show-format-toolbar", show_format_toolbar);
   show_statusbar = get_bool(kf, "show-statusbar", show_statusbar);
   toolbars_side_by_side = get_bool(kf, "toolbars-side-by-side", toolbars_side_by_side);
+  const std::string font = get_str(kf, "default-font");
+  if (!font.empty())
+    default_font = font;
+  const int size = get_int(kf, "default-size", default_size);
+  if (allowed_size(size))
+    default_size = size;
+  const int count = get_int(kf, "recent-count", recent_count);
+  if (count == 4 || count == 8 || count == 12)
+    recent_count = count;
+  const std::string dir = get_str(kf, "last-dir");
+  if (!dir.empty())
+    last_dir = dir;
+  if (kf.has_key(kGroup, "recent"))
+    recent = get_list(kf, "recent");
+  if (static_cast<int>(recent.size()) > recent_count)
+    recent.resize(static_cast<size_t>(recent_count));
 }
 
 void Settings::save_to(const std::string& path) const
@@ -107,6 +158,11 @@ void Settings::save_to(const std::string& path) const
   kf.set_boolean(kGroup, "show-format-toolbar", show_format_toolbar);
   kf.set_boolean(kGroup, "show-statusbar", show_statusbar);
   kf.set_boolean(kGroup, "toolbars-side-by-side", toolbars_side_by_side);
+  kf.set_string(kGroup, "default-font", default_font);
+  kf.set_integer(kGroup, "default-size", default_size);
+  kf.set_integer(kGroup, "recent-count", recent_count);
+  kf.set_string(kGroup, "last-dir", last_dir);
+  kf.set_string_list(kGroup, "recent", recent);
   try {
     Glib::file_set_contents(path, kf.to_data());
   } catch (const Glib::Error&) {

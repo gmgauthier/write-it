@@ -37,6 +37,10 @@ int main()
   CHECK(fresh.show_format_toolbar);
   CHECK(fresh.show_statusbar);
   CHECK(fresh.toolbars_side_by_side);
+  CHECK(fresh.default_font == "Sans");
+  CHECK(fresh.default_size == 11);
+  CHECK(fresh.recent_count == 8);
+  CHECK(fresh.recent.empty());
 
   fresh.window_width = 800;
   fresh.window_height = 600;
@@ -44,6 +48,11 @@ int main()
   fresh.show_standard_toolbar = false;
   fresh.show_statusbar = false;
   fresh.toolbars_side_by_side = false;
+  fresh.default_font = "Times New Roman";
+  fresh.default_size = 18;
+  fresh.recent_count = 4;
+  fresh.last_dir = "/tmp";
+  fresh.recent = {"/tmp/a.rtf", "/tmp/b.rtf"};
   fresh.save_to(path);
 
   writeit::Settings loaded;
@@ -55,12 +64,20 @@ int main()
   CHECK(loaded.show_format_toolbar);
   CHECK(!loaded.show_statusbar);
   CHECK(!loaded.toolbars_side_by_side);
+  CHECK(loaded.default_font == "Times New Roman");
+  CHECK(loaded.default_size == 18);
+  CHECK(loaded.recent_count == 4);
+  CHECK(loaded.last_dir == "/tmp");
+  CHECK(loaded.recent.size() == 2);
+  CHECK(loaded.recent[0] == "/tmp/a.rtf");
 
   const std::string text = Glib::file_get_contents(path);
   CHECK(text.find("window-width=800") != std::string::npos);
   CHECK(text.find("zoom=fit-width") != std::string::npos);
   CHECK(text.find("show-format-toolbar=true") != std::string::npos);
   CHECK(text.find("toolbars-side-by-side=false") != std::string::npos);
+  CHECK(text.find("recent-count=4") != std::string::npos);
+  CHECK(text.find("Times New Roman") != std::string::npos);
 
   return suite_test::done("settings");
 }

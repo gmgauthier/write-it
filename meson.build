@@ -32,8 +32,11 @@ executable(
   'src/main.cpp',
   'src/application.cpp',
   'src/main_window.cpp',
+  'src/editor.cpp',
   'src/about_dialog.cpp',
   'src/settings.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,
@@ -58,3 +61,12 @@ write_it_settings_tests = executable(
   dependencies: [glibmm],
 )
 test('settings', write_it_settings_tests)
+
+write_it_document_tests = executable(
+  'write-it-document-tests',
+  'tests/test_document.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+)
+test('document', write_it_document_tests)

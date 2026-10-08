@@ -12,7 +12,7 @@ LCOS itself: [https://github.com/BryanLunduke/LCOS](https://github.com/BryanLund
 
 ## Status
 
-**M0.** The window is in this tree. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
+**M1.** Typing, character format, undo, find and replace, and RTF open and save are in this tree. Plain text imports as paragraphs. Markdown import and export cover headings, paragraphs, bold, and italic. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Save writes RTF. Export writes Markdown.
 

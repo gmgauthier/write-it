@@ -12,8 +12,6 @@
 namespace writeit {
 namespace {
 
-constexpr int kPageW = 540;
-constexpr int kPageH = 470;
 constexpr int kZooms[] = {50, 75, 100, 150, 200, 0};
 
 Glib::ustring zoom_label(int zoom)
@@ -58,13 +56,17 @@ MainWindow::MainWindow()
   root_.pack_start(status_, Gtk::PACK_SHRINK);
   add(root_);
 
+  build_editor();
   show_all_children();
   apply_chrome();
   apply_page_size();
+  text_.grab_focus();
 }
 
 bool MainWindow::on_delete_event(GdkEventAny* event)
 {
+  if (!confirm_discard_or_save())
+    return true;
   if (get_width() > 0 && get_height() > 0) {
     settings_.window_width = get_width();
     settings_.window_height = get_height();
@@ -95,38 +97,38 @@ void MainWindow::build_menus()
   };
 
   auto* file = add_menu("_File");
-  add_item(*file, "_New", false, GDK_KEY_n, Gdk::CONTROL_MASK);
+  new_item_ = add_item(*file, "_New", true, GDK_KEY_n, Gdk::CONTROL_MASK);
   add_item(*file, "New from _Template…", false);
-  add_item(*file, "_Open…", false, GDK_KEY_o, Gdk::CONTROL_MASK);
-  add_item(*file, "Open _Recent", false);
-  add_item(*file, "_Save", true, GDK_KEY_s, Gdk::CONTROL_MASK);
-  add_item(*file, "Save _As…", false);
-  add_item(*file, "_Export…", false);
+  open_item_ = add_item(*file, "_Open…", true, GDK_KEY_o, Gdk::CONTROL_MASK);
+  recent_item_ = add_item(*file, "Open _Recent", false);
+  recent_item_->set_submenu(recent_menu_);
+  save_item_ = add_item(*file, "_Save", true, GDK_KEY_s, Gdk::CONTROL_MASK);
+  save_as_item_ = add_item(*file, "Save _As…", true);
+  export_item_ = add_item(*file, "_Export…", true);
   add_item(*file, "_Print…", false, GDK_KEY_p, Gdk::CONTROL_MASK);
   add_item(*file, "Page Set_up…", false);
   file->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*file, "_Close", true, GDK_KEY_w, Gdk::CONTROL_MASK)->signal_activate().connect([this] {
-    set_title("Write-It - Untitled");
-  });
+  close_item_ = add_item(*file, "_Close", true, GDK_KEY_w, Gdk::CONTROL_MASK);
   add_item(*file, "E_xit", true, GDK_KEY_q, Gdk::CONTROL_MASK)->signal_activate().connect([this] {
     close();
   });
 
   auto* edit = add_menu("_Edit");
-  add_item(*edit, "_Undo", false, GDK_KEY_z, Gdk::CONTROL_MASK);
-  auto* redo = add_item(*edit, "_Redo", false, GDK_KEY_y, Gdk::CONTROL_MASK);
-  redo->add_accelerator("activate", accel_, GDK_KEY_z, Gdk::CONTROL_MASK | Gdk::SHIFT_MASK,
-                        Gtk::ACCEL_VISIBLE);
+  undo_item_ = add_item(*edit, "_Undo", false, GDK_KEY_z, Gdk::CONTROL_MASK);
+  redo_item_ = add_item(*edit, "_Redo", false, GDK_KEY_y, Gdk::CONTROL_MASK);
+  redo_item_->add_accelerator("activate", accel_, GDK_KEY_z, Gdk::CONTROL_MASK | Gdk::SHIFT_MASK,
+                              Gtk::ACCEL_VISIBLE);
   edit->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*edit, "Cu_t", false, GDK_KEY_x, Gdk::CONTROL_MASK);
-  add_item(*edit, "_Copy", false, GDK_KEY_c, Gdk::CONTROL_MASK);
-  add_item(*edit, "_Paste", false, GDK_KEY_v, Gdk::CONTROL_MASK);
-  add_item(*edit, "_Delete", false, GDK_KEY_Delete, static_cast<Gdk::ModifierType>(0));
+  cut_item_ = add_item(*edit, "Cu_t", false, GDK_KEY_x, Gdk::CONTROL_MASK);
+  copy_item_ = add_item(*edit, "_Copy", false, GDK_KEY_c, Gdk::CONTROL_MASK);
+  paste_item_ = add_item(*edit, "_Paste", false, GDK_KEY_v, Gdk::CONTROL_MASK);
+  delete_item_ =
+      add_item(*edit, "_Delete", false, GDK_KEY_Delete, static_cast<Gdk::ModifierType>(0));
   edit->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*edit, "Select _All", false, GDK_KEY_a, Gdk::CONTROL_MASK);
+  select_all_item_ = add_item(*edit, "Select _All", false, GDK_KEY_a, Gdk::CONTROL_MASK);
   edit->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*edit, "_Find…", false, GDK_KEY_f, Gdk::CONTROL_MASK);
-  add_item(*edit, "R_eplace…", false, GDK_KEY_h, Gdk::CONTROL_MASK);
+  find_item_ = add_item(*edit, "_Find…", true, GDK_KEY_f, Gdk::CONTROL_MASK);
+  replace_item_ = add_item(*edit, "R_eplace…", true, GDK_KEY_h, Gdk::CONTROL_MASK);
 
   auto* view = add_menu("_View");
   auto* standard = Gtk::manage(new Gtk::CheckMenuItem("Standard _Toolbar", true));
@@ -195,9 +197,9 @@ void MainWindow::build_menus()
 
   auto* format_menu = add_menu("F_ormat");
   add_item(*format_menu, "_Font…", false);
-  add_item(*format_menu, "_Bold", false, GDK_KEY_b, Gdk::CONTROL_MASK);
-  add_item(*format_menu, "_Italic", false, GDK_KEY_i, Gdk::CONTROL_MASK);
-  add_item(*format_menu, "_Underline", false, GDK_KEY_u, Gdk::CONTROL_MASK);
+  bold_item_ = add_item(*format_menu, "_Bold", true, GDK_KEY_b, Gdk::CONTROL_MASK);
+  italic_item_ = add_item(*format_menu, "_Italic", true, GDK_KEY_i, Gdk::CONTROL_MASK);
+  underline_item_ = add_item(*format_menu, "_Underline", true, GDK_KEY_u, Gdk::CONTROL_MASK);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   add_item(*format_menu, "Align _Left", false);
   add_item(*format_menu, "_Center", false);
@@ -212,7 +214,7 @@ void MainWindow::build_menus()
 
   auto* tools = add_menu("_Tools");
   add_item(*tools, "_Spelling…", false, GDK_KEY_F7, static_cast<Gdk::ModifierType>(0));
-  add_item(*tools, "_Options…", false);
+  options_item_ = add_item(*tools, "_Options…", true);
 
   auto* table = add_menu("T_able");
   add_item(*table, "_Insert Table…", false);
@@ -227,15 +229,15 @@ void MainWindow::build_menus()
       ->signal_activate()
       .connect(sigc::mem_fun(*this, &MainWindow::on_about));
 
-  auto* cut = Gtk::manage(new Gtk::MenuItem("Cu_t", true));
-  auto* copy = Gtk::manage(new Gtk::MenuItem("_Copy", true));
-  auto* paste = Gtk::manage(new Gtk::MenuItem("_Paste", true));
-  cut->set_sensitive(false);
-  copy->set_sensitive(false);
-  paste->set_sensitive(false);
-  context_.append(*cut);
-  context_.append(*copy);
-  context_.append(*paste);
+  context_cut_ = Gtk::manage(new Gtk::MenuItem("Cu_t", true));
+  context_copy_ = Gtk::manage(new Gtk::MenuItem("_Copy", true));
+  context_paste_ = Gtk::manage(new Gtk::MenuItem("_Paste", true));
+  context_cut_->set_sensitive(false);
+  context_copy_->set_sensitive(false);
+  context_paste_->set_sensitive(false);
+  context_.append(*context_cut_);
+  context_.append(*context_copy_);
+  context_.append(*context_paste_);
   context_.show_all();
 }
 
@@ -266,22 +268,19 @@ void MainWindow::build_toolbars()
   toolbars_.pack_start(standard_bar_, Gtk::PACK_SHRINK);
   toolbars_.pack_start(format_bar_, Gtk::PACK_SHRINK);
 
-  add_tool(standard_bar_, "document-new", "New", false);
-  add_tool(standard_bar_, "document-open", "Open", false);
-  add_tool(standard_bar_, "document-save", "Save", true);
+  new_tool_ = add_tool(standard_bar_, "document-new", "New", true);
+  open_tool_ = add_tool(standard_bar_, "document-open", "Open", true);
+  save_tool_ = add_tool(standard_bar_, "document-save", "Save", true);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   add_tool(standard_bar_, "document-print", "Print", false);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  add_tool(standard_bar_, "edit-cut", "Cut", false);
-  add_tool(standard_bar_, "edit-copy", "Copy", false);
-  add_tool(standard_bar_, "edit-paste", "Paste", false);
+  cut_tool_ = add_tool(standard_bar_, "edit-cut", "Cut", false);
+  copy_tool_ = add_tool(standard_bar_, "edit-copy", "Copy", false);
+  paste_tool_ = add_tool(standard_bar_, "edit-paste", "Paste", false);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  add_tool(standard_bar_, "edit-undo", "Undo", false);
-  add_tool(standard_bar_, "edit-redo", "Redo", false);
+  undo_tool_ = add_tool(standard_bar_, "edit-undo", "Undo", false);
+  redo_tool_ = add_tool(standard_bar_, "edit-redo", "Redo", false);
 
-  font_combo_.append("Sans");
-  font_combo_.set_active(0);
-  font_combo_.set_sensitive(false);
   font_combo_.set_size_request(128, -1);
   font_combo_.set_tooltip_text("Font");
   size_combo_.set_size_request(52, -1);
@@ -289,7 +288,6 @@ void MainWindow::build_toolbars()
   for (const char* size : {"8", "9", "10", "11", "12", "14", "16", "18", "24", "36"})
     size_combo_.append(size);
   size_combo_.set_active_text("11");
-  size_combo_.set_sensitive(false);
   style_combo_.append("Body text");
   style_combo_.set_active(0);
   style_combo_.set_sensitive(false);
@@ -305,7 +303,7 @@ void MainWindow::build_toolbars()
   format_bar_.append(*hold(font_combo_, 128));
   format_bar_.append(*hold(size_combo_, 52));
 
-  auto toggle = [this](const char* icon, const char* tip, bool active) {
+  auto toggle = [this](const char* icon, const char* tip, bool active, bool sensitive) {
     auto* button = Gtk::manage(new Gtk::ToggleToolButton());
     if (Gtk::IconTheme::get_default()->has_icon(icon))
       button->set_icon_name(icon);
@@ -313,20 +311,21 @@ void MainWindow::build_toolbars()
       button->set_label(tip);
     button->set_tooltip_text(tip);
     button->set_active(active);
-    button->set_sensitive(false);
+    button->set_sensitive(sensitive);
     format_bar_.append(*button);
+    return button;
   };
-  toggle("format-text-bold", "Bold", false);
-  toggle("format-text-italic", "Italic", false);
-  toggle("format-text-underline", "Underline", false);
+  bold_toggle_ = toggle("format-text-bold", "Bold", false, true);
+  italic_toggle_ = toggle("format-text-italic", "Italic", false, true);
+  underline_toggle_ = toggle("format-text-underline", "Underline", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  toggle("format-justify-left", "Align Left", true);
-  toggle("format-justify-center", "Center", false);
-  toggle("format-justify-right", "Align Right", false);
+  toggle("format-justify-left", "Align Left", true, false);
+  toggle("format-justify-center", "Center", false, false);
+  toggle("format-justify-right", "Align Right", false, false);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   format_bar_.append(*hold(style_combo_, 110));
-  toggle("format-list-unordered", "Bullets", false);
-  toggle("format-list-ordered", "Numbering", false);
+  toggle("format-list-unordered", "Bullets", false, false);
+  toggle("format-list-ordered", "Numbering", false, false);
 }
 
 void MainWindow::build_page()
@@ -337,9 +336,17 @@ void MainWindow::build_page()
 
   page_.set_size_request(kPageW, kPageH);
   page_.get_style_context()->add_class("page");
-  page_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_page_draw));
   page_.add_events(Gdk::BUTTON_PRESS_MASK);
-  page_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context));
+  page_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
+
+  buffer_ = Gtk::TextBuffer::create();
+  text_.set_buffer(buffer_);
+  text_.set_wrap_mode(Gtk::WRAP_WORD_CHAR);
+  text_.set_hexpand(true);
+  text_.set_vexpand(true);
+  text_.get_style_context()->add_class("page-text");
+  page_.add(text_);
+  text_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   page_.signal_size_allocate().connect([this](Gtk::Allocation&) { ruler_.queue_draw(); });
 
   board_.get_style_context()->add_class("pasteboard");
@@ -348,14 +355,14 @@ void MainWindow::build_page()
   page_.set_valign(Gtk::ALIGN_START);
   page_.set_margin_top(18);
   page_.set_margin_bottom(18);
-  board_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context));
+  board_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   board_.add_events(Gdk::BUTTON_PRESS_MASK);
 
   paste_.get_style_context()->add_class("pasteboard");
   paste_.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
   paste_.add(board_);
   paste_.add_events(Gdk::BUTTON_PRESS_MASK);
-  paste_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context));
+  paste_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   paste_.signal_size_allocate().connect([this](Gtk::Allocation&) {
     if (settings_.zoom == 0)
       apply_page_size();
@@ -368,16 +375,19 @@ void MainWindow::build_status()
   status_.get_style_context()->add_class("statusbar");
   message_.set_halign(Gtk::ALIGN_START);
   message_.set_hexpand(true);
+  message_.set_ellipsize(Pango::ELLIPSIZE_END);
   page_label_.set_text("Page 1 of 1");
   zoom_cell_.add(zoom_label_);
   zoom_cell_.add_events(Gdk::BUTTON_PRESS_MASK);
-  zoom_cell_.signal_button_press_event().connect([this](GdkEventButton* event) {
-    if (event->type != GDK_BUTTON_PRESS || event->button != 1)
-      return false;
-    zoom_popup_.popup_at_widget(&zoom_cell_, Gdk::GRAVITY_NORTH_EAST, Gdk::GRAVITY_SOUTH_EAST,
-                                reinterpret_cast<GdkEvent*>(event));
-    return true;
-  });
+  zoom_cell_.signal_button_press_event().connect(
+      [this](GdkEventButton* event) {
+        if (event->type != GDK_BUTTON_PRESS || event->button != 1)
+          return false;
+        zoom_popup_.popup_at_widget(&zoom_cell_, Gdk::GRAVITY_NORTH_EAST, Gdk::GRAVITY_SOUTH_EAST,
+                                    reinterpret_cast<GdkEvent*>(event));
+        return true;
+      },
+      false);
   framed(status_, message_, true);
   framed(status_, page_label_, false);
   framed(status_, zoom_cell_, false);
@@ -394,7 +404,6 @@ void MainWindow::load_css()
   try {
     css->load_from_path(path);
   } catch (const Glib::Error&) {
-    return;
   }
   auto screen = Gdk::Screen::get_default();
   if (!screen)
@@ -422,21 +431,27 @@ void MainWindow::apply_chrome()
 
 void MainWindow::apply_page_size()
 {
-  int width = kPageW;
-  int height = kPageH;
-  if (settings_.zoom == 0) {
-    width = std::max(120, paste_.get_allocated_width() - 36);
-    height = std::max(80, width * kPageH / kPageW);
-  } else {
-    width = std::max(1, kPageW * settings_.zoom / 100);
-    height = std::max(1, kPageH * settings_.zoom / 100);
+  if (sizing_)
+    return;
+  sizing_ = true;
+  const double z = zoom_factor();
+  const int width = std::max(1, static_cast<int>(kPageW * z + 0.5));
+  const int base_h = std::max(1, static_cast<int>(kPageH * z + 0.5));
+  apply_margins();
+  if (z != styled_zoom_) {
+    styled_zoom_ = z;
+    restyle_tags();
   }
+  int min_h = 0;
+  int nat_h = 0;
+  text_.get_preferred_height_for_width(std::max(1, width - 2), min_h, nat_h);
+  const int height = std::max(base_h, nat_h);
   int current_w = 0;
   int current_h = 0;
   page_.get_size_request(current_w, current_h);
-  if (current_w == width && current_h == height)
-    return;
-  page_.set_size_request(width, height);
+  if (current_w != width || current_h != height)
+    page_.set_size_request(width, height);
+  sizing_ = false;
 }
 
 void MainWindow::set_zoom(int zoom)
@@ -469,19 +484,6 @@ void MainWindow::on_about()
   dialog.run();
 }
 
-bool MainWindow::on_page_draw(const Cairo::RefPtr<Cairo::Context>& cr)
-{
-  const Gtk::Allocation area = page_.get_allocation();
-  cr->set_source_rgb(1, 1, 1);
-  cr->rectangle(0, 0, area.get_width(), area.get_height());
-  cr->fill();
-  cr->set_source_rgb(0.36, 0.36, 0.36);
-  cr->rectangle(0.5, 0.5, area.get_width() - 1, area.get_height() - 1);
-  cr->set_line_width(1);
-  cr->stroke();
-  return true;
-}
-
 bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   const Gtk::Allocation self = ruler_.get_allocation();
@@ -508,11 +510,26 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 
 bool MainWindow::on_context(GdkEventButton* event)
 {
-  if (event->type == GDK_BUTTON_PRESS && event->button == 3) {
-    context_.popup_at_pointer(reinterpret_cast<GdkEvent*>(event));
-    return true;
+  if (!event || event->type != GDK_BUTTON_PRESS || event->button != 3)
+    return false;
+  auto text_win = text_.get_window(Gtk::TEXT_WINDOW_TEXT);
+  if (buffer_ && text_win && event->window == text_win->gobj()) {
+    int bx = 0;
+    int by = 0;
+    text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_TEXT, static_cast<int>(event->x),
+                                  static_cast<int>(event->y), bx, by);
+    Gtk::TextBuffer::iterator where;
+    int trailing = 0;
+    text_.get_iter_at_position(where, trailing, bx, by);
+    Gtk::TextBuffer::iterator start;
+    Gtk::TextBuffer::iterator end;
+    if (!buffer_->get_selection_bounds(start, end) || where.compare(start) < 0 ||
+        where.compare(end) > 0)
+      buffer_->place_cursor(where);
+    update_actions();
   }
-  return false;
+  context_.popup_at_pointer(reinterpret_cast<GdkEvent*>(event));
+  return true;
 }
 
 }  // namespace writeit

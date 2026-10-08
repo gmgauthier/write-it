@@ -10,6 +10,16 @@ scrolledwindow.pasteboard > viewport,
   box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.35);
 }
 
+textview.page-text,
+textview.page-text text {
+  background-color: #ffffff;
+  color: #000000;
+  caret-color: #000000;
+}
+textview.page-text {
+  border: none;
+}
+
 .ruler {
   background-color: #f4f3f2;
   border-bottom: 1px solid #c8c6c4;
