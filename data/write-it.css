@@ -1,0 +1,28 @@
+scrolledwindow.pasteboard,
+scrolledwindow.pasteboard > viewport,
+.pasteboard {
+  background-color: #808080;
+}
+
+.page {
+  background-color: #ffffff;
+  border: 1px solid #5c5c5c;
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.ruler {
+  background-color: #f4f3f2;
+  border-bottom: 1px solid #c8c6c4;
+}
+
+.statusbar {
+  background-color: #e6e4e2;
+}
+.statusbar frame,
+.statusbar frame > border,
+.statusbar label {
+  padding: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  min-height: 0;
+}

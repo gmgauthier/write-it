@@ -1,0 +1,116 @@
+/* SPDX-License-Identifier: Unlicense */
+
+#include "settings.hpp"
+
+#include <glib.h>
+#include <glibmm/fileutils.h>
+#include <glibmm/keyfile.h>
+#include <glibmm/miscutils.h>
+
+namespace writeit {
+namespace {
+
+constexpr const char* kGroup = "write-it";
+
+int get_int(Glib::KeyFile& kf, const char* key, int fallback)
+{
+  try {
+    if (kf.has_key(kGroup, key))
+      return kf.get_integer(kGroup, key);
+  } catch (const Glib::Error&) {
+  }
+  return fallback;
+}
+
+bool get_bool(Glib::KeyFile& kf, const char* key, bool fallback)
+{
+  try {
+    if (kf.has_key(kGroup, key))
+      return kf.get_boolean(kGroup, key);
+  } catch (const Glib::Error&) {
+  }
+  return fallback;
+}
+
+std::string get_str(Glib::KeyFile& kf, const char* key)
+{
+  try {
+    if (kf.has_key(kGroup, key))
+      return kf.get_string(kGroup, key);
+  } catch (const Glib::Error&) {
+  }
+  return {};
+}
+
+int zoom_from_text(const std::string& text, int fallback)
+{
+  if (text == "fit-width")
+    return 0;
+  if (text == "50" || text == "75" || text == "100" || text == "150" || text == "200")
+    return std::stoi(text);
+  return fallback;
+}
+
+}  // namespace
+
+std::string Settings::config_path()
+{
+  return Glib::build_filename(Glib::get_user_config_dir(), "write-it", "write-it.ini");
+}
+
+void Settings::load()
+{
+  load_from(config_path());
+}
+
+void Settings::save() const
+{
+  save_to(config_path());
+}
+
+void Settings::load_from(const std::string& path)
+{
+  Glib::KeyFile kf;
+  try {
+    kf.load_from_file(path);
+  } catch (const Glib::Error&) {
+    return;
+  }
+  window_width = get_int(kf, "window-width", window_width);
+  window_height = get_int(kf, "window-height", window_height);
+  if (window_width < 320)
+    window_width = 960;
+  if (window_height < 240)
+    window_height = 700;
+  const std::string zoom_text = get_str(kf, "zoom");
+  if (!zoom_text.empty())
+    zoom = zoom_from_text(zoom_text, zoom);
+  show_standard_toolbar = get_bool(kf, "show-standard-toolbar", show_standard_toolbar);
+  show_format_toolbar = get_bool(kf, "show-format-toolbar", show_format_toolbar);
+  show_statusbar = get_bool(kf, "show-statusbar", show_statusbar);
+  toolbars_side_by_side = get_bool(kf, "toolbars-side-by-side", toolbars_side_by_side);
+}
+
+void Settings::save_to(const std::string& path) const
+{
+  const std::string dir = Glib::path_get_dirname(path);
+  g_mkdir_with_parents(dir.c_str(), 0700);
+  Glib::KeyFile kf;
+  try {
+    kf.load_from_file(path);
+  } catch (const Glib::Error&) {
+  }
+  kf.set_integer(kGroup, "window-width", window_width);
+  kf.set_integer(kGroup, "window-height", window_height);
+  kf.set_string(kGroup, "zoom", zoom == 0 ? "fit-width" : std::to_string(zoom));
+  kf.set_boolean(kGroup, "show-standard-toolbar", show_standard_toolbar);
+  kf.set_boolean(kGroup, "show-format-toolbar", show_format_toolbar);
+  kf.set_boolean(kGroup, "show-statusbar", show_statusbar);
+  kf.set_boolean(kGroup, "toolbars-side-by-side", toolbars_side_by_side);
+  try {
+    Glib::file_set_contents(path, kf.to_data());
+  } catch (const Glib::Error&) {
+  }
+}
+
+}  // namespace writeit
