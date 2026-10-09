@@ -14,6 +14,7 @@
 #include "check.hpp"
 #include "main_window.hpp"
 
+#include <gdk/gdkkeysyms.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <glibmm/miscutils.h>
@@ -82,6 +83,10 @@ struct MainWindowProbe {
   static Gtk::ComboBoxText& size_combo(MainWindow& w)
   {
     return w.size_combo_;
+  }
+  static Gtk::TextView& text(MainWindow& w)
+  {
+    return w.text_;
   }
   static Gtk::ComboBoxText& style_combo(MainWindow& w)
   {
@@ -239,6 +244,48 @@ bool menu_matches(Gtk::Toolbar& bar, const char* where)
   return ok;
 }
 
+// A key press as the keyboard delivers it: to the window, which hands it to
+// whatever has the keyboard focus.
+void key(writeit::MainWindow& window, guint keyval)
+{
+  GdkEvent* event = gdk_event_new(GDK_KEY_PRESS);
+  event->key.window = GDK_WINDOW(g_object_ref(window.get_window()->gobj()));
+  event->key.send_event = TRUE;
+  event->key.time = GDK_CURRENT_TIME;
+  event->key.keyval = keyval;
+  GdkKeymapKey* keys = nullptr;
+  gint n = 0;
+  if (gdk_keymap_get_entries_for_keyval(gdk_keymap_get_for_display(gdk_display_get_default()),
+                                        keyval, &keys, &n) &&
+      n > 0) {
+    event->key.hardware_keycode = static_cast<guint16>(keys[0].keycode);
+    event->key.group = static_cast<guint8>(keys[0].group);
+  }
+  g_free(keys);
+  GdkSeat* seat = gdk_display_get_default_seat(gdk_display_get_default());
+  gdk_event_set_device(event, gdk_seat_get_keyboard(seat));
+  gtk_main_do_event(event);
+  gdk_event_free(event);
+}
+
+// Types `word` at the keyboard; whether it reached the page, and the page
+// still has the focus.
+bool typed(writeit::MainWindow& window, const char* word, const char* where)
+{
+  auto buffer = MainWindowProbe::buffer(window);
+  const Glib::ustring before = buffer->get_text(buffer->begin(), buffer->end());
+  for (const char* c = word; *c; ++c)
+    key(window, gdk_unicode_to_keyval(static_cast<guint32>(*c)));
+  settle();
+  const Glib::ustring after = buffer->get_text(buffer->begin(), buffer->end());
+  Gtk::Widget* focus = window.get_focus();
+  const bool ok = after == before + word && focus == &MainWindowProbe::text(window);
+  if (!ok)
+    std::cerr << where << ": typed \"" << word << "\", page holds \"" << after << "\", focus on "
+              << (focus ? G_OBJECT_TYPE_NAME(focus->gobj()) : "nothing") << "\n";
+  return ok;
+}
+
 // Resizes the window and lets the toolbars lay out.
 void resize(writeit::MainWindow& window, int width)
 {
@@ -348,7 +395,7 @@ struct Responder {
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 60;
+constexpr int kChecks = 64;
 
 int main(int argc, char* argv[])
 {
@@ -368,6 +415,24 @@ int main(int argc, char* argv[])
     settle();
     auto& standard = MainWindowProbe::standard(window);
     auto& format = MainWindowProbe::format(window);
+
+    // Narrowing the window leaves the keyboard with the page: what the toolbars
+    // move into their overflow menus must not take the focus with them.
+    MainWindowProbe::text(window).grab_focus();
+    settle();
+    CHECK(typed(window, "ab", "960 px"));
+    resize(window, 640);
+    CHECK(typed(window, "cd", "640 px"));
+    resize(window, 1);
+    CHECK(typed(window, "ef", "minimum"));
+    resize(window, 960);
+    CHECK(typed(window, "gh", "960 px again"));
+    {
+      // Back to a clean page for what follows.
+      auto buffer = MainWindowProbe::buffer(window);
+      buffer->set_text("");
+      settle();
+    }
 
     // The first launch, 960 px: the format bar runs out of room.
     int width = 0;
