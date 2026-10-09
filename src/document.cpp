@@ -2,6 +2,9 @@
 
 #include "document.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace writeit {
 namespace {
 
@@ -132,9 +135,37 @@ bool operator==(const Run& a, const Run& b)
   return same_format(a, b) && a.text == b.text;
 }
 
+bool operator==(const Indents& a, const Indents& b)
+{
+  return a.left == b.left && a.right == b.right && a.first == b.first;
+}
+
+bool operator!=(const Indents& a, const Indents& b)
+{
+  return !(a == b);
+}
+
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
-  return a.heading == b.heading && a.runs == b.runs;
+  return a.heading == b.heading && a.indents == b.indents && a.runs == b.runs;
+}
+
+Indents clamp_indents(Indents indents)
+{
+  indents.left = std::max(0, std::min(kMaxIndent, indents.left));
+  indents.right = std::max(0, std::min(kMaxIndent, indents.right));
+  indents.first = std::max(-indents.left, std::min(kMaxIndent, indents.first));
+  return indents;
+}
+
+int cm_to_twips(double cm)
+{
+  return static_cast<int>(std::lround(cm * 1440.0 / 2.54));
+}
+
+double twips_to_cm(int twips)
+{
+  return static_cast<double>(twips) * 2.54 / 1440.0;
 }
 
 bool operator==(const Document& a, const Document& b)

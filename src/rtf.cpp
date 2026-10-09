@@ -162,6 +162,8 @@ struct State {
   bool italic = false;
   bool underline = false;
   int heading = 0;
+  // Paragraph properties. They belong to the paragraph that the next \par ends.
+  Indents indents;
   bool ignore = false;
   bool in_fonttbl = false;
   bool pending_dest = false;
@@ -192,6 +194,12 @@ class Reader {
         continue;
       }
       if (c == '}') {
+        // Closing the document group. A last paragraph with no \par still
+        // takes the properties in force inside the group.
+        if (stack_.size() == 1) {
+          final_indents_ = state_.indents;
+          closed_ = true;
+        }
         if (!stack_.empty()) {
           state_ = stack_.back();
           stack_.pop_back();
@@ -292,8 +300,11 @@ class Reader {
         sign = -1;
         ++i_;
       }
+      // Stop growing past any value this reader uses, so a long digit run
+      // cannot overflow.
       while (i_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[i_]))) {
-        param = param * 10 + (text_[i_] - '0');
+        if (param < 100000000)
+          param = param * 10 + (text_[i_] - '0');
         ++i_;
       }
       param *= sign;
@@ -335,6 +346,21 @@ class Reader {
     }
     if (word == "pard") {
       state_.heading = 0;
+      state_.indents = Indents{};
+      return;
+    }
+    // \lin and \rin are the leading and trailing indents Word 2000 and later
+    // write beside \li and \ri. For left-to-right text they are the same.
+    if ((word == "li" || word == "lin") && has_param) {
+      state_.indents.left = param;
+      return;
+    }
+    if ((word == "ri" || word == "rin") && has_param) {
+      state_.indents.right = param;
+      return;
+    }
+    if (word == "fi" && has_param) {
+      state_.indents.first = param;
       return;
     }
     if (word == "plain") {
@@ -422,6 +448,7 @@ class Reader {
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
       return;
+    paragraph_.indents = clamp_indents(from_par || !closed_ ? state_.indents : final_indents_);
     paragraphs_.push_back(paragraph_);
     paragraph_ = Paragraph{};
     paragraph_.heading = state_.heading;
@@ -455,6 +482,7 @@ class Reader {
     for (Paragraph& paragraph : paragraphs_) {
       Paragraph merged;
       merged.heading = paragraph.heading;
+      merged.indents = paragraph.indents;
       for (Run& run : paragraph.runs)
         add_run(merged, std::move(run));
       doc.paragraphs.push_back(std::move(merged));
@@ -471,6 +499,8 @@ class Reader {
   Paragraph paragraph_;
   std::vector<Paragraph> paragraphs_;
   bool saw_par_ = false;
+  Indents final_indents_;
+  bool closed_ = false;
   int lead_ = 0;
 };
 
@@ -511,6 +541,13 @@ std::string rtf_export(const Document& doc)
   for (const Paragraph& paragraph : doc.paragraphs) {
     wrote = true;
     out << "\\pard";
+    const Indents indents = clamp_indents(paragraph.indents);
+    if (indents.left != 0)
+      out << "\\li" << indents.left;
+    if (indents.right != 0)
+      out << "\\ri" << indents.right;
+    if (indents.first != 0)
+      out << "\\fi" << indents.first;
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
       out << "\\outlinelevel" << (paragraph.heading - 1);
     bool first = true;

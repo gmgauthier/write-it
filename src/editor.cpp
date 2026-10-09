@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 #include <vector>
 
@@ -107,6 +108,41 @@ bool parse_fmt(const std::string& name, Run& run)
   return true;
 }
 
+// Paragraph tags hold the indents in twips. Every character of a paragraph,
+// its newline included, carries exactly one.
+std::string para_name(const Indents& indents)
+{
+  return std::string("para") + '\x1f' + std::to_string(indents.left) + '\x1f' +
+         std::to_string(indents.right) + '\x1f' + std::to_string(indents.first);
+}
+
+bool parse_para(const std::string& name, Indents& indents)
+{
+  const std::string prefix = std::string("para") + '\x1f';
+  if (name.compare(0, prefix.size(), prefix) != 0)
+    return false;
+  std::vector<int> values;
+  std::string current;
+  try {
+    for (size_t i = prefix.size(); i <= name.size(); ++i) {
+      if (i == name.size() || name[i] == '\x1f') {
+        values.push_back(std::stoi(current));
+        current.clear();
+      } else {
+        current.push_back(name[i]);
+      }
+    }
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (values.size() != 3)
+    return false;
+  indents.left = values[0];
+  indents.right = values[1];
+  indents.first = values[2];
+  return true;
+}
+
 int heading_level_name(const std::string& name)
 {
   const std::string prefix = "heading-";
@@ -135,11 +171,13 @@ struct Atom {
   gunichar ch = 0;
   Run format;
   int heading = 0;
+  Indents indents;
 };
 
 bool operator==(const Atom& a, const Atom& b)
 {
-  return a.ch == b.ch && a.heading == b.heading && same_format(a.format, b.format);
+  return a.ch == b.ch && a.heading == b.heading && a.indents == b.indents &&
+         same_format(a.format, b.format);
 }
 
 // One code point per buffer offset, with a newline between paragraphs.
@@ -161,6 +199,7 @@ std::vector<Atom> atoms_of(const Document& doc)
         atom.format = run;
         atom.format.text.clear();
         atom.heading = paragraph.heading;
+        atom.indents = paragraph.indents;
         atoms.push_back(atom);
       }
     }
@@ -212,6 +251,7 @@ void MainWindow::build_editor()
   buffer_->signal_begin_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_begin));
   buffer_->signal_end_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_end));
   buffer_->signal_insert().connect(sigc::mem_fun(*this, &MainWindow::on_inserted));
+  buffer_->signal_erase().connect(sigc::mem_fun(*this, &MainWindow::on_erase), false);
   buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
   Gtk::Clipboard::get()->signal_owner_change().connect(
       [this](GdkEventOwnerChange*) { update_actions(); });
@@ -250,6 +290,7 @@ void MainWindow::build_editor()
   activate(select_all_item_, [this] { buffer_->select_range(buffer_->begin(), buffer_->end()); });
   activate(find_item_, [this] { present_find(false); });
   activate(replace_item_, [this] { present_find(true); });
+  activate(paragraph_item_, [this] { on_paragraph(); });
   activate(options_item_, [this] { on_options(); });
 
   const std::string font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
@@ -570,6 +611,7 @@ Document MainWindow::capture() const
   Run run;
   bool in_run = false;
   int heading = 0;
+  bool have_indents = false;
   auto flush_run = [&]() {
     if (!in_run)
       return;
@@ -580,12 +622,30 @@ Document MainWindow::capture() const
   auto flush_paragraph = [&]() {
     flush_run();
     paragraph.heading = heading;
+    if (!have_indents) {
+      // A paragraph no tag reaches: the empty last one, or one that has not
+      // been normalised yet. It follows the paragraph above.
+      if (pending_indents_set_)
+        paragraph.indents = pending_indents_;
+      else if (!doc.paragraphs.empty())
+        paragraph.indents = doc.paragraphs.back().indents;
+    }
     doc.paragraphs.push_back(paragraph);
     paragraph = Paragraph{};
     heading = 0;
+    have_indents = false;
   };
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
     const gunichar ch = iter.get_char();
+    if (!have_indents) {
+      Indents indents;
+      if (auto tag = para_tag_at(iter)) {
+        if (parse_para(tag_name(tag), indents)) {
+          paragraph.indents = indents;
+          have_indents = true;
+        }
+      }
+    }
     if (ch == '\n') {
       flush_paragraph();
       continue;
@@ -610,10 +670,12 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
 {
   loading_ = true;
   buffer_->set_text("");
+  pending_indents_set_ = false;
+  pending_indents_ = Indents{};
   for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
-    if (i > 0)
-      buffer_->insert(buffer_->end(), "\n");
     const Paragraph& paragraph = doc.paragraphs[i];
+    const auto para = para_tag(paragraph.indents);
+    bool any = false;
     for (const Run& run : paragraph.runs) {
       if (run.text.empty())
         continue;
@@ -621,7 +683,15 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       tags.push_back(format_tag(run));
       if (paragraph.heading >= 1 && paragraph.heading <= 6)
         tags.push_back(heading_tag(paragraph.heading));
+      tags.push_back(para);
       buffer_->insert_with_tags(buffer_->end(), run.text, tags);
+      any = true;
+    }
+    if (i + 1 < doc.paragraphs.size()) {
+      buffer_->insert_with_tag(buffer_->end(), "\n", para);
+    } else if (!any) {
+      pending_indents_ = clamp_indents(paragraph.indents);
+      pending_indents_set_ = true;
     }
   }
   // Newlines carry the line height. Tag them from the paragraph they end,
@@ -744,6 +814,9 @@ void MainWindow::on_user_end()
     return;
   in_user_ = false;
   finish_pending();
+  normalise_paragraphs();
+  if (pending_indents_set_ && !final_paragraph_empty())
+    pending_indents_set_ = false;
   const Document current = capture();
   if (!undo_.empty() && undo_.back().doc == current) {
     undo_.pop_back();
@@ -835,6 +908,35 @@ void MainWindow::finish_pending()
     buffer_->delete_mark(insert_end_);
   insert_start_.reset();
   insert_end_.reset();
+  // Inserted text joins the paragraph it lands in. Whole paragraphs pasted
+  // from this buffer keep their own indents; the trailing piece that merges
+  // into the destination does not.
+  {
+    int tail = start;
+    for (auto iter = buffer_->get_iter_at_offset(start); iter.get_offset() < end; ++iter) {
+      if (iter.get_char() == '\n')
+        tail = iter.get_offset() + 1;
+    }
+    std::vector<Glib::RefPtr<Gtk::TextTag>> stale;
+    for (auto iter = buffer_->get_iter_at_offset(tail); iter.get_offset() < end; ++iter) {
+      auto tag = para_tag_at(iter);
+      if (tag && std::find(stale.begin(), stale.end(), tag) == stale.end())
+        stale.push_back(tag);
+    }
+    for (const auto& tag : stale)
+      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(tail), buffer_->get_iter_at_offset(end));
+    const auto dest = para_tag(destination_indents(start, end));
+    for (int i = start; i < end;) {
+      int j = i;
+      while (j < end && !para_tag_at(buffer_->get_iter_at_offset(j)))
+        ++j;
+      if (j > i)
+        buffer_->apply_tag(dest, buffer_->get_iter_at_offset(i), buffer_->get_iter_at_offset(j));
+      while (j < end && para_tag_at(buffer_->get_iter_at_offset(j)))
+        ++j;
+      i = j;
+    }
+  }
   // Text inserted inside an existing run inherits that run's tag. That is the
   // surrounding format, not formatting the user pasted in.
   std::vector<std::string> inherited;
@@ -947,15 +1049,29 @@ void MainWindow::restyle_tags()
       tag->property_pixels_above_lines() = static_cast<int>(8 * z);
       tag->property_pixels_below_lines() = static_cast<int>(4 * z);
     }
+    Indents indents;
+    if (parse_para(tag_name(tag), indents))
+      style_para_tag(tag, indents);
   });
   caret_key_.clear();
   update_caret_font();
 }
 
+int MainWindow::margin_x() const
+{
+  return std::max(8, static_cast<int>(42 * zoom_factor() + 0.5));
+}
+
+int MainWindow::indent_px(int twips) const
+{
+  const double px = static_cast<double>(twips) * kPageW * zoom_factor() / kPageTwips;
+  return static_cast<int>(px >= 0 ? px + 0.5 : px - 0.5);
+}
+
 void MainWindow::apply_margins()
 {
   const double z = zoom_factor();
-  const int x = std::max(8, static_cast<int>(42 * z + 0.5));
+  const int x = margin_x();
   const int y = std::max(8, static_cast<int>(36 * z + 0.5));
   if (text_.get_left_margin() != x)
     text_.set_left_margin(x);
@@ -1262,6 +1378,7 @@ void MainWindow::sync_format_controls()
 {
   if (loading_ || restoring_ || suppress_format_ || in_user_ || !buffer_)
     return;
+  ruler_.queue_draw();
   auto iter = buffer_->get_insert()->get_iter();
   if (iter.get_offset() > 0) {
     auto prev = iter;
@@ -1320,6 +1437,305 @@ void MainWindow::on_size_changed()
   if (!known_size(size))
     return;
   apply_run_edit([size](Run& run) { run.size = size; });
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  const Glib::ustring name = para_name(indents);
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    style_para_tag(tag, indents);
+    table->add(tag);
+  }
+  return tag;
+}
+
+void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents) const
+{
+  // No indent leaves the view's page margins in charge.
+  if (indents == Indents{})
+    return;
+  // A tag's margin replaces the view's, so the page margin is added here.
+  // GTK hangs a negative indent from the first line; Word hangs the first
+  // line out from the rest. Moving the margin left by the hang lines them up.
+  const int hang = std::min(0, indents.first);
+  tag->property_left_margin() = std::max(0, margin_x() + indent_px(indents.left + hang));
+  tag->property_right_margin() = margin_x() + indent_px(indents.right);
+  tag->property_indent() = indent_px(indents.first);
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag_at(Gtk::TextIter iter) const
+{
+  Indents ignored;
+  for (const auto& tag : iter.get_tags()) {
+    if (parse_para(tag_name(tag), ignored))
+      return tag;
+  }
+  return {};
+}
+
+int MainWindow::paragraph_start(int offset) const
+{
+  // Paragraphs end at '\n' only, as in capture(). GTK's own lines also break
+  // at other separators.
+  auto iter = buffer_->get_iter_at_offset(offset);
+  while (iter.get_offset() > 0) {
+    auto prev = iter;
+    prev.backward_char();
+    if (prev.get_char() == '\n')
+      break;
+    iter = prev;
+  }
+  return iter.get_offset();
+}
+
+int MainWindow::paragraph_end(int offset) const
+{
+  // Just past the paragraph's newline, or the end of the buffer.
+  auto iter = buffer_->get_iter_at_offset(offset);
+  while (!iter.is_end()) {
+    const bool newline = iter.get_char() == '\n';
+    ++iter;
+    if (newline)
+      break;
+  }
+  return iter.get_offset();
+}
+
+bool MainWindow::final_paragraph_empty() const
+{
+  const int count = buffer_->get_char_count();
+  return count == 0 || buffer_->get_iter_at_offset(count - 1).get_char() == '\n';
+}
+
+Indents MainWindow::indents_at(int offset) const
+{
+  // The same rule as capture(): the paragraph's first tagged character, then
+  // the pending indents of an empty last paragraph, then the paragraph above.
+  auto iter = buffer_->get_iter_at_offset(paragraph_start(offset));
+  const auto line_start = iter;
+  for (; !iter.is_end(); ++iter) {
+    Indents indents;
+    if (auto tag = para_tag_at(iter)) {
+      if (parse_para(tag_name(tag), indents))
+        return indents;
+    }
+    if (iter.get_char() == '\n')
+      break;
+  }
+  if (iter.is_end() && pending_indents_set_)
+    return pending_indents_;
+  if (line_start.get_offset() > 0)
+    return indents_at(line_start.get_offset() - 1);
+  return Indents{};
+}
+
+Indents MainWindow::destination_indents(int start, int end) const
+{
+  // Text before the insertion on the same line, then text after it, decides.
+  if (start > 0) {
+    auto before = buffer_->get_iter_at_offset(start - 1);
+    Indents indents;
+    if (before.get_char() != '\n') {
+      if (auto tag = para_tag_at(before)) {
+        if (parse_para(tag_name(tag), indents))
+          return indents;
+      }
+    }
+  }
+  for (auto after = buffer_->get_iter_at_offset(end); !after.is_end(); ++after) {
+    Indents indents;
+    if (auto tag = para_tag_at(after)) {
+      if (parse_para(tag_name(tag), indents))
+        return indents;
+    }
+    if (after.get_char() == '\n')
+      break;
+  }
+  if (pending_indents_set_)
+    return pending_indents_;
+  if (start > 0)
+    return indents_at(start - 1);
+  return Indents{};
+}
+
+void MainWindow::normalise_paragraphs()
+{
+  // A deleted newline joins two paragraphs. The joined paragraph keeps the
+  // first one's indents, as AbiWord and LibreOffice do.
+  const int count = buffer_->get_char_count();
+  Glib::RefPtr<Gtk::TextTag> carry = para_tag(Indents{});
+  int begin = 0;
+  while (begin < count) {
+    Glib::RefPtr<Gtk::TextTag> chosen;
+    std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
+    bool uniform = true;
+    int end = begin;
+    for (auto iter = buffer_->get_iter_at_offset(begin); !iter.is_end(); ++iter) {
+      auto tag = para_tag_at(iter);
+      if (tag && !chosen)
+        chosen = tag;
+      if (tag && std::find(seen.begin(), seen.end(), tag) == seen.end())
+        seen.push_back(tag);
+      if (!tag || tag != chosen)
+        uniform = false;
+      end = iter.get_offset() + 1;
+      if (iter.get_char() == '\n')
+        break;
+    }
+    if (!chosen) {
+      chosen = carry;
+      uniform = false;
+    }
+    if (!uniform) {
+      for (const auto& tag : seen)
+        buffer_->remove_tag(tag, buffer_->get_iter_at_offset(begin),
+                            buffer_->get_iter_at_offset(end));
+      buffer_->apply_tag(chosen, buffer_->get_iter_at_offset(begin),
+                         buffer_->get_iter_at_offset(end));
+    }
+    carry = chosen;
+    begin = end;
+  }
+}
+
+void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
+                          const Gtk::TextBuffer::iterator& to)
+{
+  // Erasing through to the end of the buffer from the start of a line leaves
+  // an empty last paragraph. Like Word's surviving paragraph mark, it keeps
+  // the indents of the last paragraph that was there.
+  if (loading_ || !buffer_ || !to.is_end() || from == to)
+    return;
+  if (paragraph_start(from.get_offset()) != from.get_offset())
+    return;
+  pending_indents_ = indents_at(buffer_->get_char_count());
+  pending_indents_set_ = true;
+}
+
+void MainWindow::apply_indents(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  buffer_->get_selection_bounds(start_iter, end_iter);
+  const int sel_start = start_iter.get_offset();
+  const int sel_end = end_iter.get_offset();
+  // Every paragraph the selection touches, each with its newline. A
+  // selection that ends just after a newline does not reach the next one.
+  const int start = paragraph_start(sel_start);
+  const int end = paragraph_end(sel_end > sel_start ? sel_end - 1 : sel_end);
+  buffer_->begin_user_action();
+  std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
+  for (auto iter = buffer_->get_iter_at_offset(start); iter.get_offset() < end; ++iter) {
+    auto tag = para_tag_at(iter);
+    if (tag && std::find(seen.begin(), seen.end(), tag) == seen.end())
+      seen.push_back(tag);
+  }
+  for (const auto& tag : seen)
+    buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start), buffer_->get_iter_at_offset(end));
+  if (start < end)
+    buffer_->apply_tag(para_tag(indents), buffer_->get_iter_at_offset(start),
+                       buffer_->get_iter_at_offset(end));
+  // The empty last paragraph has nothing to tag. Hold its indents aside.
+  if (end == buffer_->get_char_count() && final_paragraph_empty()) {
+    pending_indents_ = indents;
+    pending_indents_set_ = true;
+  }
+  buffer_->end_user_action();
+  buffer_->select_range(buffer_->get_iter_at_offset(sel_start),
+                        buffer_->get_iter_at_offset(sel_end));
+  ruler_.queue_draw();
+  text_.grab_focus();
+}
+
+void MainWindow::on_paragraph()
+{
+  // Word 97's Format > Paragraph indentation group. Alignment joins it with
+  // the alignment slice. Spacing waits for 2.0.
+  const Indents current = indents_at(cursor_offset());
+  Gtk::Dialog dialog("Paragraph", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+  auto* frame = Gtk::manage(new Gtk::Frame("Indentation"));
+  auto* grid = Gtk::manage(new Gtk::Grid());
+  grid->set_row_spacing(8);
+  grid->set_column_spacing(12);
+  grid->set_margin_top(8);
+  grid->set_margin_bottom(12);
+  grid->set_margin_start(12);
+  grid->set_margin_end(12);
+  frame->set_margin_top(12);
+  frame->set_margin_bottom(12);
+  frame->set_margin_start(12);
+  frame->set_margin_end(12);
+  const double max_cm = std::floor(twips_to_cm(kMaxIndent) * 100.0) / 100.0;
+  auto spin = [max_cm](double value) {
+    auto* button =
+        Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(0, 0, max_cm, 0.1, 1.0), 0.1, 2));
+    button->set_numeric(true);
+    button->set_value(std::round(value * 100.0) / 100.0);
+    button->set_activates_default(true);
+    return button;
+  };
+  auto label = [](const char* text, Gtk::Widget& target) {
+    auto* item = Gtk::manage(new Gtk::Label(text, true));
+    item->set_halign(Gtk::ALIGN_START);
+    item->set_mnemonic_widget(target);
+    return item;
+  };
+  auto unit = []() {
+    auto* item = Gtk::manage(new Gtk::Label("cm"));
+    item->set_halign(Gtk::ALIGN_START);
+    return item;
+  };
+  auto* left = spin(twips_to_cm(current.left));
+  auto* right = spin(twips_to_cm(current.right));
+  auto* special = Gtk::manage(new Gtk::ComboBoxText());
+  special->append("(none)");
+  special->append("First line");
+  special->append("Hanging");
+  special->set_active(current.first > 0 ? 1 : current.first < 0 ? 2 : 0);
+  auto* by = spin(twips_to_cm(current.first < 0 ? -current.first : current.first));
+  by->set_sensitive(current.first != 0);
+  special->signal_changed().connect([special, by] {
+    by->set_sensitive(special->get_active_row_number() != 0);
+    if (special->get_active_row_number() != 0 && by->get_value() == 0)
+      by->set_value(1.27);
+  });
+  grid->attach(*label("_Left:", *left), 0, 0, 1, 1);
+  grid->attach(*left, 1, 0, 1, 1);
+  grid->attach(*unit(), 2, 0, 1, 1);
+  grid->attach(*label("_Right:", *right), 0, 1, 1, 1);
+  grid->attach(*right, 1, 1, 1, 1);
+  grid->attach(*unit(), 2, 1, 1, 1);
+  grid->attach(*label("_Special:", *special), 3, 0, 1, 1);
+  grid->attach(*special, 3, 1, 1, 1);
+  grid->attach(*label("B_y:", *by), 4, 0, 1, 1);
+  grid->attach(*by, 4, 1, 1, 1);
+  grid->attach(*unit(), 5, 1, 1, 1);
+  frame->add(*grid);
+  dialog.get_content_area()->pack_start(*frame, Gtk::PACK_SHRINK);
+  dialog.show_all_children();
+  if (dialog.run() != Gtk::RESPONSE_OK) {
+    text_.grab_focus();
+    return;
+  }
+  left->update();
+  right->update();
+  by->update();
+  Indents chosen;
+  chosen.left = cm_to_twips(left->get_value());
+  chosen.right = cm_to_twips(right->get_value());
+  const int amount = cm_to_twips(by->get_value());
+  const int row = special->get_active_row_number();
+  chosen.first = row == 1 ? amount : row == 2 ? -amount : 0;
+  apply_indents(chosen);
 }
 
 void MainWindow::build_find()
