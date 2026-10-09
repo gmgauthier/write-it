@@ -112,6 +112,10 @@ void Settings::load_from(const std::string& path)
   } catch (const Glib::Error&) {
     return;
   }
+  // An empty ini, or one without the [write-it] group, is no settings at
+  // all. Without the group KeyFile::has_key throws rather than answering.
+  if (!kf.has_group(kGroup))
+    return;
   window_width = get_int(kf, "window-width", window_width);
   window_height = get_int(kf, "window-height", window_height);
   window_maximized = get_bool(kf, "window-maximized", window_maximized);

@@ -606,7 +606,22 @@ void MainWindow::build_page()
           follow_caret();
       });
   buffer_->signal_changed().connect([this] { follow_caret(); });
-  text_.signal_size_allocate().connect([this](Gtk::Allocation&) { scroll_to_caret(); });
+  text_.signal_size_allocate().connect([this](Gtk::Allocation& allocation) {
+    // The text view lays its lines out again while it is being allocated (a
+    // zoom rewraps every line), and the resize it asks for then is lost:
+    // from Fit width to 200% the page stayed shorter than its text and the
+    // caret on the last lines was out of reach. Size the page again after
+    // this layout whenever the text wants more height than it was given.
+    // (Less is normal: an empty page, or Draft's white area, is taller.)
+    int min_h = 0;
+    int nat_h = 0;
+    text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
+    if (nat_h > allocation.get_height()) {
+      grow_page_ = true;
+      queue_page_size();
+    }
+    scroll_to_caret();
+  });
   g_signal_connect(text_.gobj(), "move-cursor", G_CALLBACK(&MainWindow::on_move_cursor), this);
   paste_.get_vadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
   paste_.get_hadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
@@ -845,6 +860,12 @@ void MainWindow::queue_page_size()
   page_idle_ = Glib::signal_idle().connect(
       [this] {
         apply_page_size();
+        // Only for text that outgrew the page: a resize on every pasteboard
+        // allocation would allocate the pasteboard again, and again.
+        if (grow_page_) {
+          grow_page_ = false;
+          page_.queue_resize();
+        }
         return false;
       },
       Glib::PRIORITY_HIGH_IDLE);

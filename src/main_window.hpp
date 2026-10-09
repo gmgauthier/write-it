@@ -292,9 +292,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
-  // The idle that sizes the page again after a layout to a new pasteboard
-  // size (Fit width, Draft). One at a time, and gone with the window.
+  // The idle that sizes the page again after a layout: to a new pasteboard
+  // size (Fit width, Draft) or to text that rewrapped to another height.
+  // One at a time, and gone with the window.
   sigc::connection page_idle_;
+  // The text wants more height than the page gave it; the idle resizes.
+  bool grow_page_ = false;
   bool follow_caret_ = false;
   // The idle follow_caret() queues; one at a time, and gone with the window.
   sigc::connection caret_idle_;
