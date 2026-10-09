@@ -175,6 +175,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  // A list item's label, for the paragraph that starts at buffer `offset`:
+  // its layout, its buffer x, and the first character's location. False for
+  // a plain paragraph.
+  bool list_label_place(const Paragraph& paragraph, int offset, int number,
+                        Glib::RefPtr<Pango::Layout>& layout, int& x, Gdk::Rectangle& where);
   void sync_list_controls();
 
   void build_find();

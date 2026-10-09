@@ -509,14 +509,14 @@ bool operator==(const Document& a, const Document& b)
   return a.paragraphs == b.paragraphs && style_sheet(a) == style_sheet(b);
 }
 
-int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap)
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap)
 {
   // Only centred and right-aligned text moves; anything else, Justify when
   // it lands included, starts at the indent like Left.
   if (align != Align::Center && align != Align::Right)
     return hang_x;
   const int width = std::max(0, label_width);
-  const int before = std::max(std::max(0, hang_width), width + std::max(0, gap));
+  const int before = std::max(std::max(0, space), width + std::max(0, gap));
   return std::max(0, text_x - before);
 }
 
@@ -813,6 +813,18 @@ void adopt_heading_styles(Document& doc, const std::string& font, int size)
       continue;
     apply_style(doc, i, i, "Heading " + std::to_string(paragraph.heading));
   }
+}
+
+int list_text_start(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return std::max(indents.left, indents.left + indents.first + kListHang);
+}
+
+int list_label_space(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return list_text_start(indents) - (indents.left + indents.first);
 }
 
 Document blank_document(const std::string& font, int size)
