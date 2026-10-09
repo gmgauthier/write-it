@@ -228,6 +228,29 @@ alive || fail "remote: the program exited"
 no_refusal "$LOG" remote
 stop
 
+# 8. The same file by another name: a symlink, a hard link and a ".." path
+# to an open file, in later launches, bring its window forward. No second
+# window, under any of the names.
+ln -s a.rtf "$DOCS/link.rtf"
+ln "$DOCS/a.rtf" "$DOCS/hard.rtf"
+mkdir -p "$DOCS/sub"
+start alias "$DOCS/a.rtf"
+wait_title "Write-It - a.rtf" || fail "alias: a.rtf did not open"
+n=0
+for name in link.rtf hard.rtf sub/../a.rtf; do
+  n=$((n + 1))
+  (cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/alias/config" GTK_A11Y=none timeout 20 \
+    "$BIN" "$name") >"$WORK/alias/remote$n.log" 2>&1
+  status=$?
+  [ "$status" = 0 ] || fail "alias: the launch of $name exited $status"
+done
+sleep 1
+[ "$(count_title "Write-It - a.rtf")" = 1 ] || fail "alias: a.rtf is not in exactly one window"
+has_title "Write-It - link.rtf" && fail "alias: link.rtf opened a second window"
+has_title "Write-It - hard.rtf" && fail "alias: hard.rtf opened a second window"
+alive || fail "alias: the running instance exited"
+stop
+
 if [ "$failures" -gt 0 ]; then
   echo "smoke-open: $failures failed"
   for f in "$WORK"/*/log "$WORK"/*/remote*.log; do
