@@ -360,6 +360,18 @@ int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_
   return std::max(0, text_x - before);
 }
 
+int list_text_start(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return std::max(indents.left, indents.left + indents.first + kListHang);
+}
+
+int list_label_space(const Indents& raw)
+{
+  (void)raw;
+  return kListHang;
+}
+
 Document blank_document(const std::string& font, int size)
 {
   (void)font;

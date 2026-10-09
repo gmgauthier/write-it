@@ -193,14 +193,6 @@ bool parse_para(const std::string& name, ParaFormat& format)
   return true;
 }
 
-// Where a list item's first line of text starts, in twips from the page
-// margin. The label sits at left + first; the text starts at the left indent,
-// or a hang's width past the label when the first line is not hanging.
-int list_text_first(const Indents& indents)
-{
-  return std::max(indents.left, indents.left + indents.first + kListHang);
-}
-
 int heading_level_name(const std::string& name)
 {
   const std::string prefix = "heading-";
@@ -1601,7 +1593,7 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
     // line of text starts past the label rather than out in the hang.
     tag->property_left_margin() = std::max(0, margin_left() + indent_px(indents.left));
     tag->property_right_margin() = margin_right() + indent_px(indents.right);
-    tag->property_indent() = indent_px(list_text_first(indents)) - indent_px(indents.left);
+    tag->property_indent() = indent_px(list_text_start(indents)) - indent_px(indents.left);
     return;
   }
   // No indent leaves the view's page margins in charge.
@@ -1969,6 +1961,36 @@ bool MainWindow::on_text_key(GdkEventKey* event)
   }
 }
 
+bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int number,
+                                  Glib::RefPtr<Pango::Layout>& layout, int& x,
+                                  Gdk::Rectangle& where)
+{
+  const ListFormat list = clamp_list(paragraph.list);
+  if (list.kind == ListKind::None || !buffer_)
+    return false;
+  const auto iter = buffer_->get_iter_at_offset(offset);
+  text_.get_iter_location(iter, where);
+  const Run format = paragraph.runs.empty() ? format_of(iter) : paragraph.runs.front();
+  layout = text_.create_pango_layout(list_label(list, number));
+  Pango::FontDescription desc;
+  desc.set_family(format.font.empty() ? "Sans" : format.font);
+  desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
+  layout->set_font_description(desc);
+  int width = 0;
+  int height = 0;
+  layout->get_pixel_size(width, height);
+  auto space = text_.create_pango_layout(" ");
+  space->set_font_description(desc);
+  int gap = 0;
+  int space_height = 0;
+  space->get_pixel_size(gap, space_height);
+  // Buffer x 0 is the page's left edge, as for the tag margins.
+  const Indents indents = clamp_indents(paragraph.indents);
+  x = list_label_x(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
+                   where.get_x(), width, indent_px(list_label_space(indents)), gap);
+  return true;
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,
@@ -1991,36 +2013,19 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
     int length = 0;
     for (const Run& run : paragraph.runs)
       length += static_cast<int>(Glib::ustring(run.text).length());
-    const ListFormat list = clamp_list(paragraph.list);
-    if (list.kind != ListKind::None) {
-      const auto iter = buffer_->get_iter_at_offset(offset);
-      Gdk::Rectangle where;
-      text_.get_iter_location(iter, where);
-      if (where.get_y() + where.get_height() >= visible.get_y() &&
-          where.get_y() <= visible.get_y() + visible.get_height()) {
-        const Run format = paragraph.runs.empty() ? format_of(iter) : paragraph.runs.front();
-        auto layout = text_.create_pango_layout(list_label(list, numbers[i]));
-        Pango::FontDescription desc;
-        desc.set_family(format.font.empty() ? "Sans" : format.font);
-        desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
-        layout->set_font_description(desc);
+    Gdk::Rectangle where;
+    if (paragraph.list.kind != ListKind::None)
+      text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
+    Glib::RefPtr<Pango::Layout> layout;
+    int x = 0;
+    // Only the items in view are measured and drawn.
+    if (paragraph.list.kind != ListKind::None &&
+        where.get_y() + where.get_height() >= visible.get_y() &&
+        where.get_y() <= visible.get_y() + visible.get_height()) {
+      if (list_label_place(paragraph, offset, numbers[i], layout, x, where)) {
         int width = 0;
         int height = 0;
         layout->get_pixel_size(width, height);
-        // Buffer x 0 is the page's left edge, as for the tag margins. An
-        // empty last item has no character to carry its tag, so the label
-        // is placed from the indents rather than from the text.
-        const Indents indents = clamp_indents(paragraph.indents);
-        // Centred and right-aligned text moves, and its label with it: it
-        // sits just before the first character, as in Word.
-        auto space = text_.create_pango_layout(" ");
-        space->set_font_description(desc);
-        int gap = 0;
-        int space_height = 0;
-        space->get_pixel_size(gap, space_height);
-        const int x =
-            list_label_x(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
-                         where.get_x(), width, indent_px(kListHang), gap);
         int wx = 0;
         int wy = 0;
         text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);

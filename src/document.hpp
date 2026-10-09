@@ -111,6 +111,15 @@ std::string list_label(const ListFormat& list, int number);
 // (`text_x`): a hang's width before it, or the label's width and `gap` when
 // the label is wider than the hang. Never left of 0.
 int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap);
+// Where a list item's first line of text starts, in twips from the page
+// margin: the left indent when the label hangs in front of it, else a
+// standard hang past the label (left + first + kListHang), as when the
+// first line does not hang or hangs less than that.
+int list_text_start(const Indents& indents);
+// The room between where a list item's label starts and where its text
+// does, in twips: the paragraph's own hang (list_text_start minus left +
+// first), at least the standard hang.
+int list_label_space(const Indents& indents);
 // Format > Bullets and Format > Numbering on the selected paragraphs. When
 // every one already has `kind` the list comes off; otherwise every one takes
 // it. A paragraph joining a list hangs its label in front of its text; one

@@ -841,6 +841,24 @@ void label_position()
   CHECK(list_label_x(static_cast<Align>(4), 37, 400, 40, 24, 4) == 37);
   CHECK(list_label_x(static_cast<Align>(3), 37, 400, 8, 24, 4) ==
         list_label_x(Align::Left, 37, 400, 8, 24, 4));
+
+  // The room the label gets before the text is the paragraph's own hang,
+  // never less than the standard quarter inch: where the text starts.
+  using writeit::list_label_space;
+  using writeit::list_text_start;
+  CHECK(list_label_space(Indents{720, 0, -360}) == 360);
+  CHECK(list_text_start(Indents{720, 0, -360}) == 720);
+  // A 0.75" hang: 1080 twips, and the text at the left indent.
+  CHECK(list_label_space(Indents{1440, 0, -1080}) == 1080);
+  CHECK(list_text_start(Indents{1440, 0, -1080}) == 1440);
+  // A hang smaller than the standard one, none, or a first line indented:
+  // the text starts a standard hang past the label.
+  CHECK(list_label_space(Indents{720, 0, -200}) == 360);
+  CHECK(list_text_start(Indents{720, 0, -200}) == 880);
+  CHECK(list_label_space(Indents{720, 0, 0}) == 360);
+  CHECK(list_label_space(Indents{720, 0, 200}) == 360);
+  // A hostile hang past the left margin is clamped first.
+  CHECK(list_label_space(Indents{100, 0, -5000}) == 360);
 }
 
 void markdown()
@@ -857,7 +875,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 254;
+constexpr int kChecks = 263;
 
 int main()
 {
