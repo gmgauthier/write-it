@@ -21,7 +21,12 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <cstring>
+#include <new>
 #include <string>
+#include <type_traits>
+#include <vector>
 
 namespace writeit {
 
@@ -55,6 +60,12 @@ struct MainWindowProbe {
     Gtk::TextIter end;
     w.buffer_->get_selection_bounds(start, end);
     return w.buffer_->get_text(start, end);
+  }
+  // Where follow_caret_ sits in the window, in bytes from its start.
+  static std::size_t follow_offset(MainWindow& w)
+  {
+    return static_cast<std::size_t>(reinterpret_cast<char*>(&w.follow_caret_) -
+                                    reinterpret_cast<char*>(&w));
   }
   static Gtk::TextView& text(MainWindow& w)
   {
@@ -274,7 +285,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 172;
+constexpr int kChecks = 173;
 
 int main(int argc, char* argv[])
 {
@@ -428,6 +439,33 @@ int main(int argc, char* argv[])
     MainWindowProbe::view(window, ViewMode::Page);
     window.hide();
     settle();
+  }
+
+  // A window closed with a caret move still waiting on the idle leaves
+  // nothing behind to run on it. The window lives in memory this test owns;
+  // once it is destroyed every byte is set to a pattern (follow_caret_
+  // false, so a stale callback returns before it touches anything else),
+  // and a callback that ran on the dead window would have written to it.
+  {
+    using Storage =
+        std::aligned_storage_t<sizeof(writeit::MainWindow), alignof(writeit::MainWindow)>;
+    auto storage = std::make_unique<Storage>();
+    auto* window = new (storage.get()) writeit::MainWindow();
+    window->show();
+    settle();
+    MainWindowProbe::open(*window, letter);
+    settle();
+    const std::size_t follow = MainWindowProbe::follow_offset(*window);
+    MainWindowProbe::buffer(*window)->place_cursor(
+        MainWindowProbe::buffer(*window)->get_iter_at_line(60));
+    window->hide();
+    window->~MainWindow();
+    auto* bytes = reinterpret_cast<unsigned char*>(storage.get());
+    std::memset(bytes, 0x5a, sizeof(Storage));
+    bytes[follow] = 0;
+    std::vector<unsigned char> expect(bytes, bytes + sizeof(Storage));
+    settle();
+    CHECK(std::memcmp(bytes, expect.data(), sizeof(Storage)) == 0);
   }
 
   g_remove(letter.c_str());
