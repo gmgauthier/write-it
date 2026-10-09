@@ -102,25 +102,25 @@ struct Fields {
   Gtk::ComboBoxText* special = nullptr;
 };
 
+// Each by the label that names it, as a user finds them.
 Fields fields_of(Gtk::Dialog& dialog)
 {
-  std::vector<Gtk::SpinButton*> spins;
-  std::vector<Gtk::ComboBoxText*> combos;
-  walk(dialog, [&](Gtk::Widget& widget) {
-    if (auto* spin = dynamic_cast<Gtk::SpinButton*>(&widget))
-      spins.push_back(spin);
-    else if (auto* combo = dynamic_cast<Gtk::ComboBoxText*>(&widget))
-      combos.push_back(combo);
-  });
   Fields fields;
-  if (spins.size() == 3) {
-    fields.left = spins[0];
-    fields.right = spins[1];
-    fields.by = spins[2];
-  }
-  // Alignment comes first, above Indentation.
-  if (combos.size() == 2)
-    fields.special = combos[1];
+  walk(dialog, [&](Gtk::Widget& widget) {
+    auto* label = dynamic_cast<Gtk::Label*>(&widget);
+    if (!label)
+      return;
+    Gtk::Widget* target = label->get_mnemonic_widget();
+    const Glib::ustring text = label->get_label();
+    if (text == "_Left:")
+      fields.left = dynamic_cast<Gtk::SpinButton*>(target);
+    else if (text == "_Right:")
+      fields.right = dynamic_cast<Gtk::SpinButton*>(target);
+    else if (text == "B_y:")
+      fields.by = dynamic_cast<Gtk::SpinButton*>(target);
+    else if (text == "_Special:")
+      fields.special = dynamic_cast<Gtk::ComboBoxText*>(target);
+  });
   return fields;
 }
 
@@ -196,7 +196,7 @@ const char* kRangeCm = "The measurement must be between 0 cm and 55.88 cm.";
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 32;
+constexpr int kChecks = 36;
 
 int main(int argc, char* argv[])
 {

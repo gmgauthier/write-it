@@ -538,7 +538,7 @@ void paragraph_ok()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 1594;
+constexpr int kChecks = 9980;
 
 int main()
 {
