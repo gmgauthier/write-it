@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Unlicense */
 
-// M2 paragraph alignment: Left, Center and Right, in the model and in RTF
-// (\ql \qc \qr, with \qj read as left), and alongside indents.
+// M2 paragraph alignment: Left, Center, Right and Justify, as Word 97, in the
+// model and in RTF (\ql \qc \qr \qj), and alongside indents.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -55,6 +55,9 @@ void model()
   CHECK(para("a", Align::Center) == para("a", Align::Center));
   CHECK(!(para("a", Align::Center) == para("a", Align::Left)));
   CHECK(!(para("a", Align::Right) == para("a", Align::Center)));
+  CHECK(para("a", Align::Justify) == para("a", Align::Justify));
+  CHECK(!(para("a", Align::Justify) == para("a", Align::Left)));
+  CHECK(!(para("a", Align::Justify) == para("a", Align::Right)));
   writeit::Document a;
   writeit::Document b;
   a.paragraphs.push_back(para("x", Align::Left));
@@ -83,6 +86,14 @@ void rtf_write()
   CHECK(!contains(rtf, "\\ql"));
   CHECK(!contains(rtf, "\\qj"));
   CHECK(contains(rtf, "\\pard\\f0"));
+  // Justify writes \qj, after the indents like the others.
+  writeit::Document justified;
+  justified.paragraphs.push_back(para("Justified", Align::Justify));
+  justified.paragraphs.push_back(para("Indented", Align::Justify, 720, 0, 360));
+  const std::string qj = writeit::rtf_export(justified);
+  CHECK(contains(qj, "\\pard\\qj"));
+  CHECK(contains(qj, "\\pard\\li720\\fi360\\qj"));
+  CHECK(!contains(qj, "\\ql"));
 }
 
 void rtf_round_trip()
@@ -98,6 +109,9 @@ void rtf_round_trip()
   heading.heading = 2;
   doc.paragraphs.push_back(heading);
   doc.paragraphs.push_back(para("End", Align::Right));
+  doc.paragraphs.push_back(para("Justified", Align::Justify));
+  doc.paragraphs.push_back(para("Justified hanging", Align::Justify, 720, 360, -360));
+  doc.paragraphs.push_back(para("", Align::Justify));
   // The heading in its Heading style, as since named styles.
   writeit::adopt_heading_styles(doc, "Sans", 11);
   writeit::Document back;
@@ -114,12 +128,23 @@ void rtf_round_trip()
 
 void rtf_read()
 {
-  // Each word, and \qj read as left: the spec has no justified.
+  // Each word. \qd (distributed, from East Asian Word) has no Word 97
+  // button and reads as left.
   CHECK(align_of(import("\\pard\\ql A\\par"), 0) == Align::Left);
   CHECK(align_of(import("\\pard\\qc A\\par"), 0) == Align::Center);
   CHECK(align_of(import("\\pard\\qr A\\par"), 0) == Align::Right);
-  CHECK(align_of(import("\\pard\\qj A\\par"), 0) == Align::Left);
+  CHECK(align_of(import("\\pard\\qj A\\par"), 0) == Align::Justify);
   CHECK(align_of(import("\\pard\\qd A\\par"), 0) == Align::Left);
+  CHECK(align_of(import("\\pard\\qj\\ql A\\par"), 0) == Align::Left);
+  CHECK(align_of(import("\\pard\\qc\\qj A\\par"), 0) == Align::Justify);
+  // \pard resets justified, and it carries until then.
+  {
+    const auto doc = import("\\pard\\qj A\\par B\\par\\pard C\\par");
+    CHECK(align_of(doc, 0) == Align::Justify);
+    CHECK(align_of(doc, 1) == Align::Justify);
+    CHECK(align_of(doc, 2) == Align::Left);
+  }
+  CHECK(align_of(import("{\\qj A\\par}B\\par"), 1) == Align::Left);
   // The last word wins.
   CHECK(align_of(import("\\pard\\qc\\qr A\\par"), 0) == Align::Right);
   CHECK(align_of(import("\\pard\\qr\\ql A\\par"), 0) == Align::Left);
@@ -158,12 +183,69 @@ void rtf_read()
   }
   // Ignored destinations do not leak alignment.
   CHECK(align_of(import("{\\*\\generator \\qr x;}\\pard A\\par"), 0) == Align::Left);
-  // Word's \qj file loses justification on save: it comes back left.
+  // A \qj file keeps justification through a save and reopen.
   {
     writeit::Document back;
     CHECK(writeit::rtf_import(writeit::rtf_export(import("\\pard\\qj A\\par")), back));
-    CHECK(align_of(back, 0) == Align::Left);
+    CHECK(align_of(back, 0) == Align::Justify);
   }
+}
+
+// Justified paragraphs as Word 97 and LibreOffice Writer write them: \plain,
+// a style number and a run of other paragraph words around \qj.
+void foreign_files()
+{
+  const std::string word97 =
+      "{\\rtf1\\ansi\\ansicpg1252\\uc1 \\deff0\\deflang1033\\deflangfe1033"
+      "{\\fonttbl{\\f0\\froman\\fcharset0\\fprq2{\\*\\panose 02020603050405020304}Times New Roman;}}"
+      "{\\stylesheet{\\widctlpar\\adjustright \\fs20\\cgrid \\snext0 Normal;}}"
+      "{\\info{\\author Greg}{\\operator Greg}}"
+      "\\widowctrl\\ftnbj\\aenddoc\\formshade\\viewkind1\\viewscale100 \\fet0\\sectd "
+      "\\linex0\\endnhere\\sectdefaultcl "
+      "\\pard\\plain \\qj \\widctlpar\\adjustright \\fs20\\cgrid {Justified in Word 97, long "
+      "enough to wrap.\\par }"
+      "\\pard \\qj \\li720\\widctlpar\\adjustright {Indented and justified.\\par }"
+      "\\pard \\widctlpar\\adjustright {Left again.\\par }"
+      "\\pard \\qc \\widctlpar\\adjustright {Centred.}}";
+  writeit::Document word;
+  CHECK(writeit::rtf_import(word97, word));
+  CHECK(word.paragraphs.size() == 4);
+  CHECK(align_of(word, 0) == Align::Justify);
+  CHECK(align_of(word, 1) == Align::Justify);
+  CHECK(word.paragraphs.size() > 1 && word.paragraphs[1].indents.left == 720);
+  CHECK(align_of(word, 2) == Align::Left);
+  CHECK(align_of(word, 3) == Align::Center);
+
+  const std::string writer =
+      "{\\rtf1\\ansi\\deff3\\adeflang1025"
+      "{\\fonttbl{\\f0\\froman\\fprq2\\fcharset0 Times New Roman;}{\\f3\\fswiss\\fprq2\\fcharset0 "
+      "Liberation Sans;}}"
+      "{\\stylesheet{\\s0\\snext0\\ql\\widctlpar\\hyphpar0\\ltrpar\\cf0\\loch\\f3\\fs24\\lang2057 "
+      "Normal;}}"
+      "{\\*\\generator LibreOffice/24.2.7.2$Linux_X86_64 LibreOffice_project/420$Build-2}"
+      "\\formshade\\paperh16838\\paperw11906\\margl1134\\margr1134\\margt1134\\margb1134\\sectd"
+      "\\sbknone\\sftnnar\\saftnnrlc\\sectunlocked1\\pgwsxn11906\\pghsxn16838\\marglsxn1134"
+      "\\margrsxn1134\\margtsxn1134\\margbsxn1134\\ftnbj\\ftnstart1\\ftnrstcont\\ftnnar\\aenddoc"
+      "\\aftnrstcont\\aftnstart1\\aftnnrlc\\htmautsp"
+      "{\\*\\ftnsep\\chftnsep}"
+      "\\pgndec\\pard\\plain \\s0\\qj\\widctlpar\\hyphpar0\\ltrpar\\cf0\\loch\\f3\\fs24\\lang2057"
+      "{\\loch Justified in Writer.}\\par "
+      "\\pard\\plain \\s0\\ql\\widctlpar\\hyphpar0\\ltrpar\\cf0\\loch\\f3\\fs24\\lang2057"
+      "{\\loch Left.}\\par "
+      "\\pard\\plain \\s0\\qj\\widctlpar\\hyphpar0\\ltrpar\\cf0\\loch\\f3\\fs24\\lang2057"
+      "{\\loch Justified last.}\\par }";
+  writeit::Document lo;
+  CHECK(writeit::rtf_import(writer, lo));
+  CHECK(align_of(lo, 0) == Align::Justify);
+  CHECK(align_of(lo, 1) == Align::Left);
+  CHECK(align_of(lo, 2) == Align::Justify);
+
+  // And Word's file saves and reopens with its justification.
+  writeit::Document back;
+  CHECK(writeit::rtf_import(writeit::rtf_export(word), back));
+  CHECK(align_of(back, 0) == Align::Justify);
+  CHECK(align_of(back, 1) == Align::Justify);
+  CHECK(back == word);
 }
 
 void markdown()
@@ -182,7 +264,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 71;
+constexpr int kChecks = 105;
 
 int main()
 {
@@ -190,6 +272,7 @@ int main()
   rtf_write();
   rtf_round_trip();
   rtf_read();
+  foreign_files();
   markdown();
   return suite_test::done("alignment", kChecks);
 }

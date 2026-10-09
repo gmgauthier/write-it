@@ -42,6 +42,14 @@ writeit::Paragraph numbered(const char* text, int list, int level = 0)
   return paragraph;
 }
 
+// A numbered item whose list level starts at `start` (Word's \levelstartat).
+writeit::Paragraph starting_at(const char* text, int start, int list = 0, int level = 0)
+{
+  writeit::Paragraph paragraph = numbered(text, list, level);
+  paragraph.list.start = start;
+  return paragraph;
+}
+
 std::string text_of(const writeit::Paragraph& paragraph)
 {
   std::string out;
@@ -148,8 +156,14 @@ void labels()
   // Roman numerals stop at 3999; past it the label is decimal.
   CHECK(list_label(ListFormat{ListKind::Number, 2}, 4000) == "4000.");
   // Nonsense numbers still give a label.
-  CHECK(list_label(ListFormat{ListKind::Number, 0}, 0) == "1.");
-  CHECK(list_label(ListFormat{ListKind::Number, 1}, -5) == "a.");
+  // A level can start at 0 (Word's \\levelstartat0). Letters and roman
+  // numerals have no zero, so 0 shows as 0 in every style; negative numbers
+  // never arise and show as 0 too.
+  CHECK(list_label(ListFormat{ListKind::Number, 0}, 0) == "0.");
+  CHECK(list_label(ListFormat{ListKind::Number, 1}, 0) == "0.");
+  CHECK(list_label(ListFormat{ListKind::Number, 2}, 0) == "0.");
+  CHECK(list_label(ListFormat{ListKind::Number, 1}, -5) == "0.");
+  CHECK(list_label(ListFormat{ListKind::Number, 1}, 1) == "a.");
   CHECK(list_label(ListFormat{ListKind::None, 0}, 1).empty());
   CHECK(!list_label(ListFormat{ListKind::Number, 1}, 2000000000).empty());
 }
@@ -1097,6 +1111,186 @@ void continuing()
   }
 }
 
+// Word's \levelstartat: a list level that starts at another number.
+void starting()
+{
+  using writeit::list_numbers;
+  // A list starting at 5 counts 5, 6, and on past a plain paragraph.
+  {
+    std::vector<writeit::Paragraph> p{starting_at("five", 5), starting_at("six", 5),
+                                      item("plain", ListKind::None), starting_at("seven", 5)};
+    CHECK(list_numbers(p) == (std::vector<int>{5, 6, 0, 7}));
+  }
+  // A level's start is its first item's; a later item's start changes
+  // nothing. Each level starts on its own, again under each new parent.
+  {
+    std::vector<writeit::Paragraph> p{starting_at("5", 5), starting_at("6", 9)};
+    CHECK(list_numbers(p) == (std::vector<int>{5, 6}));
+    std::vector<writeit::Paragraph> q{starting_at("1", 1, 0, 0), starting_at("c", 3, 0, 1),
+                                      starting_at("d", 3, 0, 1), starting_at("2", 1, 0, 0),
+                                      starting_at("c", 3, 0, 1)};
+    CHECK(list_numbers(q) == (std::vector<int>{1, 3, 4, 2, 3}));
+    // Another list keeps its own start.
+    std::vector<writeit::Paragraph> r{starting_at("a5", 5, 1), starting_at("b1", 1, 2),
+                                      starting_at("a6", 5, 1)};
+    CHECK(list_numbers(r) == (std::vector<int>{5, 1, 6}));
+  }
+  // A start is 0 to 32767, as in Word 97: negative values are 0 and larger
+  // ones 32767. A bullet has none.
+  {
+    CHECK(writeit::kMaxListStart == 32767);
+    CHECK(writeit::clamp_list(starting_at("x", 0).list).start == 0);
+    CHECK(writeit::clamp_list(starting_at("x", -5).list).start == 0);
+    CHECK(writeit::clamp_list(starting_at("x", 40000).list).start == 32767);
+    CHECK(writeit::clamp_list(starting_at("x", 99999999).list).start == 32767);
+    writeit::Paragraph bullet = item("b", ListKind::Bullet);
+    bullet.list.start = 7;
+    CHECK(writeit::clamp_list(bullet.list).start == 1);
+    std::vector<writeit::Paragraph> p{starting_at("x", 2147483647), starting_at("y", 0)};
+    CHECK(list_numbers(p) == (std::vector<int>{32767, 32768}));
+    // A list starting at 0 counts 0, 1, 2, at any level and under each new
+    // parent.
+    std::vector<writeit::Paragraph> z{starting_at("0", 0), starting_at("1", 0),
+                                      starting_at("2", 0)};
+    CHECK(list_numbers(z) == (std::vector<int>{0, 1, 2}));
+    std::vector<writeit::Paragraph> n{starting_at("1", 1, 0, 0), starting_at("0", 0, 0, 1),
+                                      starting_at("1", 0, 0, 1), starting_at("2", 1, 0, 0),
+                                      starting_at("0", 0, 0, 1)};
+    CHECK(list_numbers(n) == (std::vector<int>{1, 0, 1, 2, 0}));
+  }
+  // Restart Numbering goes back to the list's start, even from an item
+  // that had none of its own; Format → Numbering starts a new item at 1.
+  {
+    std::vector<writeit::Paragraph> p{starting_at("5", 5), starting_at("6", 5),
+                                      item("7", ListKind::Number), starting_at("8", 5)};
+    CHECK(list_numbers(p) == (std::vector<int>{5, 6, 7, 8}));
+    CHECK(writeit::restart_numbering(p, 2));
+    CHECK(list_numbers(p) == (std::vector<int>{5, 6, 5, 6}));
+    CHECK(writeit::continue_numbering(p, 2));
+    CHECK(list_numbers(p) == (std::vector<int>{5, 6, 7, 8}));
+    // A list that starts at 0 restarts at 0.
+    std::vector<writeit::Paragraph> z{starting_at("0", 0), starting_at("1", 0),
+                                      starting_at("2", 0)};
+    CHECK(writeit::restart_numbering(z, 1));
+    CHECK(list_numbers(z) == (std::vector<int>{0, 0, 1}));
+    std::vector<writeit::Paragraph> q{item("x", ListKind::None)};
+    writeit::toggle_list(q, ListKind::Number);
+    CHECK(q[0].list.start == 1);
+  }
+  // A paragraph tells starts apart; a document compares the numbers they
+  // give, so a start that changes nothing is not a difference.
+  {
+    CHECK(starting_at("x", 5).list != starting_at("x", 1).list);
+    writeit::Document five;
+    five.paragraphs = {starting_at("x", 5), starting_at("y", 5)};
+    writeit::Document one;
+    one.paragraphs = {starting_at("x", 1), starting_at("y", 5)};
+    writeit::Document same;
+    same.paragraphs = {starting_at("x", 5), starting_at("y", 1)};
+    CHECK(!(five == one));
+    CHECK(five == same);
+  }
+  // Reading: \levelstartat per level, clamped.
+  {
+    const std::string tables =
+        "{\\*\\listtable{\\list{\\listlevel\\levelnfc0\\levelstartat5}"
+        "{\\listlevel\\levelnfc4\\levelstartat3}\\listid5}"
+        "{\\list{\\listlevel\\levelnfc0\\levelstartat0}\\listid6}"
+        "{\\list{\\listlevel\\levelnfc0\\levelstartat-7}\\listid7}"
+        "{\\list{\\listlevel\\levelnfc0\\levelstartat99999999}\\listid8}}"
+        "{\\*\\listoverridetable{\\listoverride\\listid5\\ls1}{\\listoverride\\listid6\\ls2}"
+        "{\\listoverride\\listid7\\ls3}{\\listoverride\\listid8\\ls4}}";
+    const writeit::Document doc =
+        import(std::string(kHead) + tables +
+               "\\pard\\ls1 five\\par\\pard\\ls1\\ilvl1 c\\par\\pard plain\\par"
+               "\\pard\\ls1 six\\par\\pard\\ls2 zero\\par\\pard\\ls3 negative\\par"
+               "\\pard\\ls4 huge\\par}");
+    CHECK(list_numbers(doc.paragraphs) == (std::vector<int>{5, 3, 0, 6, 0, 0, 32767}));
+    const writeit::Document more =
+        import(std::string(kHead) +
+               "{\\*\\listtable{\\list{\\listlevel\\levelnfc0\\levelstartat-5}\\listid1}"
+               "{\\list{\\listlevel\\levelnfc0\\levelstartat40000}\\listid2}"
+               "{\\list{\\listlevel\\levelnfc0\\levelstartat0}\\listid3}}"
+               "{\\*\\listoverridetable{\\listoverride\\listid1\\ls1}"
+               "{\\listoverride\\listid2\\ls2}{\\listoverride\\listid3\\ls3}}"
+               "\\pard\\ls1 a\\par\\pard\\ls2 b\\par\\pard\\ls3 c\\par\\pard\\ls3 d\\par"
+               "\\pard\\ls3 e\\par}");
+    CHECK(list_numbers(more.paragraphs) == (std::vector<int>{0, 32767, 0, 1, 2}));
+  }
+  // An override that starts its list again at another number
+  // (\listoverridestartat with \levelstartat in its \lfolevel) is a new
+  // list from there; Word 6/95's \pnstart starts \pn numbers.
+  {
+    const std::string tables =
+        "{\\*\\listtable{\\list{\\listlevel\\levelnfc0\\levelstartat1}\\listid5}}"
+        "{\\*\\listoverridetable{\\listoverride\\listid5\\listoverridecount0\\ls1}"
+        "{\\listoverride\\listid5\\listoverridecount1{\\lfolevel\\listoverridestartat"
+        "\\levelstartat10}\\ls2}}";
+    const writeit::Document doc = import(std::string(kHead) + tables +
+                                         "\\pard\\ls1 a\\par\\pard\\ls1 b\\par"
+                                         "\\pard\\ls2 ten\\par\\pard\\ls2 eleven\\par"
+                                         "\\pard\\ls1 c\\par}");
+    CHECK(list_numbers(doc.paragraphs) == (std::vector<int>{1, 2, 10, 11, 3}));
+    const writeit::Document pn =
+        import(std::string(kHead) +
+               "\\pard{\\*\\pn\\pnlvlbody\\pndec\\pnstart4}four\\par"
+               "\\pard{\\*\\pn\\pnlvlbody\\pndec\\pnstart4}five\\par}");
+    CHECK(list_numbers(pn.paragraphs) == (std::vector<int>{4, 5}));
+    // An override can start again at 0; \\pnstart0 starts at 0 and
+    // \\pnstart-5 reads as 0.
+    const std::string zero_tables =
+        "{\\*\\listtable{\\list{\\listlevel\\levelnfc0\\levelstartat1}\\listid5}}"
+        "{\\*\\listoverridetable{\\listoverride\\listid5\\listoverridecount0\\ls1}"
+        "{\\listoverride\\listid5\\listoverridecount1{\\lfolevel\\listoverridestartat"
+        "\\levelstartat0}\\ls2}}";
+    const writeit::Document over = import(std::string(kHead) + zero_tables +
+                                          "\\pard\\ls1 a\\par\\pard\\ls1 b\\par"
+                                          "\\pard\\ls2 zero\\par\\pard\\ls2 one\\par"
+                                          "\\pard\\ls1 c\\par}");
+    CHECK(list_numbers(over.paragraphs) == (std::vector<int>{1, 2, 0, 1, 3}));
+    const writeit::Document pn0 =
+        import(std::string(kHead) +
+               "\\pard{\\*\\pn\\pnlvlbody\\pndec\\pnstart0}zero\\par"
+               "\\pard{\\*\\pn\\pnlvlbody\\pndec\\pnstart0}one\\par}");
+    CHECK(list_numbers(pn0.paragraphs) == (std::vector<int>{0, 1}));
+    const writeit::Document pn_negative = import(
+        std::string(kHead) + "\\pard{\\*\\pn\\pnlvlbody\\pndec\\pnstart-5}zero\\par}");
+    CHECK(list_numbers(pn_negative.paragraphs) == (std::vector<int>{0}));
+  }
+  // Writing: each list's levels carry their start, so Word and LibreOffice
+  // count the same, and the file reads back as it was.
+  {
+    writeit::Document doc;
+    doc.paragraphs = {starting_at("five", 5), starting_at("c", 3, 0, 1),
+                      item("plain", ListKind::None), starting_at("six", 5),
+                      starting_at("one", 1, 2)};
+    const std::string rtf = writeit::rtf_export(doc);
+    CHECK(contains(rtf, "\\levelstartat5"));
+    CHECK(contains(rtf, "\\levelstartat3"));
+    CHECK(contains(rtf, "{\\pntext\\f0\\fs22 5.\\tab}"));
+    CHECK(contains(rtf, "{\\pntext\\f0\\fs22 c.\\tab}"));
+    const writeit::Document back = import(rtf);
+    CHECK(back == doc);
+    CHECK(list_numbers(back.paragraphs) == (std::vector<int>{5, 3, 0, 6, 1}));
+    CHECK(writeit::rtf_export(back) == rtf);
+    // A list that starts at 1 writes \levelstartat1, as before.
+    writeit::Document plain;
+    plain.paragraphs = {item("one", ListKind::Number)};
+    CHECK(!contains(writeit::rtf_export(plain), "\\levelstartat5"));
+    CHECK(contains(writeit::rtf_export(plain), "\\levelstartat1"));
+    // A list starting at 0 round-trips as \\levelstartat0.
+    writeit::Document zero;
+    zero.paragraphs = {starting_at("zero", 0), starting_at("one", 0), starting_at("two", 0)};
+    const std::string zero_rtf = writeit::rtf_export(zero);
+    CHECK(contains(zero_rtf, "\\levelstartat0"));
+    CHECK(contains(zero_rtf, "{\\pntext\\f0\\fs22 0.\\tab}"));
+    const writeit::Document zero_back = import(zero_rtf);
+    CHECK(zero_back == zero);
+    CHECK(list_numbers(zero_back.paragraphs) == (std::vector<int>{0, 1, 2}));
+    CHECK(writeit::rtf_export(zero_back) == zero_rtf);
+  }
+}
+
 void markdown()
 {
   // Markdown lists wait until M4: a list item exports as its paragraph.
@@ -1111,7 +1305,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 328;
+constexpr int kChecks = 385;
 
 int main()
 {
@@ -1126,6 +1320,7 @@ int main()
   rtf_hostile();
   label_position();
   continuing();
+  starting();
   markdown();
   return suite_test::done("lists", kChecks);
 }

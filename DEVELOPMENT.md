@@ -50,18 +50,18 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 
 ## 4. Window
 
-One document, one window. The title is `Write-It - letter.rtf`. A dirty document adds a trailing `*`. A new document is `Write-It - Untitled`.
+One document, one window. The title is `Write-It - letter.rtf`. A dirty document adds a trailing `*`. A new document is `Write-It - Untitled`. An opened file is not dirty until it is edited, as in Word 97, whether it is RTF, Markdown, or plain text: `Write-It - notes.txt` has no `*`, and closing it asks nothing. A Markdown or text file is not RTF, so its Save is Save As, which offers the name with `.rtf` (`notes.rtf`) and leaves the original alone.
 
-Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized. The window remembers its size.
+Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized, at Fit width. The window remembers its size, whether it is maximized, and the zoom, Fit width included. The next launch restores them, no larger than the screen it opens on. A maximized window comes back maximized and restores to the size it had before. A missing, empty, or corrupt ini, or a size in it that is not one, opens as the first launch does.
 
-The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, the page is A4, 21 × 29.7 cm. The pasteboard scrolls up and down to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top, and on the last line right to the bottom. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back. It follows vertically only for now: sideways following waits until the window can be narrower than a 200% page (#16).
+The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, the page is A4, 21 × 29.7 cm. The pasteboard scrolls up and down, and sideways when the page is wider than the window, to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top, and on the last line right to the bottom. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back.
 
 ```
 +------------------------------------------------------------------+
 | File  Edit  View  Insert  Format  Tools  Table  Help             |
 +------------------------------------------------------------------+
 | [New] [Open] [Save] | [Print] | [Cut] [Copy] [Paste] | [Undo] [Redo]
-| [Font ▾] [Size ▾] [B] [I] [U] | [Left] [Center] [Right] | [Style ▾]
+| [Font ▾] [Size ▾] [B] [I] [U] | [Left] [Center] [Right] [Justify] | [Style ▾]
 +------------------------------------------------------------------+
 | ruler                                                            |
 |                                                                  |
@@ -73,7 +73,7 @@ The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, 
 +------------------------------------------------------------------+
 ```
 
-Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
+Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-justify-fill`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
 
 Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items. On a numbered list item those are Restart Numbering and Continue Previous List, each insensitive when it would change nothing.
 
@@ -81,14 +81,14 @@ Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Sa
 
 The menus are File, Edit, View, Insert, Format, Tools, Table, Help. Mnemonics: **F**ile, **E**dit, **V**iew, **I**nsert, F**o**rmat, **T**ools, T**a**ble, **H**elp. A menu item that opens a dialog ends with `…`. Accelerators are visible in the menu.
 
-**File.** Open’s filter lists RTF, Markdown, and plain text. Save writes RTF. Export writes Markdown. Save As adds `.rtf`, and Export adds `.md`, to a typed name unless it already ends in one of theirs, in any case (Export also keeps `.markdown`). Another document extension (`.rtf`, `.md`, `.markdown`, `.txt`) is replaced, not kept, and any other dot is part of the name: `my.report` saves as `my.report.rtf`. The replace question is asked about the file actually written.
+**File.** Open’s filter lists RTF, Markdown, and plain text. Save writes RTF. Export writes Markdown. Save As adds `.rtf`, and Export adds `.md`, to a typed name unless it already ends in one of theirs, in any case (Export also keeps `.markdown`). Another document extension (`.rtf`, `.md`, `.markdown`, `.txt`) is replaced, not kept, and any other dot is part of the name: `my.report` saves as `my.report.rtf`. The replace question is asked about the file actually written. Every way of opening a file (Open, Open Recent, the command line, the desktop’s Open and Open With) says the same sentences, naming the file: “Could not find the file “letter.rtf”.” and “Could not open the file “letter.rtf”.”. A file with no local path is refused with “Write-It can only open files on this computer:” and its URI. Files given on the command line or by the desktop (`Exec=write-it %F`) open one window each. An untouched Untitled window takes the first; a file already open, saved to or imported from, brings its window forward, under any name (a symlink, a hard link, a `..` path) and from Open and Open Recent as well; a window holding a document is never reloaded. A second launch hands its files to the running Write-It.
 
 | Item | Keys | What it does |
 |---|---|---|
 | New | Ctrl+N | A blank untitled document |
 | New from Template… | | Pick an RTF starter |
 | Open… | Ctrl+O | Remember the last directory |
-| Open Recent | | Up to eight basename items. The tooltip is the full path. A missing file uses one sentence: “That file is missing.” |
+| Open Recent | | Up to eight basename items. The tooltip is the full path. A missing file uses one sentence that names it: “Could not find the file “letter.rtf”.” |
 | Save | Ctrl+S | Write the whole RTF file |
 | Save As… | | |
 | Export… | | Markdown |
@@ -121,12 +121,12 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 | Format Toolbar | Check. On by default |
 | Side by side | Check. On by default. The two toolbars share one row. Off stacks them, standard above format |
 | Status Bar | Check. On by default |
-| Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width |
+| Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width. Fit width is the default: the page fills the visible width and follows the window as it is resized. The choice is remembered |
 | Page / Draft | Radio. Page is the default |
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
 
-**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline. No colour in v1.
+**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline. No colour in v1.
 
 The font list and the size list match the other two apps. Sizes are 8, 9, 10, 11, 12, 14, 16, 18, 24, 36. A new document starts at Sans 11.
 
@@ -144,7 +144,7 @@ The only keyboard is the Word 97 map in the menus above. WordPerfect 5.1’s fun
 
 The standard toolbar never grows an app-specific button. Groups, left to right: New Open Save, Print, Cut Copy Paste, Undo Redo.
 
-The format toolbar: font, size, bold, italic, underline, align left, align center, align right, then a separator, then the style combo, bullets, and numbering.
+The format toolbar: font, size, bold, italic, underline, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering.
 
 View → Side by side is on by default, so the two toolbars share one row. Turning it off stacks them, with the standard toolbar above the format toolbar.
 
@@ -158,7 +158,7 @@ Until M3 lays out real pages the page count is approximate: a page is the A4 she
 
 `~/.config/write-it/write-it.ini`
 
-Keys: `window-width`, `window-height`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`, `units` (`in` or `cm`; missing or anything else is `in`).
+Keys: `window-width`, `window-height`, `window-maximized`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom` (`50` through `200`, or `fit-width`; missing or anything else is `fit-width`), `units` (`in` or `cm`; missing or anything else is `in`).
 
 ## 5. Feature floor
 
@@ -218,7 +218,7 @@ The Meson tree, the gtkmm window, and `scripts/lint.sh`. No document on disk.
 - Menus in order: File, Edit, View, Insert, Format, Tools, Table, Help, with the mnemonics from the window section. Items are visible. Commands that need a document are insensitive. Save stays sensitive.
 - The standard toolbar and the format toolbar share one row. View → Side by side is on by default, and turning it off stacks them. The format toolbar runs through alignment, then the style combo, bullets, and numbering. App-specific controls are visible and wait for their milestone.
 - Ruler stub. Empty white page on the `#808080` pasteboard. Page view is the selected radio. Draft is present and waits for M2.
-- Title `Write-It - Untitled`. First launch asks for 960×700. With the toolbars on one row, the window opens wide enough to show every control on that row. The ini remembers `window-width` and `window-height`.
+- Title `Write-It - Untitled`. The first launch opens at 960×700, at Fit width, and the window can be made narrow enough for a 1024 px screen. A toolbar too narrow for its controls ends in an overflow arrow. Its menu lists the controls that do not fit under the words the menus use: Bold, Italic, Underline, Bullets, and Numbering as check items, the alignments as radio items, the font, size, and style boxes as submenus of their entries, and the rest as commands. Later launches restore the user’s size, whether the window was maximized, and the zoom, from `window-width`, `window-height`, `window-maximized`, and `zoom` in the ini, no larger than the screen.
 - Status message, then `Page 1 of 1`, then the zoom. View → Zoom and the zoom cell share one list, including Fit width.
 - About Write-It: name, version, one sentence, the Unlicense, Close.
 - Close (Ctrl+W) and Exit (Ctrl+Q). The right-click menu starts with Cut, Copy, Paste.
@@ -232,7 +232,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 - Type, select, and apply font, size, bold, italic, and underline. A new document starts at Sans 11. Sizes are the locked list. No font colour.
 - Undo and Redo for this slice. Find and Replace, one dialog, in the locked field order.
 - New, Open, Save, and Save As write RTF for paragraphs and character format. Dirty state is a trailing `*` on the title. Closing a dirty document asks Save, Don’t Save, Cancel, with Save as the default.
-- Open Recent, up to eight names, tooltip the full path, and the sentence “That file is missing.” Options… can set the recent-file count to 4, 8, or 12, and the default font family and size.
+- Open Recent, up to eight names, tooltip the full path, and the sentence “Could not find the file “letter.rtf”.”, naming the file Options… can set the recent-file count to 4, 8, or 12, and the default font family and size.
 - Plain `.txt` imports as paragraphs.
 - Markdown import and export cover headings, paragraphs, bold, and italic. Lists, tables, and image paths wait until those objects exist.
 
@@ -240,7 +240,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M2 — Paragraph
 
-- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection. Numbering follows Word 97: each numbered item belongs to a list, and a list keeps counting past plain paragraphs, bullets, and other lists in between, at every level. A numbered item restarts the levels below it in its own list. A list starts again at 1 only where a new list begins: the document’s first, a different list read from a file, or Restart Numbering, which makes the item and the rest of its list a new list. Continue Previous List joins them to the nearest numbered list above. Format → Numbering and Enter join the list above. In RTF each list is its own `\listid` and `\ls` (`\ls1` is every bullet), so Word and LibreOffice show the same numbers. Reading, an item counts in the `\listid` its `\ls` points at, so two overrides of one list are one list unless one has `\listoverridestartat`. Word 6/95’s `\pn` numbers are one list. A document holds at most 4000 numbered lists; items of later ones join the last. A one-line centred list item’s label and text are centred as one unit between the first-line indent and the right indent, as in Word 97, to within 1 pixel at any zoom, font, and label width, a label wider than its hang included. GTK centres every line of a paragraph alike, so on screen a centred item’s whole paragraph moves right by d = max(0, f + 0.25″, f + w + s), where f is the first-line indent (negative for a hang), w the label’s width, and s a space in the label’s font; its wrapped lines then sit d/2 right of Word’s, which centres them between the left and right indents. With a hang of 0.25″ or more, d = max(0, w + s − hang), 0 whenever the label and a space fit in the hang: at 100% with the standard 0.25″ hang (16 pixels) and 11-point Sans, wrapped lines move at most 1.5 pixels for labels 1. to 9., 6 for 10. to 99., and 10.5 for 100. to 999. (DejaVu Sans; less with Noto Sans), scaling with the zoom. A narrower hang moves them at least (0.25″ − hang)/2, so 0.125″ (8 pixels at 100%) with no hang at all, and a first-line indent right of the left indent moves them (f + max(0.25″, w + s))/2. The move is screen-only: RTF, undo, the dirty check, and document comparison never see it. Left- and right-aligned items are unchanged.
+- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection. Justify spreads every line but a paragraph’s last to both indents. RTF writes `\qc`, `\qr`, and `\qj` (left is the default and is not written). `\qd`, East Asian Word’s distributed, reads as left. Numbering follows Word 97: each numbered item belongs to a list, and a list keeps counting past plain paragraphs, bullets, and other lists in between, at every level. A numbered item restarts the levels below it in its own list. A list starts again only where a new list begins: the document’s first, a different list read from a file, or Restart Numbering, which makes the item and the rest of its list a new list. It starts at its level’s start: 1, or the number Word’s `\levelstartat` gives, and each level starts again there under a new parent. A list’s start value is 0 to 32767; negative values read as 0 and larger values as 32767. A level that starts at 0 counts 0, 1, 2, and 0 shows as 0 in any numbering style, since letters and roman numerals have no zero. A left-aligned or justified item’s text stays at the hang when its label ends at least 1 px before it; otherwise, as in Word 97, the text starts at the next default tab stop at least 1 px clear of the label, the stops falling every half inch from the left margin (paragraphs have no tab stops of their own yet). So in Sans 11 at 100% with the standard quarter-inch hang, `1.` through `9.` stay at the hang, and `10.` and wider labels move to the next stop. The document and its file keep the indents. Restart Numbering starts the new list where the old one started, and Format → Numbering starts a new list at 1. Continue Previous List joins them to the nearest numbered list above. Format → Numbering and Enter join the list above. In RTF each list is its own `\listid` and `\ls` (`\ls1` is every bullet), with each level’s `\levelstartat`, so Word and LibreOffice show the same numbers. Reading, an item counts in the `\listid` its `\ls` points at, so two overrides of one list are one list unless one has `\listoverridestartat`. An override with `\listoverridestartat` takes its `\lfolevel`’s `\levelstartat`. Word 6/95’s `\pn` numbers are one list, starting at `\pnstart`. A document holds at most 4000 numbered lists; items of later ones join the last. A one-line centred list item’s label and text are centred as one unit between the first-line indent and the right indent, as in Word 97, to within 1 pixel at any zoom, font, and label width, a label wider than its hang included. GTK centres every line of a paragraph alike, so on screen a centred item’s whole paragraph moves right by d = max(0, f + 0.25″, f + w + s), where f is the first-line indent (negative for a hang), w the label’s width, and s a space in the label’s font; its wrapped lines then sit d/2 right of Word’s, which centres them between the left and right indents. With a hang of 0.25″ or more, d = max(0, w + s − hang), 0 whenever the label and a space fit in the hang: at 100% with the standard 0.25″ hang (16 pixels) and 11-point Sans, wrapped lines move at most 1.5 pixels for labels 1. to 9., 6 for 10. to 99., and 10.5 for 100. to 999. (DejaVu Sans; less with Noto Sans), scaling with the zoom. A narrower hang moves them at least (0.25″ − hang)/2, so 0.125″ (8 pixels at 100%) with no hang at all, and a first-line indent right of the left indent moves them (f + max(0.25″, w + s))/2. The move is screen-only: RTF, undo, the dirty check, and document comparison never see it. Left-aligned, right-aligned, and justified items are not centred this way.
 - Named styles. The style combo lists them and applies the chosen style. Style… edits a style. A new document has Normal, Heading 1 to 6, Block Text, and Plain Text, built on the default font and size. The format toolbar’s style combo follows the caret and applies a style to the selected paragraphs. Format → Style… changes a style’s font, size, bold, italic, underline, alignment, indents, outline level, base, and following style, or makes a new one from it. Every paragraph in that style follows, and so do the styles based on it. A style moves only what still matches the old style, so direct formatting stays. Enter at the end of a paragraph gives the new one the style’s following style, so a heading is followed by Normal. Each change is one undo step. Headings show at their style’s size, not a fixed scale. RTF writes `\stylesheet`, `\sN`, `\sbasedon`, and `\snext`, and repeats each paragraph’s format after `\sN` as Word does, because LibreOffice reads `\pard` as flush left. A document that only uses Normal from the default sheet is written without one, as before. A file from before styles opens with its headings (M1’s `\outlinelevel` on body-size text) in Heading 1 to 6, at heading size, so they do not shrink to body text. The reader is defensive: character styles are skipped, a base that is missing or circular is dropped, duplicate names get “ (2)”, and the sheet stops at 4096 styles. Markdown headings import and export as Heading 1 to 6. Renaming and deleting a style are out of scope for M2: Style… adds and edits, and a style nobody uses stays in the sheet.
 - Draft view hides the pagination chrome. Page stays the default and is still the view that prints.
 - RTF for this slice round-trips. Markdown lists wait until M4.

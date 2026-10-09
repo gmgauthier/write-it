@@ -153,6 +153,12 @@ int main(int argc, char* argv[])
   }
   Gtk::Main kit(argc, argv);
 
+  // The suite starts at 100%. A first launch's own default is Fit width
+  // (window-memory), so the ini says 100.
+  g_mkdir_with_parents(Glib::build_filename(home, "write-it").c_str(), 0700);
+  Glib::file_set_contents(Glib::build_filename(home, "write-it", "write-it.ini"),
+                          "[write-it]\nzoom=100\n");
+
   const std::string letter = Glib::build_filename(home, "draftcheck.rtf");
   Glib::file_set_contents(letter, kLetter);
 

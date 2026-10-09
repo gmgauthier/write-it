@@ -301,6 +301,7 @@ void MainWindow::on_style_dialog()
   alignment->append("Left");
   alignment->append("Centered");
   alignment->append("Right");
+  alignment->append("Justified");
   auto* outline = Gtk::manage(new Gtk::ComboBoxText());
   outline->append("Body text");
   for (int level = 1; level <= 6; ++level)

@@ -4,10 +4,12 @@
 
 #include "about_dialog.hpp"
 #include "config.hpp"
+#include "font_sizes.hpp"
 
 #include <glibmm/miscutils.h>
 
 #include <algorithm>
+#include <functional>
 
 namespace writeit {
 namespace {
@@ -33,20 +35,185 @@ void framed(Gtk::Box& row, Gtk::Widget& child, bool expand)
   row.pack_start(*frame, expand, true, 0);
 }
 
+// A missing icon falls back to the menu's word. Toolbar buttons share one
+// width, the widest's, so a word must not widen every icon on the bar.
+void fallback_label(Gtk::ToolButton& button, const char* word)
+{
+  button.set_label(word);
+  button.set_homogeneous(false);
+}
+
+// What a toolbar control is called in its toolbar's overflow menu.
+constexpr const char* kOverflowId = "write-it-overflow";
+
+// Gives a toolbar item its entry in the overflow menu, the arrow at the end
+// of a toolbar too narrow to show it. GTK asks for the entry each time it
+// builds that menu; `refresh` brings it up to date with the control first.
+void attach_proxy(Gtk::ToolItem& tool, Gtk::MenuItem& item, const std::function<void()>& refresh)
+{
+  item.show();
+  tool.set_proxy_menu_item(kOverflowId, item);
+  refresh();
+  // Before GTK's own handler, which would make an unlabelled one.
+  tool.signal_create_menu_proxy().connect(
+      [&tool, &item, refresh] {
+        refresh();
+        tool.set_proxy_menu_item(kOverflowId, item);
+        return true;
+      },
+      false);
+}
+
+// A command button: an item with the menus' word that clicks the button.
+void proxy_button(Gtk::ToolButton& button, const char* label)
+{
+  auto* item = Gtk::manage(new Gtk::MenuItem(label, true));
+  item->signal_activate().connect([&button] { g_signal_emit_by_name(button.gobj(), "clicked"); });
+  button.property_sensitive().signal_changed().connect(
+      [&button, item] { item->set_sensitive(button.get_sensitive()); });
+  attach_proxy(button, *item, [&button, item] { item->set_sensitive(button.get_sensitive()); });
+}
+
+// A toggle button (Bold, Italic, Underline, Bullets, Numbering): a check
+// item that shows the button's state and sets it.
+void proxy_toggle(Gtk::ToggleToolButton& button, const char* label)
+{
+  auto* item = Gtk::manage(new Gtk::CheckMenuItem(label, true));
+  auto sync = [&button, item] {
+    item->set_sensitive(button.get_sensitive());
+    if (item->get_active() != button.get_active())
+      item->set_active(button.get_active());
+  };
+  sync();
+  item->signal_toggled().connect([&button, item] {
+    if (button.get_active() != item->get_active())
+      button.set_active(item->get_active());
+  });
+  button.signal_toggled().connect(sync);
+  attach_proxy(button, *item, sync);
+}
+
+// One of the alignment buttons, which act as one group: a radio item. The
+// button that goes down ticks its item, and the group drops the others.
+void proxy_align(Gtk::ToggleToolButton& button, const char* label, Gtk::RadioMenuItem::Group& group)
+{
+  auto* item = Gtk::manage(new Gtk::RadioMenuItem(group, label, true));
+  auto sync = [&button, item] {
+    item->set_sensitive(button.get_sensitive());
+    if (button.get_active() && !item->get_active())
+      item->set_active(true);
+  };
+  item->set_active(button.get_active());
+  item->signal_toggled().connect([&button, item] {
+    if (item->get_active() && !button.get_active())
+      button.set_active(true);
+  });
+  button.signal_toggled().connect(sync);
+  attach_proxy(button, *item, sync);
+}
+
+// A box (font, size, style): its name, opening a submenu of its entries with
+// the current one ticked, as Word 97's boxes drop down their lists.
+void proxy_combo(Gtk::ToolItem& tool, Gtk::ComboBoxText& combo, const char* label)
+{
+  auto* item = Gtk::manage(new Gtk::MenuItem(label, true));
+  auto* menu = Gtk::manage(new Gtk::Menu());
+  item->set_submenu(*menu);
+  // The font list grows when a document names a font it lacks, so the
+  // submenu is made afresh from the box each time.
+  auto fill = [&combo, item, menu] {
+    item->set_sensitive(combo.get_sensitive());
+    for (Gtk::Widget* child : menu->get_children())
+      delete child;
+    const Glib::ustring active = combo.get_active_text();
+    for (const Gtk::TreeRow& row : combo.get_model()->children()) {
+      Glib::ustring text;
+      row.get_value(0, text);
+      auto* entry = Gtk::manage(new Gtk::CheckMenuItem(text));
+      entry->set_draw_as_radio(true);
+      entry->set_active(text == active);
+      entry->signal_toggled().connect([&combo, entry, text] {
+        if (entry->get_active() && combo.get_active_text() != text)
+          combo.set_active_text(text);
+      });
+      menu->append(*entry);
+    }
+    menu->show_all();
+  };
+  attach_proxy(tool, *item, fill);
+}
+
+// GTK shows a toolbar's overflow arrow partway through laying the toolbar
+// out and lays the arrow itself out only on a later pass, which narrowing
+// the window does not always bring: the arrow stayed 1 px at -1, with nothing
+// to click. Ask for that pass whenever the arrow comes or goes.
+void lay_out_arrow(Gtk::Toolbar& bar)
+{
+  GtkWidget* arrow = nullptr;
+  gtk_container_forall(
+      GTK_CONTAINER(bar.gobj()),
+      [](GtkWidget* child, gpointer data) {
+        if (GTK_IS_TOGGLE_BUTTON(child))
+          *static_cast<GtkWidget**>(data) = child;
+      },
+      &arrow);
+  if (!arrow)
+    return;
+  Glib::wrap(arrow)->property_visible().signal_changed().connect([&bar] {
+    // Not from inside the layout; the toolbar's own lifetime bounds the idle.
+    Glib::signal_idle().connect(
+        sigc::bind_return(sigc::mem_fun(bar, &Gtk::Widget::queue_resize), false));
+  });
+}
+
 }  // namespace
 
 MainWindow::~MainWindow()
 {
+  page_idle_.disconnect();
   caret_idle_.disconnect();
   page_status_idle_.disconnect();
   list_shifts_idle_.disconnect();
+  list_tabs_idle_.disconnect();
+  clipboard_owner_.disconnect();
 }
 
 MainWindow::MainWindow()
 {
   settings_.load();
   set_title("Write-It - Untitled");
-  set_default_size(settings_.window_width, settings_.window_height);
+  // The saved size, or 960 x 700 the first time, on the screen it opens on.
+  int width = settings_.window_width;
+  int height = settings_.window_height;
+  if (auto display = Gdk::Display::get_default()) {
+    auto monitor = display->get_primary_monitor();
+    if (!monitor && display->get_n_monitors() > 0)
+      monitor = display->get_monitor(0);
+    if (monitor) {
+      Gdk::Rectangle area;
+      monitor->get_workarea(area);
+      clamp_window(width, height, area.get_width(), area.get_height());
+    }
+  }
+  set_default_size(width, height);
+  window_memory_ = WindowMemory(settings_);
+  window_memory_.update(width, height, settings_.window_maximized);
+  if (settings_.window_maximized)
+    maximize();
+  signal_size_allocate().connect([this](Gtk::Allocation&) {
+    int w = 0;
+    int h = 0;
+    get_size(w, h);
+    window_memory_.update(w, h, is_maximized());
+  });
+  signal_window_state_event().connect(
+      [this](GdkEventWindowState* event) {
+        // Only the state: the size that comes with it may still be the old one.
+        if (event->changed_mask & GDK_WINDOW_STATE_MAXIMIZED)
+          window_memory_.update(0, 0, (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) != 0);
+        return false;
+      },
+      false);
   accel_ = Gtk::AccelGroup::create();
   add_accel_group(accel_);
 
@@ -74,11 +241,9 @@ bool MainWindow::on_delete_event(GdkEventAny* event)
 {
   if (!confirm_discard_or_save())
     return true;
-  if (get_width() > 0 && get_height() > 0) {
-    settings_.window_width = get_width();
-    settings_.window_height = get_height();
-    settings_.save();
-  }
+  window_memory_.store(settings_);
+  reload_recent();
+  settings_.save();
   return Gtk::ApplicationWindow::on_delete_event(event);
 }
 
@@ -149,21 +314,25 @@ void MainWindow::build_menus()
   standard->signal_toggled().connect([this, standard] {
     settings_.show_standard_toolbar = standard->get_active();
     standard_bar_.set_visible(settings_.show_standard_toolbar);
+    reload_recent();
     settings_.save();
   });
   format->signal_toggled().connect([this, format] {
     settings_.show_format_toolbar = format->get_active();
     format_bar_.set_visible(settings_.show_format_toolbar);
+    reload_recent();
     settings_.save();
   });
   side->signal_toggled().connect([this, side] {
     settings_.toolbars_side_by_side = side->get_active();
     apply_toolbar_row();
+    reload_recent();
     settings_.save();
   });
   status->signal_toggled().connect([this, status] {
     settings_.show_statusbar = status->get_active();
     status_.set_visible(settings_.show_statusbar);
+    reload_recent();
     settings_.save();
   });
   view->append(*standard);
@@ -219,6 +388,7 @@ void MainWindow::build_menus()
   align_left_item_ = add_item(*format_menu, "Align _Left", true);
   align_center_item_ = add_item(*format_menu, "_Center", true);
   align_right_item_ = add_item(*format_menu, "Align _Right", true);
+  justify_item_ = add_item(*format_menu, "_Justify", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   style_item_ = add_item(*format_menu, "_Style…", true);
   bullets_item_ = add_item(*format_menu, "Bull_ets", true);
@@ -276,7 +446,7 @@ Gtk::ToolButton* MainWindow::add_tool(Gtk::Toolbar& bar, const char* icon, const
   if (Gtk::IconTheme::get_default()->has_icon(icon))
     button->set_icon_name(icon);
   else
-    button->set_label(tip);
+    fallback_label(*button, tip);
   button->set_tooltip_text(tip);
   button->set_sensitive(sensitive);
   bar.append(*button);
@@ -285,14 +455,18 @@ Gtk::ToolButton* MainWindow::add_tool(Gtk::Toolbar& bar, const char* icon, const
 
 void MainWindow::build_toolbars()
 {
+  // Both toolbars keep an overflow arrow, so a narrow window moves the last
+  // controls into the arrow's menu instead of growing past the screen.
   standard_bar_.set_toolbar_style(Gtk::TOOLBAR_ICONS);
   standard_bar_.set_icon_size(Gtk::ICON_SIZE_SMALL_TOOLBAR);
   standard_bar_.set_hexpand(false);
-  standard_bar_.set_show_arrow(false);
+  standard_bar_.set_show_arrow(true);
   format_bar_.set_toolbar_style(Gtk::TOOLBAR_ICONS);
   format_bar_.set_icon_size(Gtk::ICON_SIZE_SMALL_TOOLBAR);
   format_bar_.set_hexpand(false);
-  format_bar_.set_show_arrow(false);
+  format_bar_.set_show_arrow(true);
+  lay_out_arrow(standard_bar_);
+  lay_out_arrow(format_bar_);
   toolbars_.pack_start(standard_bar_, Gtk::PACK_SHRINK);
   toolbars_.pack_start(format_bar_, Gtk::PACK_SHRINK);
 
@@ -300,7 +474,7 @@ void MainWindow::build_toolbars()
   open_tool_ = add_tool(standard_bar_, "document-open", "Open", true);
   save_tool_ = add_tool(standard_bar_, "document-save", "Save", true);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  add_tool(standard_bar_, "document-print", "Print", false);
+  auto* print_tool = add_tool(standard_bar_, "document-print", "Print", false);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   cut_tool_ = add_tool(standard_bar_, "edit-cut", "Cut", false);
   copy_tool_ = add_tool(standard_bar_, "edit-copy", "Copy", false);
@@ -313,8 +487,9 @@ void MainWindow::build_toolbars()
   font_combo_.set_tooltip_text("Font");
   size_combo_.set_size_request(52, -1);
   size_combo_.set_tooltip_text("Size");
-  for (const char* size : {"8", "9", "10", "11", "12", "14", "16", "18", "24", "36"})
-    size_combo_.append(size);
+  for (int size : preset_sizes())
+    size_combo_.append(std::to_string(size));
+  size_choices_shown_ = preset_sizes();
   size_combo_.set_active_text("11");
   style_combo_.set_size_request(110, -1);
   style_combo_.set_tooltip_text("Style");
@@ -325,15 +500,17 @@ void MainWindow::build_toolbars()
     item->add(child);
     return item;
   };
-  format_bar_.append(*hold(font_combo_, 128));
-  format_bar_.append(*hold(size_combo_, 52));
+  auto* font_item = hold(font_combo_, 128);
+  auto* size_item = hold(size_combo_, 52);
+  format_bar_.append(*font_item);
+  format_bar_.append(*size_item);
 
   auto toggle = [this](const char* icon, const char* tip, bool active, bool sensitive) {
     auto* button = Gtk::manage(new Gtk::ToggleToolButton());
     if (Gtk::IconTheme::get_default()->has_icon(icon))
       button->set_icon_name(icon);
     else
-      button->set_label(tip);
+      fallback_label(*button, tip);
     button->set_tooltip_text(tip);
     button->set_active(active);
     button->set_sensitive(sensitive);
@@ -347,10 +524,37 @@ void MainWindow::build_toolbars()
   align_left_toggle_ = toggle("format-justify-left", "Align Left", true, true);
   align_center_toggle_ = toggle("format-justify-center", "Center", false, true);
   align_right_toggle_ = toggle("format-justify-right", "Align Right", false, true);
+  justify_toggle_ = toggle("format-justify-fill", "Justify", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  format_bar_.append(*hold(style_combo_, 110));
+  auto* style_item = hold(style_combo_, 110);
+  format_bar_.append(*style_item);
   bullets_toggle_ = toggle("format-list-unordered", "Bullets", false, true);
   numbering_toggle_ = toggle("format-list-ordered", "Numbering", false, true);
+
+  // A control that does not fit goes to its toolbar's overflow menu under
+  // the word the menus use for it. Separators bring their own.
+  proxy_button(*new_tool_, "_New");
+  proxy_button(*open_tool_, "_Open…");
+  proxy_button(*save_tool_, "_Save");
+  proxy_button(*print_tool, "_Print…");
+  proxy_button(*cut_tool_, "Cu_t");
+  proxy_button(*copy_tool_, "_Copy");
+  proxy_button(*paste_tool_, "_Paste");
+  proxy_button(*undo_tool_, "_Undo");
+  proxy_button(*redo_tool_, "_Redo");
+  proxy_combo(*font_item, font_combo_, "_Font");
+  proxy_combo(*size_item, size_combo_, "Font Si_ze");
+  proxy_toggle(*bold_toggle_, "_Bold");
+  proxy_toggle(*italic_toggle_, "_Italic");
+  proxy_toggle(*underline_toggle_, "_Underline");
+  Gtk::RadioMenuItem::Group align_group;
+  proxy_align(*align_left_toggle_, "Align _Left", align_group);
+  proxy_align(*align_center_toggle_, "_Center", align_group);
+  proxy_align(*align_right_toggle_, "Align _Right", align_group);
+  proxy_align(*justify_toggle_, "_Justify", align_group);
+  proxy_combo(*style_item, style_combo_, "_Style");
+  proxy_toggle(*bullets_toggle_, "Bull_ets");
+  proxy_toggle(*numbering_toggle_, "_Numbering");
 }
 
 void MainWindow::build_page()
@@ -389,8 +593,11 @@ void MainWindow::build_page()
   paste_.add_events(Gdk::BUTTON_PRESS_MASK);
   paste_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   paste_.signal_size_allocate().connect([this](Gtk::Allocation&) {
+    // Fit width and Draft follow the pasteboard. A size request set while
+    // GTK is allocating is lost, so a narrower window left the page at the
+    // old width; the page is sized again just after this layout instead.
     if (settings_.zoom == 0 || view_ == ViewMode::Draft)
-      apply_page_size();
+      queue_page_size();
     ruler_.queue_draw();
   });
 
@@ -404,7 +611,22 @@ void MainWindow::build_page()
           follow_caret();
       });
   buffer_->signal_changed().connect([this] { follow_caret(); });
-  text_.signal_size_allocate().connect([this](Gtk::Allocation&) { scroll_to_caret(); });
+  text_.signal_size_allocate().connect([this](Gtk::Allocation& allocation) {
+    // The text view lays its lines out again while it is being allocated (a
+    // zoom rewraps every line), and the resize it asks for then is lost:
+    // from Fit width to 200% the page stayed shorter than its text and the
+    // caret on the last lines was out of reach. Size the page again after
+    // this layout whenever the text wants more height than it was given.
+    // (Less is normal: an empty page, or Draft's white area, is taller.)
+    int min_h = 0;
+    int nat_h = 0;
+    text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
+    if (nat_h > allocation.get_height()) {
+      grow_page_ = true;
+      queue_page_size();
+    }
+    scroll_to_caret();
+  });
   g_signal_connect(text_.gobj(), "move-cursor", G_CALLBACK(&MainWindow::on_move_cursor), this);
   paste_.get_vadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
   paste_.get_hadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
@@ -529,8 +751,8 @@ void MainWindow::scroll_to_caret()
     v->set_value(std::max(v->get_lower(), v->get_upper() - v->get_page_size()));
   else
     reveal(v, y, rect.get_height());
-  // Vertical only for now. Sideways following waits until the window can
-  // be narrow enough to test it (#16).
+  // Sideways too, for a page wider than the window (200% on a 960 px window).
+  reveal(paste_.get_hadjustment(), x, std::max(1, rect.get_width()));
 }
 
 void MainWindow::build_status()
@@ -636,6 +858,24 @@ void MainWindow::apply_page_size()
   queue_page_status();
 }
 
+void MainWindow::queue_page_size()
+{
+  if (page_idle_.connected())
+    return;
+  page_idle_ = Glib::signal_idle().connect(
+      [this] {
+        apply_page_size();
+        // Only for text that outgrew the page: a resize on every pasteboard
+        // allocation would allocate the pasteboard again, and again.
+        if (grow_page_) {
+          grow_page_ = false;
+          page_.queue_resize();
+        }
+        return false;
+      },
+      Glib::PRIORITY_HIGH_IDLE);
+}
+
 void MainWindow::queue_page_status()
 {
   if (page_status_idle_.connected())
@@ -674,6 +914,7 @@ void MainWindow::set_zoom(int zoom)
   suppress_zoom_ = false;
   zoom_label_.set_text(zoom_label(zoom));
   apply_page_size();
+  reload_recent();
   settings_.save();
 }
 

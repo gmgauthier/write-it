@@ -3,6 +3,7 @@
 #pragma once
 
 #include "document.hpp"
+#include "narrow_combo.hpp"
 #include "page_text.hpp"
 #include "settings.hpp"
 #include "view.hpp"
@@ -11,6 +12,7 @@
 
 #include <array>
 #include <functional>
+#include <utility>
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,6 +43,32 @@ class MainWindow : public Gtk::ApplicationWindow {
   MainWindow();
   ~MainWindow() override;
 
+  // For files handed to the program (see open_plan.hpp). open_file is
+  // File > Open's route: RTF, Markdown or plain text by extension, recent
+  // files, and the same error sentences. True when the file was loaded.
+  bool open_file(const std::string& path);
+  // Untitled, never edited: safe to load a file into without asking.
+  bool pristine() const;
+  // The RTF file this window saves to, or "".
+  const std::string& document_path() const
+  {
+    return save_path_;
+  }
+  // The .md or .txt this window's document was imported from, or "".
+  const std::string& import_source() const
+  {
+    return source_path_;
+  }
+  // A file with no local path, such as an sftp:// URI that is not mounted.
+  void refuse_not_local(const std::string& uri);
+  // Asked by File > Open and Open Recent before loading: if a window
+  // already holds that file (by same_file), bring it forward and return
+  // true, and nothing is loaded here. Set by the application.
+  void set_open_elsewhere(std::function<bool(const std::string&)> open_elsewhere)
+  {
+    open_elsewhere_ = std::move(open_elsewhere);
+  }
+
  protected:
   bool on_delete_event(GdkEventAny* event) override;
 
@@ -68,6 +96,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_chrome();
   void apply_toolbar_row();
   void apply_page_size();
+  // apply_page_size() once the current layout is done.
+  void queue_page_size();
   void set_zoom(int zoom);
   // The text view sits on the page inside the pasteboard's scroller, so
   // GTK's own scroll-to-caret has nothing to scroll. These scroll the
@@ -97,13 +127,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void fill_font_combo(Gtk::ComboBoxText& combo, const std::string& active);
   bool new_document(bool prompt);
   void open_document();
-  void open_path(const std::string& path, OpenKind fallback);
+  bool open_path(const std::string& path, OpenKind fallback);
   bool save_document();
   bool save_document_as();
   void export_markdown();
   bool confirm_discard_or_save();
   void close_document();
   void remember_path(const std::string& path);
+  // Takes Open Recent from the ini: every window writes the whole file, so
+  // a window reads the list fresh before it writes it.
+  void reload_recent();
   void rebuild_recent();
   void install_loaded(const Document& doc, const std::string& path, bool keep_path);
   bool write_rtf(const std::string& path);
@@ -218,6 +251,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   void queue_list_shifts();
   void update_list_shifts();
   Glib::RefPtr<Gtk::TextTag> list_shift_tag(int left_margin);
+  // Word 97 moves a left-aligned or justified list item's text to the next
+  // default tab stop when its label reaches where the text starts. On screen
+  // only, through "list-tab" tags the document never sees; brought up to
+  // date in an idle after edits, formatting, zoom, and the view.
+  void queue_list_tabs();
+  Glib::RefPtr<Gtk::TextTag> list_tab_tag(int indent);
+  void update_list_tabs();
   void sync_list_controls();
 
   void build_find();
@@ -225,9 +265,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   void find_next();
   void replace_once();
   void on_options();
-  void tell(const char* sentence);
+  void tell(const std::string& sentence);
 
   Settings settings_;
+  // The size, while not maximised, and the maximised state, saved on close.
+  WindowMemory window_memory_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
   bool suppress_zoom_ = false;
 
@@ -236,9 +278,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Box toolbars_{Gtk::ORIENTATION_HORIZONTAL};
   Gtk::Toolbar standard_bar_;
   Gtk::Toolbar format_bar_;
-  Gtk::ComboBoxText font_combo_;
-  Gtk::ComboBoxText size_combo_;
-  Gtk::ComboBoxText style_combo_;
+  NarrowCombo font_combo_{128};
+  NarrowCombo size_combo_{52};
+  // What size_combo_ lists now (size_choices()).
+  std::vector<int> size_choices_shown_;
+  NarrowCombo style_combo_{110};
   Gtk::DrawingArea ruler_;
   Gtk::ScrolledWindow paste_;
   Gtk::Box board_{Gtk::ORIENTATION_VERTICAL};
@@ -283,6 +327,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
+  Gtk::MenuItem* justify_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
@@ -306,6 +351,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
+  Gtk::ToggleToolButton* justify_toggle_ = nullptr;
   Gtk::ToggleToolButton* bullets_toggle_ = nullptr;
   Gtk::ToggleToolButton* numbering_toggle_ = nullptr;
 
@@ -313,12 +359,23 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::string title_name_ = "Untitled";
   Document saved_;
   bool save_point_ = true;
+  // Where an imported document came from; cleared when it becomes anything
+  // else (New, Close, Save As). Lets a second request for it find this
+  // window, since an import keeps no save path.
+  std::string source_path_;
+  std::function<bool(const std::string&)> open_elsewhere_;
   bool loading_ = false;
   bool restoring_ = false;
   bool suppress_format_ = false;
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  // The idle that sizes the page again after a layout: to a new pasteboard
+  // size (Fit width, Draft) or to text that rewrapped to another height.
+  // One at a time, and gone with the window.
+  sigc::connection page_idle_;
+  // The text wants more height than the page gave it; the idle resizes.
+  bool grow_page_ = false;
   bool follow_caret_ = false;
   // The idle follow_caret() queues; one at a time, and gone with the window.
   sigc::connection caret_idle_;
@@ -327,6 +384,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;
+  // The list-tab idle, likewise; tabbing_ while it retags.
+  sigc::connection list_tabs_idle_;
+  bool tabbing_ = false;
+  // Paste's sensitivity follows the clipboard, which outlives the window.
+  sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
