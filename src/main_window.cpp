@@ -201,9 +201,9 @@ void MainWindow::build_menus()
   italic_item_ = add_item(*format_menu, "_Italic", true, GDK_KEY_i, Gdk::CONTROL_MASK);
   underline_item_ = add_item(*format_menu, "_Underline", true, GDK_KEY_u, Gdk::CONTROL_MASK);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*format_menu, "Align _Left", false);
-  add_item(*format_menu, "_Center", false);
-  add_item(*format_menu, "Align _Right", false);
+  align_left_item_ = add_item(*format_menu, "Align _Left", true);
+  align_center_item_ = add_item(*format_menu, "_Center", true);
+  align_right_item_ = add_item(*format_menu, "Align _Right", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   add_item(*format_menu, "_Style…", false);
   add_item(*format_menu, "B_ullets", false);
@@ -319,9 +319,9 @@ void MainWindow::build_toolbars()
   italic_toggle_ = toggle("format-text-italic", "Italic", false, true);
   underline_toggle_ = toggle("format-text-underline", "Underline", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  toggle("format-justify-left", "Align Left", true, false);
-  toggle("format-justify-center", "Center", false, false);
-  toggle("format-justify-right", "Align Right", false, false);
+  align_left_toggle_ = toggle("format-justify-left", "Align Left", true, true);
+  align_center_toggle_ = toggle("format-justify-center", "Center", false, true);
+  align_right_toggle_ = toggle("format-justify-right", "Align Right", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   format_bar_.append(*hold(style_combo_, 110));
   toggle("format-list-unordered", "Bullets", false, false);

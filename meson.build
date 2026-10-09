@@ -83,6 +83,15 @@ write_it_indents_tests = executable(
 )
 test('indents', write_it_indents_tests)
 
+write_it_alignment_tests = executable(
+  'write-it-alignment-tests',
+  'tests/test_alignment.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+)
+test('alignment', write_it_alignment_tests)
+
 write_it_units_tests = executable(
   'write-it-units-tests',
   'tests/test_units.cpp',

@@ -27,10 +27,15 @@ struct Indents {
 // The largest indent Word and RTF accept: 22 inches.
 constexpr int kMaxIndent = 31680;
 
+// Word 97's Align Left, Center and Align Right. There is no justified; RTF's
+// \qj reads as left.
+enum class Align { Left, Center, Right };
+
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.
   int heading = 0;
   Indents indents;
+  Align align = Align::Left;
   std::vector<Run> runs;
 };
 

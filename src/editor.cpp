@@ -108,15 +108,16 @@ bool parse_fmt(const std::string& name, Run& run)
   return true;
 }
 
-// Paragraph tags hold the indents in twips. Every character of a paragraph,
-// its newline included, carries exactly one.
-std::string para_name(const Indents& indents)
+// Paragraph tags hold the indents in twips and the alignment. Every
+// character of a paragraph, its newline included, carries exactly one.
+std::string para_name(const ParaFormat& format)
 {
-  return std::string("para") + '\x1f' + std::to_string(indents.left) + '\x1f' +
-         std::to_string(indents.right) + '\x1f' + std::to_string(indents.first);
+  return std::string("para") + '\x1f' + std::to_string(format.indents.left) + '\x1f' +
+         std::to_string(format.indents.right) + '\x1f' + std::to_string(format.indents.first) +
+         '\x1f' + std::to_string(static_cast<int>(format.align));
 }
 
-bool parse_para(const std::string& name, Indents& indents)
+bool parse_para(const std::string& name, ParaFormat& format)
 {
   const std::string prefix = std::string("para") + '\x1f';
   if (name.compare(0, prefix.size(), prefix) != 0)
@@ -135,11 +136,12 @@ bool parse_para(const std::string& name, Indents& indents)
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 3)
+  if (values.size() != 4 || values[3] < 0 || values[3] > 2)
     return false;
-  indents.left = values[0];
-  indents.right = values[1];
-  indents.first = values[2];
+  format.indents.left = values[0];
+  format.indents.right = values[1];
+  format.indents.first = values[2];
+  format.align = static_cast<Align>(values[3]);
   return true;
 }
 
@@ -171,12 +173,12 @@ struct Atom {
   gunichar ch = 0;
   Run format;
   int heading = 0;
-  Indents indents;
+  ParaFormat para;
 };
 
 bool operator==(const Atom& a, const Atom& b)
 {
-  return a.ch == b.ch && a.heading == b.heading && a.indents == b.indents &&
+  return a.ch == b.ch && a.heading == b.heading && a.para == b.para &&
          same_format(a.format, b.format);
 }
 
@@ -199,7 +201,8 @@ std::vector<Atom> atoms_of(const Document& doc)
         atom.format = run;
         atom.format.text.clear();
         atom.heading = paragraph.heading;
-        atom.indents = paragraph.indents;
+        atom.para.indents = paragraph.indents;
+        atom.para.align = paragraph.align;
         atoms.push_back(atom);
       }
     }
@@ -321,6 +324,18 @@ void MainWindow::connect_format()
     italic_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Italic); });
   if (underline_toggle_)
     underline_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Underline); });
+  if (align_left_toggle_)
+    align_left_toggle_->signal_toggled().connect([this] { on_align_toggled(Align::Left); });
+  if (align_center_toggle_)
+    align_center_toggle_->signal_toggled().connect([this] { on_align_toggled(Align::Center); });
+  if (align_right_toggle_)
+    align_right_toggle_->signal_toggled().connect([this] { on_align_toggled(Align::Right); });
+  if (align_left_item_)
+    align_left_item_->signal_activate().connect([this] { apply_align(Align::Left); });
+  if (align_center_item_)
+    align_center_item_->signal_activate().connect([this] { apply_align(Align::Center); });
+  if (align_right_item_)
+    align_right_item_->signal_activate().connect([this] { apply_align(Align::Right); });
   if (bold_item_)
     bold_item_->signal_activate().connect([this] { toggle_flag(TextFlag::Bold); });
   if (italic_item_)
@@ -611,7 +626,7 @@ Document MainWindow::capture() const
   Run run;
   bool in_run = false;
   int heading = 0;
-  bool have_indents = false;
+  bool have_para = false;
   auto flush_run = [&]() {
     if (!in_run)
       return;
@@ -622,27 +637,31 @@ Document MainWindow::capture() const
   auto flush_paragraph = [&]() {
     flush_run();
     paragraph.heading = heading;
-    if (!have_indents) {
+    if (!have_para) {
       // A paragraph no tag reaches: the empty last one, or one that has not
       // been normalised yet. It follows the paragraph above.
-      if (pending_indents_set_)
-        paragraph.indents = pending_indents_;
-      else if (!doc.paragraphs.empty())
+      if (pending_para_set_) {
+        paragraph.indents = pending_para_.indents;
+        paragraph.align = pending_para_.align;
+      } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
+        paragraph.align = doc.paragraphs.back().align;
+      }
     }
     doc.paragraphs.push_back(paragraph);
     paragraph = Paragraph{};
     heading = 0;
-    have_indents = false;
+    have_para = false;
   };
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
     const gunichar ch = iter.get_char();
-    if (!have_indents) {
-      Indents indents;
+    if (!have_para) {
+      ParaFormat format;
       if (auto tag = para_tag_at(iter)) {
-        if (parse_para(tag_name(tag), indents)) {
-          paragraph.indents = indents;
-          have_indents = true;
+        if (parse_para(tag_name(tag), format)) {
+          paragraph.indents = format.indents;
+          paragraph.align = format.align;
+          have_para = true;
         }
       }
     }
@@ -670,11 +689,11 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
 {
   loading_ = true;
   buffer_->set_text("");
-  pending_indents_set_ = false;
-  pending_indents_ = Indents{};
+  pending_para_set_ = false;
+  pending_para_ = ParaFormat{};
   for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
     const Paragraph& paragraph = doc.paragraphs[i];
-    const auto para = para_tag(paragraph.indents);
+    const auto para = para_tag(ParaFormat{paragraph.indents, paragraph.align});
     bool any = false;
     for (const Run& run : paragraph.runs) {
       if (run.text.empty())
@@ -690,8 +709,8 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
     if (i + 1 < doc.paragraphs.size()) {
       buffer_->insert_with_tag(buffer_->end(), "\n", para);
     } else if (!any) {
-      pending_indents_ = clamp_indents(paragraph.indents);
-      pending_indents_set_ = true;
+      pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align};
+      pending_para_set_ = true;
     }
   }
   // Newlines carry the line height. Tag them from the paragraph they end,
@@ -815,8 +834,8 @@ void MainWindow::on_user_end()
   in_user_ = false;
   finish_pending();
   normalise_paragraphs();
-  if (pending_indents_set_ && !final_paragraph_empty())
-    pending_indents_set_ = false;
+  if (pending_para_set_ && !final_paragraph_empty())
+    pending_para_set_ = false;
   const Document current = capture();
   if (!undo_.empty() && undo_.back().doc == current) {
     undo_.pop_back();
@@ -909,7 +928,7 @@ void MainWindow::finish_pending()
   insert_start_.reset();
   insert_end_.reset();
   // Inserted text joins the paragraph it lands in. Whole paragraphs pasted
-  // from this buffer keep their own indents; the trailing piece that merges
+  // from this buffer keep their own format; the trailing piece that merges
   // into the destination does not.
   {
     int tail = start;
@@ -925,7 +944,7 @@ void MainWindow::finish_pending()
     }
     for (const auto& tag : stale)
       buffer_->remove_tag(tag, buffer_->get_iter_at_offset(tail), buffer_->get_iter_at_offset(end));
-    const auto dest = para_tag(destination_indents(start, end));
+    const auto dest = para_tag(destination_para(start, end));
     for (int i = start; i < end;) {
       int j = i;
       while (j < end && !para_tag_at(buffer_->get_iter_at_offset(j)))
@@ -1049,9 +1068,9 @@ void MainWindow::restyle_tags()
       tag->property_pixels_above_lines() = static_cast<int>(8 * z);
       tag->property_pixels_below_lines() = static_cast<int>(4 * z);
     }
-    Indents indents;
-    if (parse_para(tag_name(tag), indents))
-      style_para_tag(tag, indents);
+    ParaFormat format;
+    if (parse_para(tag_name(tag), format))
+      style_para_tag(tag, format);
   });
   caret_key_.clear();
   update_caret_font();
@@ -1379,6 +1398,7 @@ void MainWindow::sync_format_controls()
   if (loading_ || restoring_ || suppress_format_ || in_user_ || !buffer_)
     return;
   ruler_.queue_draw();
+  show_align();
   auto iter = buffer_->get_insert()->get_iter();
   if (iter.get_offset() > 0) {
     auto prev = iter;
@@ -1439,23 +1459,29 @@ void MainWindow::on_size_changed()
   apply_run_edit([size](Run& run) { run.size = size; });
 }
 
-Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const Indents& raw)
+Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
 {
-  const Indents indents = clamp_indents(raw);
-  const Glib::ustring name = para_name(indents);
+  const ParaFormat format{clamp_indents(raw.indents), raw.align};
+  const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
   if (!tag) {
     tag = Gtk::TextTag::create(name);
-    style_para_tag(tag, indents);
+    style_para_tag(tag, format);
     table->add(tag);
   }
   return tag;
 }
 
-void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents) const
+void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
+                                const ParaFormat& format) const
 {
+  if (format.align == Align::Center)
+    tag->property_justification() = Gtk::JUSTIFY_CENTER;
+  else if (format.align == Align::Right)
+    tag->property_justification() = Gtk::JUSTIFY_RIGHT;
   // No indent leaves the view's page margins in charge.
+  const Indents& indents = format.indents;
   if (indents == Indents{})
     return;
   // A tag's margin replaces the view's, so the page margin is added here.
@@ -1469,7 +1495,7 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Ind
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag_at(Gtk::TextIter iter) const
 {
-  Indents ignored;
+  ParaFormat ignored;
   for (const auto& tag : iter.get_tags()) {
     if (parse_para(tag_name(tag), ignored))
       return tag;
@@ -1511,63 +1537,68 @@ bool MainWindow::final_paragraph_empty() const
   return count == 0 || buffer_->get_iter_at_offset(count - 1).get_char() == '\n';
 }
 
-Indents MainWindow::indents_at(int offset) const
+ParaFormat MainWindow::para_at(int offset) const
 {
   // The same rule as capture(): the paragraph's first tagged character, then
-  // the pending indents of an empty last paragraph, then the paragraph above.
+  // the pending format of an empty last paragraph, then the paragraph above.
   auto iter = buffer_->get_iter_at_offset(paragraph_start(offset));
   const auto line_start = iter;
   for (; !iter.is_end(); ++iter) {
-    Indents indents;
+    ParaFormat format;
     if (auto tag = para_tag_at(iter)) {
-      if (parse_para(tag_name(tag), indents))
-        return indents;
+      if (parse_para(tag_name(tag), format))
+        return format;
     }
     if (iter.get_char() == '\n')
       break;
   }
-  if (iter.is_end() && pending_indents_set_)
-    return pending_indents_;
+  if (iter.is_end() && pending_para_set_)
+    return pending_para_;
   if (line_start.get_offset() > 0)
-    return indents_at(line_start.get_offset() - 1);
-  return Indents{};
+    return para_at(line_start.get_offset() - 1);
+  return ParaFormat{};
 }
 
-Indents MainWindow::destination_indents(int start, int end) const
+Indents MainWindow::indents_at(int offset) const
+{
+  return para_at(offset).indents;
+}
+
+ParaFormat MainWindow::destination_para(int start, int end) const
 {
   // Text before the insertion on the same line, then text after it, decides.
   if (start > 0) {
     auto before = buffer_->get_iter_at_offset(start - 1);
-    Indents indents;
+    ParaFormat format;
     if (before.get_char() != '\n') {
       if (auto tag = para_tag_at(before)) {
-        if (parse_para(tag_name(tag), indents))
-          return indents;
+        if (parse_para(tag_name(tag), format))
+          return format;
       }
     }
   }
   for (auto after = buffer_->get_iter_at_offset(end); !after.is_end(); ++after) {
-    Indents indents;
+    ParaFormat format;
     if (auto tag = para_tag_at(after)) {
-      if (parse_para(tag_name(tag), indents))
-        return indents;
+      if (parse_para(tag_name(tag), format))
+        return format;
     }
     if (after.get_char() == '\n')
       break;
   }
-  if (pending_indents_set_)
-    return pending_indents_;
+  if (pending_para_set_)
+    return pending_para_;
   if (start > 0)
-    return indents_at(start - 1);
-  return Indents{};
+    return para_at(start - 1);
+  return ParaFormat{};
 }
 
 void MainWindow::normalise_paragraphs()
 {
   // A deleted newline joins two paragraphs. The joined paragraph keeps the
-  // first one's indents, as AbiWord and LibreOffice do.
+  // first one's indents and alignment, as AbiWord and LibreOffice do.
   const int count = buffer_->get_char_count();
-  Glib::RefPtr<Gtk::TextTag> carry = para_tag(Indents{});
+  Glib::RefPtr<Gtk::TextTag> carry = para_tag(ParaFormat{});
   int begin = 0;
   while (begin < count) {
     Glib::RefPtr<Gtk::TextTag> chosen;
@@ -1607,18 +1638,17 @@ void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
 {
   // Erasing through to the end of the buffer from the start of a line leaves
   // an empty last paragraph. Like Word's surviving paragraph mark, it keeps
-  // the indents of the last paragraph that was there.
+  // the format of the last paragraph that was there.
   if (loading_ || !buffer_ || !to.is_end() || from == to)
     return;
   if (paragraph_start(from.get_offset()) != from.get_offset())
     return;
-  pending_indents_ = indents_at(buffer_->get_char_count());
-  pending_indents_set_ = true;
+  pending_para_ = para_at(buffer_->get_char_count());
+  pending_para_set_ = true;
 }
 
-void MainWindow::apply_indents(const Indents& raw)
+void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
 {
-  const Indents indents = clamp_indents(raw);
   Gtk::TextBuffer::iterator start_iter;
   Gtk::TextBuffer::iterator end_iter;
   buffer_->get_selection_bounds(start_iter, end_iter);
@@ -1629,36 +1659,84 @@ void MainWindow::apply_indents(const Indents& raw)
   const int start = paragraph_start(sel_start);
   const int end = paragraph_end(sel_end > sel_start ? sel_end - 1 : sel_end);
   buffer_->begin_user_action();
-  std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
-  for (auto iter = buffer_->get_iter_at_offset(start); iter.get_offset() < end; ++iter) {
-    auto tag = para_tag_at(iter);
-    if (tag && std::find(seen.begin(), seen.end(), tag) == seen.end())
-      seen.push_back(tag);
+  // Each paragraph is edited from its own format, so changing one property
+  // keeps the others where the paragraphs differ.
+  for (int begin = start; begin < end;) {
+    const int stop = paragraph_end(begin);
+    ParaFormat format = para_at(begin);
+    edit(format);
+    std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
+    for (auto iter = buffer_->get_iter_at_offset(begin); iter.get_offset() < stop; ++iter) {
+      auto tag = para_tag_at(iter);
+      if (tag && std::find(seen.begin(), seen.end(), tag) == seen.end())
+        seen.push_back(tag);
+    }
+    for (const auto& tag : seen)
+      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(begin),
+                          buffer_->get_iter_at_offset(stop));
+    buffer_->apply_tag(para_tag(format), buffer_->get_iter_at_offset(begin),
+                       buffer_->get_iter_at_offset(stop));
+    begin = stop;
   }
-  for (const auto& tag : seen)
-    buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start), buffer_->get_iter_at_offset(end));
-  if (start < end)
-    buffer_->apply_tag(para_tag(indents), buffer_->get_iter_at_offset(start),
-                       buffer_->get_iter_at_offset(end));
-  // The empty last paragraph has nothing to tag. Hold its indents aside.
+  // The empty last paragraph has nothing to tag. Hold its format aside.
   if (end == buffer_->get_char_count() && final_paragraph_empty()) {
-    pending_indents_ = indents;
-    pending_indents_set_ = true;
+    ParaFormat format = para_at(end);
+    edit(format);
+    pending_para_ = ParaFormat{clamp_indents(format.indents), format.align};
+    pending_para_set_ = true;
   }
   buffer_->end_user_action();
   buffer_->select_range(buffer_->get_iter_at_offset(sel_start),
                         buffer_->get_iter_at_offset(sel_end));
   ruler_.queue_draw();
+  show_align();
   text_.grab_focus();
+}
+
+void MainWindow::apply_align(Align align)
+{
+  apply_para_edit([align](ParaFormat& format) { format.align = align; });
+}
+
+void MainWindow::on_align_toggled(Align align)
+{
+  if (suppress_format_)
+    return;
+  // The three buttons act as one group, as in Word 97. Pressing the button
+  // already down leaves the paragraph as it is, except Center and Align
+  // Right, which go back to left.
+  Gtk::ToggleToolButton* button = align == Align::Center  ? align_center_toggle_
+                                  : align == Align::Right ? align_right_toggle_
+                                                          : align_left_toggle_;
+  if (button && !button->get_active())
+    align = Align::Left;
+  apply_align(align);
+}
+
+void MainWindow::show_align()
+{
+  if (!buffer_)
+    return;
+  const Align align = para_at(cursor_offset()).align;
+  const bool guard = suppress_format_;
+  suppress_format_ = true;
+  auto show = [](Gtk::ToggleToolButton* button, bool on) {
+    if (button && button->get_active() != on)
+      button->set_active(on);
+  };
+  show(align_left_toggle_, align == Align::Left);
+  show(align_center_toggle_, align == Align::Center);
+  show(align_right_toggle_, align == Align::Right);
+  suppress_format_ = guard;
 }
 
 void MainWindow::on_paragraph()
 {
-  // Word 97's Format > Paragraph indentation group, in the unit Tools >
-  // Options... chose. Alignment joins it with the alignment slice. Spacing
-  // waits for 2.0.
+  // Word 97's Format > Paragraph alignment and indentation, in the unit
+  // Tools > Options... chose. Spacing waits for 2.0.
   const Units units = settings_.units;
   const Indents current = indents_at(cursor_offset());
+  const Align current_align = para_at(cursor_offset()).align;
   Gtk::Dialog dialog("Paragraph", *this, true);
   dialog.set_resizable(false);
   dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
@@ -1755,6 +1833,20 @@ void MainWindow::on_paragraph()
   grid->attach(*special, 2, 1, 1, 1);
   grid->attach(*label("B_y:", *by), 3, 0, 1, 1);
   grid->attach(*by, 3, 1, 1, 1);
+  // Alignment sits above Indentation, as in Word 97's dialog.
+  auto* alignment = Gtk::manage(new Gtk::ComboBoxText());
+  alignment->append("Left");
+  alignment->append("Centered");
+  alignment->append("Right");
+  alignment->set_active(static_cast<int>(current_align));
+  auto* align_row = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 12));
+  align_row->set_margin_top(12);
+  align_row->set_margin_start(12);
+  align_row->set_margin_end(12);
+  align_row->pack_start(*label("Ali_gnment:", *alignment), Gtk::PACK_SHRINK);
+  align_row->pack_start(*alignment, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*align_row, Gtk::PACK_SHRINK);
+
   frame->add(*grid);
   dialog.get_content_area()->pack_start(*frame, Gtk::PACK_SHRINK);
   dialog.show_all_children();
@@ -1774,10 +1866,23 @@ void MainWindow::on_paragraph()
   const int row = special->get_active_row_number();
   chosen.first = row == 1 ? amount : row == 2 ? -amount : 0;
   if (chosen == current) {
-    text_.grab_focus();
+    // Only what changed is applied, so a new alignment keeps each selected
+    // paragraph's own indents, and new indents keep each one's alignment.
+    const auto align = static_cast<Align>(alignment->get_active_row_number());
+    if (align == current_align) {
+      text_.grab_focus();
+      return;
+    }
+    apply_align(align);
     return;
   }
-  apply_indents(chosen);
+  const auto align = static_cast<Align>(alignment->get_active_row_number());
+  const bool align_changed = align != current_align;
+  apply_para_edit([chosen, align, align_changed](ParaFormat& format) {
+    format.indents = chosen;
+    if (align_changed)
+      format.align = align;
+  });
 }
 
 void MainWindow::build_find()
