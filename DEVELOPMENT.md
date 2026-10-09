@@ -54,7 +54,7 @@ One document, one window. The title is `Write-It - letter.rtf`. A dirty document
 
 Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized. The window remembers its size.
 
-The page sits on a neutral gray pasteboard, `#808080`. The pasteboard scrolls up and down to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top, and on the last line right to the bottom. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back. It follows vertically only for now: sideways following waits until the window can be narrower than a 200% page (#16).
+The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, the page is A4, 21 × 29.7 cm. The pasteboard scrolls up and down to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top, and on the last line right to the bottom. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back. It follows vertically only for now: sideways following waits until the window can be narrower than a 200% page (#16).
 
 ```
 +------------------------------------------------------------------+
@@ -151,6 +151,8 @@ View → Side by side is on by default, so the two toolbars share one row. Turni
 ### Status bar
 
 The left side is a message (“Saved letter.rtf”) that stays until the next message. The rightmost cell is the zoom, and it pops the same list as View. The cell to its left is the page, “Page 2 of 4”.
+
+Until M3 lays out real pages the page count is approximate: a page is the A4 sheet’s height (16838 twips) on the screen page’s scale, less the page view’s top and bottom insets (692 px of laid-out text at 100%), `m` is how many of those the text fills, and `n` is the one the caret’s line starts on. Both scale with the zoom, so neither the zoom nor the view changes the count.
 
 ### Config
 

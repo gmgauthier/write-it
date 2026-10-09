@@ -527,8 +527,13 @@ void MainWindow::build_status()
   message_.set_halign(Gtk::ALIGN_START);
   message_.set_hexpand(true);
   message_.set_ellipsize(Pango::ELLIPSIZE_END);
-  page_label_.set_text("Page 1 of 1");
+  page_label_.set_text(page_label(PageCount{}));
   zoom_cell_.add(zoom_label_);
+  // No window of its own: popup_at_widget() places the menu from the
+  // widget's allocation, which is in its parent's window, and an event box
+  // with a visible window counted the offset twice, sending the menu to the
+  // corner of the screen.
+  zoom_cell_.set_visible_window(false);
   zoom_cell_.add_events(Gdk::BUTTON_PRESS_MASK);
   zoom_cell_.signal_button_press_event().connect(
       [this](GdkEventButton* event) {
@@ -539,6 +544,9 @@ void MainWindow::build_status()
         return true;
       },
       false);
+  // Popup menus are not the window's children, so show_all_children() never
+  // reaches them; without this the zoom cell popped an empty menu.
+  zoom_popup_.show_all();
   framed(status_, message_, true);
   framed(status_, page_label_, false);
   framed(status_, zoom_cell_, false);
@@ -613,6 +621,32 @@ void MainWindow::apply_page_size()
   if (current_w != width || current_h != height)
     page_.set_size_request(width, height);
   sizing_ = false;
+  queue_page_status();
+}
+
+void MainWindow::queue_page_status()
+{
+  if (page_status_queued_)
+    return;
+  page_status_queued_ = true;
+  // After GtkTextView's own validation idle, so the line heights are real.
+  Glib::signal_idle().connect_once([this] { update_page_status(); }, Glib::PRIORITY_DEFAULT_IDLE);
+}
+
+// "Page n of m", approximate until M3: see page_count() in view.hpp.
+void MainWindow::update_page_status()
+{
+  page_status_queued_ = false;
+  if (!buffer_)
+    return;
+  int end_y = 0;
+  int end_h = 0;
+  text_.get_line_yrange(buffer_->end(), end_y, end_h);
+  Gdk::Rectangle caret;
+  text_.get_iter_location(buffer_->get_iter_at_mark(buffer_->get_insert()), caret);
+  const Glib::ustring label = page_label(page_count(end_y + end_h, caret.get_y(), zoom_factor()));
+  if (page_label_.get_text() != label)
+    page_label_.set_text(label);
 }
 
 void MainWindow::set_zoom(int zoom)

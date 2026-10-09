@@ -76,6 +76,8 @@ class MainWindow : public Gtk::ApplicationWindow {
                              gpointer self);
   bool page_caret(int count, bool extend);
   void sync_zoom_checks();
+  void queue_page_status();
+  void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
   bool on_context(GdkEventButton* event);
@@ -271,6 +273,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool follow_caret_ = false;
   // The idle follow_caret() queues; one at a time, and gone with the window.
   sigc::connection caret_idle_;
+  bool page_status_queued_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

@@ -315,6 +315,14 @@ void MainWindow::build_editor()
   buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
   text_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_text_key), false);
   text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
+  // The status bar's page cell follows the text and the caret.
+  buffer_->signal_changed().connect([this] { queue_page_status(); });
+  buffer_->signal_mark_set().connect(
+      [this](const Gtk::TextBuffer::iterator&, const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
+        if (mark == buffer_->get_insert())
+          queue_page_status();
+      });
+  text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
   Gtk::Clipboard::get()->signal_owner_change().connect(
       [this](GdkEventOwnerChange*) { update_actions(); });
 
