@@ -60,4 +60,9 @@ struct WindowMemory {
   void store(Settings& settings) const;
 };
 
+// Open Recent after opening `path`: it goes first, once, and the list is
+// cut to `count`.
+std::vector<std::string> push_recent(std::vector<std::string> recent, const std::string& path,
+                                     int count);
+
 }  // namespace writeit

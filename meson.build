@@ -42,6 +42,7 @@ writeit_core_sources = files(
   'src/font_sizes.cpp',
   'src/main_window.cpp',
   'src/narrow_combo.cpp',
+  'src/open_plan.cpp',
   'src/page_text.cpp',
   'src/rtf.cpp',
   'src/settings.cpp',
@@ -62,7 +63,7 @@ writeit_dep = declare_dependency(
   dependencies: [gtkmm, glibmm],
 )
 
-executable(
+write_it_exe = executable(
   'write-it',
   'src/main.cpp',
   dependencies: [writeit_dep],
@@ -79,6 +80,13 @@ install_data(
   'data/write-it.css',
   install_dir: get_option('datadir') / 'write-it',
 )
+
+write_it_open_tests = executable(
+  'write-it-open-tests',
+  'tests/test_open.cpp',
+  dependencies: [writeit_dep],
+)
+test('open', write_it_open_tests)
 
 write_it_filename_tests = executable(
   'write-it-filename-tests',
@@ -254,7 +262,7 @@ write_it_window_width_tests = executable(
   'tests/test_window_width.cpp',
   dependencies: [writeit_dep],
 )
-test('window-width', write_it_window_width_tests, timeout: 60)
+test('window-width', write_it_window_width_tests, timeout: 60, is_parallel: false)
 
 # The real window under a display: the first launch's size and zoom, and the
 # size and zoom it saves and restores.
@@ -263,7 +271,16 @@ write_it_window_memory_tests = executable(
   'tests/test_window_memory.cpp',
   dependencies: [writeit_dep],
 )
-test('window-memory', write_it_window_memory_tests, timeout: 60)
+test('window-memory', write_it_window_memory_tests, timeout: 60, is_parallel: false)
+
+# The real window under a display: a closed window leaves nothing on the
+# clipboard, which outlives it (run under ASan to see a use after free).
+write_it_window_lifetime_tests = executable(
+  'write-it-window-lifetime-tests',
+  'tests/test_window_lifetime.cpp',
+  dependencies: [writeit_dep],
+)
+test('window-lifetime', write_it_window_lifetime_tests, timeout: 60)
 
 # The real window under a display: what overflows the toolbars at 960 px and
 # at the narrowest reaches the overflow menus with its label, and does there
@@ -274,3 +291,31 @@ write_it_toolbar_overflow_tests = executable(
   dependencies: [writeit_dep],
 )
 test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120)
+
+# The real application under a display: a file already open, asked for by a
+# symlink, a hard link or a ".." path, from Application::open or File > Open.
+write_it_open_identity_tests = executable(
+  'write-it-open-identity-tests',
+  'tests/test_open_identity.cpp',
+  dependencies: [writeit_dep],
+)
+test('open-identity', write_it_open_identity_tests, timeout: 60)
+
+# Launches the program with files, on its own Xvfb and private D-Bus; see the script.
+test(
+  'smoke-open',
+  find_program('tests/smoke_open.sh'),
+  args: [write_it_exe.full_path()],
+  depends: write_it_exe,
+  timeout: 180,
+  is_parallel: false,
+)
+
+test(
+  'desktop-file',
+  find_program('tests/desktop_file.sh'),
+  args: [
+    meson.current_source_dir() / 'data' / 'write-it.desktop',
+    meson.current_source_dir() / 'src' / 'editor.cpp',
+  ],
+)

@@ -210,4 +210,14 @@ void WindowMemory::store(Settings& settings) const
   settings.window_maximized = maximized;
 }
 
+std::vector<std::string> push_recent(std::vector<std::string> recent, const std::string& path,
+                                     int count)
+{
+  recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
+  recent.insert(recent.begin(), path);
+  if (count >= 0 && static_cast<int>(recent.size()) > count)
+    recent.resize(static_cast<size_t>(count));
+  return recent;
+}
+
 }  // namespace writeit

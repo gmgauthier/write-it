@@ -12,6 +12,7 @@
 
 #include <array>
 #include <functional>
+#include <utility>
 #include <memory>
 #include <string>
 #include <vector>
@@ -34,6 +35,32 @@ class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
   ~MainWindow() override;
+
+  // For files handed to the program (see open_plan.hpp). open_file is
+  // File > Open's route: RTF, Markdown or plain text by extension, recent
+  // files, and the same error sentences. True when the file was loaded.
+  bool open_file(const std::string& path);
+  // Untitled, never edited: safe to load a file into without asking.
+  bool pristine() const;
+  // The RTF file this window saves to, or "".
+  const std::string& document_path() const
+  {
+    return save_path_;
+  }
+  // The .md or .txt this window's document was imported from, or "".
+  const std::string& import_source() const
+  {
+    return source_path_;
+  }
+  // A file with no local path, such as an sftp:// URI that is not mounted.
+  void refuse_not_local(const std::string& uri);
+  // Asked by File > Open and Open Recent before loading: if a window
+  // already holds that file (by same_file), bring it forward and return
+  // true, and nothing is loaded here. Set by the application.
+  void set_open_elsewhere(std::function<bool(const std::string&)> open_elsewhere)
+  {
+    open_elsewhere_ = std::move(open_elsewhere);
+  }
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -93,13 +120,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void fill_font_combo(Gtk::ComboBoxText& combo, const std::string& active);
   bool new_document(bool prompt);
   void open_document();
-  void open_path(const std::string& path, OpenKind fallback);
+  bool open_path(const std::string& path, OpenKind fallback);
   bool save_document();
   bool save_document_as();
   void export_markdown();
   bool confirm_discard_or_save();
   void close_document();
   void remember_path(const std::string& path);
+  // Takes Open Recent from the ini: every window writes the whole file, so
+  // a window reads the list fresh before it writes it.
+  void reload_recent();
   void rebuild_recent();
   void install_loaded(const Document& doc, const std::string& path, bool keep_path);
   bool write_rtf(const std::string& path);
@@ -193,7 +223,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void find_next();
   void replace_once();
   void on_options();
-  void tell(const char* sentence);
+  void tell(const std::string& sentence);
 
   Settings settings_;
   // The size, while not maximised, and the maximised state, saved on close.
@@ -286,6 +316,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::string title_name_ = "Untitled";
   Document saved_;
   bool save_point_ = true;
+  // Where an imported document came from; cleared when it becomes anything
+  // else (New, Close, Save As). Lets a second request for it find this
+  // window, since an import keeps no save path.
+  std::string source_path_;
+  std::function<bool(const std::string&)> open_elsewhere_;
   bool loading_ = false;
   bool restoring_ = false;
   bool suppress_format_ = false;
@@ -303,6 +338,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection caret_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // Paste's sensitivity follows the clipboard, which outlives the window.
+  sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
