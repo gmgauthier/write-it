@@ -26,7 +26,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 | Status bar: `Page n of m` and the zoom cell | Merged |
 | The caret stays in view | Merged |
 | Toolbars overflow, so the window fits a 1024 px screen | In `m2` |
-| Open files from the command line and the desktop file | Open, #17 |
+| Open files from the command line and the desktop file | In `m2` |
 | An imported `.txt` or `.md` opens unmodified | In `m2` |
 | Window size, maximised state, and zoom remembered | Draft, #25 |
 
@@ -73,15 +73,16 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - One PR per feature. The PR updates the lines of this file that describe that feature, in the section the feature belongs to. The Status section is updated separately.
 - Failing tests come first, in their own commit, then the fix.
 - Everything in `src/` except `main.cpp` builds once as the `writeit_core` static library, which the app and every test link. A new `src/*.cpp` file goes in that one list in `meson.build`, never in a test target's own sources.
+- A test that opens a window is marked `is_parallel: false` in `meson.build`, so window tests never share the X display at the same time.
 - Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
 - Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag.
 - Bug Basher reviews every PR on GitHub with a comment that starts `Bug Basher: <commit>: approved.` and names the commit. The project has one GitHub account, so a comment review is the gate. He reads the code, runs its suites under ASan and UBSan, and tries whatever the PR adds in a live window for a few minutes.
 - Bug Basher does not change product code. Defects go back to the PR's owner as a task with the failing case, and the owner fixes them on the same PR.
-- SysAdmin merges a PR into the milestone branch once its head is approved and CI passes on Devuan Excalibur, Debian trixie, and lint. A PR does not have to be up to date with the milestone branch, so one merge does not send the others back for review. If a PR conflicts, its owner fixes the conflict and Bug Basher re-checks the conflicted files.
+- SysAdmin merges a PR into the milestone branch once its head is approved and all four CI checks pass: the Devuan Excalibur build and tests, the Debian trixie build and tests, lint, and "ASan and UBSan (debian:trixie)", which runs every suite under the sanitisers. A PR does not have to be up to date with the milestone branch, so one merge does not send the others back for review. If a PR conflicts, its owner fixes the conflict and Bug Basher re-checks the conflicted files.
 - A draft PR from the milestone branch into `master` stays open while the milestone is under way, so CI tests the combined branch after every merge.
 - Coordinator owns the queue: the order PRs merge in and who holds each one. If nothing moves for 15 minutes, Watcher asks the room for a status, and goes to Greg only if the same PR is still stuck after a second ask.
 - When every feature is in, Bug Basher does one full live pass on the milestone branch head. Defects go back as small fix PRs into the milestone branch. Then SysAdmin merges the milestone branch into `master` once, deletes the branch, and tags.
-- `master` is protected: a PR merges only when it is up to date with `master` and all three CI checks pass. Milestone branches are protected too: all three checks must pass, but being up to date is not required. Nobody bypasses either rule, and force-pushes are blocked. Branches are updated by merging, not by rebasing.
+- `master` is protected: a PR merges only when it is up to date with `master` and all four CI checks pass. Milestone branches are protected too: all four checks must pass, but being up to date is not required. Nobody bypasses either rule, and force-pushes are blocked. Branches are updated by merging, not by rebasing.
 - Every commit, PR description, and GitHub comment starts with its author's name, for example `Coordinator:` or `Scribe:`.
 - Each finished milestone gets an annotated tag (`m2`, `m3`, …) and no GitHub release. The only release is `v1.0.0`, with the `.deb`, the AppImage, and the source tarball.
 
