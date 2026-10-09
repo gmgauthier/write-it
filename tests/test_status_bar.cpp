@@ -127,7 +127,8 @@ void cells(writeit::MainWindow& window)
   CHECK(MainWindowProbe::cell(window).is_visible());
   CHECK(mx < px);
   CHECK(px < zx);
-  CHECK(MainWindowProbe::zoom_text(window) == "100%");
+  // A first launch (no ini) is at Fit width, and the cell says so.
+  CHECK(MainWindowProbe::zoom_text(window) == "Fit width");
 }
 
 void short_letter(writeit::MainWindow& window, const std::string& dir)

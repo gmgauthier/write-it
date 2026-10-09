@@ -271,6 +271,15 @@ write_it_window_width_tests = executable(
 )
 test('window-width', write_it_window_width_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: the first launch's size and zoom, and the
+# size and zoom it saves and restores.
+write_it_window_memory_tests = executable(
+  'write-it-window-memory-tests',
+  'tests/test_window_memory.cpp',
+  dependencies: [writeit_dep],
+)
+test('window-memory', write_it_window_memory_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: a closed window leaves nothing on the
 # clipboard, which outlives it (run under ASan to see a use after free).
 write_it_window_lifetime_tests = executable(
