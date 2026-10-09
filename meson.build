@@ -145,3 +145,20 @@ write_it_rtf_unicode_tests = executable(
   dependencies: dependency('glib-2.0'),
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
+
+# check.hpp's guard. A suite that stops early, or names no minimum, fails;
+# done() without a minimum does not compile.
+check_guard = executable('check-guard', 'tests/check_guard.cpp', include_directories: inc)
+test('guard-early-return-fails', check_guard, args: ['early'], should_fail: true)
+test('guard-no-minimum-fails', check_guard, args: ['no-minimum'], should_fail: true)
+test('guard-exact-passes', check_guard, args: ['exact'])
+done_without_minimum = meson.get_compiler('cpp').compiles(
+  '#include "check.hpp"\nint main() { return suite_test::done("x"); }',
+  include_directories: include_directories('tests'),
+  args: ['-std=c++17'],
+  name: 'suite_test::done() without a minimum',
+)
+test(
+  'guard-minimum-required',
+  find_program(done_without_minimum ? 'false' : 'true'),
+)
