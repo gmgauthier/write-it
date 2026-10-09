@@ -120,6 +120,15 @@ write_it_alignment_tests = executable(
 )
 test('alignment', write_it_alignment_tests)
 
+write_it_lists_tests = executable(
+  'write-it-lists-tests',
+  'tests/test_lists.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+)
+test('lists', write_it_lists_tests)
+
 write_it_units_tests = executable(
   'write-it-units-tests',
   'tests/test_units.cpp',
