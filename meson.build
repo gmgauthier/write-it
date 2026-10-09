@@ -201,6 +201,7 @@ write_it_page_width_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/page_text.cpp',
+  'src/styles.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
