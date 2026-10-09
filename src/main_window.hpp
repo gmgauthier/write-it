@@ -154,6 +154,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void show_align();
   void on_paragraph();
   void toggle_list_kind(ListKind kind);
+  // Tags the paragraph that starts at `start` with `format`, or holds the
+  // format aside for the empty last paragraph.
+  void tag_paragraph(int start, const ParaFormat& format);
+  // The caret's paragraph, counted in '\n' as capture() counts them.
+  size_t caret_paragraph() const;
+  // Restart Numbering (true) or Continue Previous List (false) at the
+  // caret's item, as one undo step. False when it changes nothing.
+  bool renumber_list(bool restart);
+  // Shows the right-click menu's numbering items on a numbered item.
+  void sync_context_numbering();
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -225,6 +235,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
   Gtk::MenuItem* context_paste_ = nullptr;
+  Gtk::SeparatorMenuItem* context_numbering_rule_ = nullptr;
+  Gtk::MenuItem* context_restart_ = nullptr;
+  Gtk::MenuItem* context_continue_ = nullptr;
   std::vector<Gtk::MenuItem*> recent_items_;
 
   Gtk::ToolButton* new_tool_ = nullptr;
