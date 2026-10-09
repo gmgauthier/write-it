@@ -64,6 +64,14 @@ write_it_settings_tests = executable(
 )
 test('settings', write_it_settings_tests)
 
+write_it_view_tests = executable(
+  'write-it-view-tests',
+  'tests/test_view.cpp',
+  'src/view.cpp',
+  include_directories: inc,
+)
+test('view', write_it_view_tests)
+
 write_it_document_tests = executable(
   'write-it-document-tests',
   'tests/test_document.cpp',
