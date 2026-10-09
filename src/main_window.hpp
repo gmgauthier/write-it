@@ -185,7 +185,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
   // Word 97 moves a left-aligned or justified list item's text to the next
-  // default tab stop when its label and a space run past the hang. On screen
+  // default tab stop when its label reaches where the text starts. On screen
   // only, through "list-tab" tags the document never sees; brought up to
   // date in an idle after edits, formatting, zoom, and the view.
   void queue_list_tabs();
