@@ -46,6 +46,7 @@ writeit_core_sources = files(
   'src/page_text.cpp',
   'src/rtf.cpp',
   'src/settings.cpp',
+  'src/styles.cpp',
   'src/units.cpp',
   'src/view.cpp',
 )
@@ -205,6 +206,13 @@ write_it_lists_tests = executable(
 )
 test('lists', write_it_lists_tests)
 
+write_it_styles_tests = executable(
+  'write-it-styles-tests',
+  'tests/test_styles.cpp',
+  dependencies: [writeit_dep],
+)
+test('styles', write_it_styles_tests)
+
 write_it_units_tests = executable(
   'write-it-units-tests',
   'tests/test_units.cpp',
@@ -297,6 +305,25 @@ write_it_window_memory_tests = executable(
   dependencies: [writeit_dep],
 )
 test('window-memory', write_it_window_memory_tests, timeout: 60, is_parallel: false)
+
+# The real window under a display: direct formatting made with the toolbar
+# stays through named styles applied and edited.
+write_it_style_direct_tests = executable(
+  'write-it-style-direct-tests',
+  'tests/test_style_direct.cpp',
+  dependencies: [writeit_dep],
+)
+test('style-direct', write_it_style_direct_tests, timeout: 60, is_parallel: false)
+
+# The real window under a display: long style names keep the style boxes
+# and Format > Style... narrow, the Style box is blank over mixed styles,
+# and a heading's list label is bold.
+write_it_style_ui_tests = executable(
+  'write-it-style-ui-tests',
+  'tests/test_style_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('style-ui', write_it_style_ui_tests, timeout: 60, is_parallel: false)
 
 # The real window under a display: a closed window leaves nothing on the
 # clipboard, which outlives it (run under ASan to see a use after free).

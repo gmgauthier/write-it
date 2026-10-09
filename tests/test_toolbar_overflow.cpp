@@ -395,7 +395,7 @@ struct Responder {
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 64;
+constexpr int kChecks = 65;
 
 int main(int argc, char* argv[])
 {
@@ -566,12 +566,21 @@ int main(int argc, char* argv[])
     CHECK(size.get_active_text() == "14" && MainWindowProbe::format_at(window, 1).size == 14);
     CHECK(entries(window, "Size").size() == 10);
 
-    // Style waits for #19, as its box does.
+    // Style: the sheet's styles, the caret's ticked; choosing one applies it.
     auto& style = MainWindowProbe::style_combo(window);
     Gtk::MenuItem* style_proxy = proxy_of(window, "Style");
-    Gtk::CheckMenuItem* body = entry(window, "Style", "Body text");
-    CHECK(style_proxy && style_proxy->get_sensitive() == style.get_sensitive() && body &&
-          body->get_active() && entries(window, "Style").size() == 1);
+    Gtk::CheckMenuItem* normal = entry(window, "Style", "Normal");
+    CHECK(style_proxy && style_proxy->get_sensitive() && style.get_sensitive() && normal &&
+          normal->get_active() &&
+          entries(window, "Style").size() ==
+              static_cast<size_t>(style.get_model()->children().size()) &&
+          entries(window, "Style").size() > 1);
+    select(window, 0, 5);
+    if (Gtk::CheckMenuItem* item = entry(window, "Style", "Heading 1"))
+      item->activate();
+    settle();
+    CHECK(style.get_active_text() == "Heading 1" &&
+          MainWindowProbe::para(window).style == "Heading 1");
 
     // Standard: Copy, Cut, Paste, Undo, Redo.
     select(window, 0, 5);

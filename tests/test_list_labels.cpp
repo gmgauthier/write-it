@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace writeit {
 
@@ -155,6 +156,12 @@ struct MainWindowProbe {
   static int px(MainWindow& w, int twips)
   {
     return w.indent_px(twips);
+  }
+  // Restart (or continue) numbering at paragraph `line`, as the menu does.
+  static bool renumber(MainWindow& w, int line, bool restart)
+  {
+    w.buffer_->place_cursor(w.buffer_->get_iter_at_line(line));
+    return w.renumber_list(restart);
   }
 };
 
@@ -339,10 +346,44 @@ void screen_only(writeit::MainWindow& window, const std::string& file_text)
         unit_centred(window, MainWindowProbe::item(window, 5), 360, 360, right));
 }
 
+// Three numbered items in a named style. Restart Numbering and Continue
+// Previous List change which list an item is in, never its style.
+const char* kStyled =
+    "{\\rtf1\\ansi{\\fonttbl{\\f0\\fswiss Sans;}}"
+    "{\\stylesheet{\\s0\\f0\\fs22 Normal;}{\\s1\\sbasedon0\\f0\\fs22 Steps;}}"
+    "{\\*\\listtable{\\list{\\listlevel\\levelnfc0}\\listid1}}"
+    "{\\*\\listoverridetable{\\listoverride\\listid1\\ls1}}"
+    "\\pard\\s1\\li720\\fi-360\\ls1\\f0\\fs22 One\\par"
+    "\\pard\\s1\\li720\\fi-360\\ls1\\f0\\fs22 Two\\par"
+    "\\pard\\s1\\li720\\fi-360\\ls1\\f0\\fs22 Three\\par}";
+
+bool all_steps(const writeit::Document& doc)
+{
+  for (const auto& paragraph : doc.paragraphs)
+    if (paragraph.style != "Steps")
+      return false;
+  return true;
+}
+
+void renumbering(writeit::MainWindow& window)
+{
+  CHECK(all_steps(MainWindowProbe::doc(window)));
+  CHECK(MainWindowProbe::renumber(window, 1, true));
+  settle();
+  const writeit::Document restarted = MainWindowProbe::doc(window);
+  CHECK(writeit::list_numbers(restarted.paragraphs) == std::vector<int>({1, 1, 2}));
+  CHECK(all_steps(restarted));
+  CHECK(MainWindowProbe::renumber(window, 1, false));
+  settle();
+  const writeit::Document joined = MainWindowProbe::doc(window);
+  CHECK(writeit::list_numbers(joined.paragraphs) == std::vector<int>({1, 2, 3}));
+  CHECK(all_steps(joined));
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 33;
+constexpr int kChecks = 40;
 
 int main(int argc, char* argv[])
 {
@@ -371,6 +412,18 @@ int main(int argc, char* argv[])
       settle();
       expect(window, percent);
     }
+    window.hide();
+    settle();
+  }
+  const std::string styled = Glib::build_filename(home, "styled.rtf");
+  Glib::file_set_contents(styled, kStyled);
+  {
+    writeit::MainWindow window;
+    window.show();
+    settle();
+    MainWindowProbe::open(window, styled);
+    settle();
+    renumbering(window);
     window.hide();
     settle();
   }
@@ -411,6 +464,7 @@ int main(int argc, char* argv[])
     settle();
   }
 
+  g_remove(styled.c_str());
   g_remove(long_file.c_str());
   g_remove(file.c_str());
   const std::string ini = Glib::build_filename(home, "write-it", "write-it.ini");
