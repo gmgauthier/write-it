@@ -209,7 +209,7 @@ void type(Gtk::TextView& view, const char* text)
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 36;
+constexpr int kChecks = 45;
 
 int main(int argc, char* argv[])
 {
@@ -222,8 +222,12 @@ int main(int argc, char* argv[])
   const std::string md = Glib::build_filename(home, "readme.md");
   const std::string rtf = Glib::build_filename(home, "letter.rtf");
   const std::string saved = Glib::build_filename(home, "notes.rtf");
-  Glib::file_set_contents(txt, "First line.\nSecond line.\n");
-  Glib::file_set_contents(md, "# Title\n\nSome *Markdown* text.\n");
+  const std::string md_saved = Glib::build_filename(home, "readme.rtf");
+  // The originals, to compare byte for byte after each Save As.
+  const std::string txt_bytes = "First line.\nSecond line.\n";
+  const std::string md_bytes = "# Title\n\nSome *Markdown* text.\n";
+  Glib::file_set_contents(txt, txt_bytes);
+  Glib::file_set_contents(md, md_bytes);
   Glib::file_set_contents(rtf,
                           "{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\pard\\f0\\fs22 A letter.\\par}");
   {
@@ -298,13 +302,14 @@ int main(int argc, char* argv[])
     // Cancelled: still there, still marked.
     CHECK(window.get_title() == "Write-It - notes.txt *");
 
-    // Back to an unedited import. Save is Save As, offering notes.rtf, since
-    // the file is not RTF. Cancelled, nothing changes.
     // Don't Save this time: Close discards the edit.
     watcher.discard = true;
     activate(close);
     CHECK(watcher.questions == 2);
     CHECK(window.get_title() == "Write-It - Untitled");
+
+    // Back to an unedited import. Save is Save As, offering notes.rtf, since
+    // the file is not RTF. Cancelled, nothing changes.
     activate(recent_item(window, "notes.txt"));
     const int asked = watcher.questions;
     CHECK(window.get_title() == "Write-It - notes.txt");
@@ -322,8 +327,26 @@ int main(int argc, char* argv[])
     CHECK(Glib::file_test(saved, Glib::FILE_TEST_EXISTS) &&
           Glib::file_get_contents(saved).compare(0, 6, "{\\rtf1") == 0);
     CHECK(window.get_title() == "Write-It - notes.rtf");
-    // The text file is untouched.
-    CHECK(Glib::file_get_contents(txt) == "First line.\nSecond line.\n");
+    // The text file is still there, byte for byte.
+    CHECK(Glib::file_test(txt, Glib::FILE_TEST_IS_REGULAR));
+    CHECK(Glib::file_test(txt, Glib::FILE_TEST_IS_REGULAR) &&
+          Glib::file_get_contents(txt) == txt_bytes);
+    CHECK(watcher.questions == asked);
+
+    // The same for Markdown: the first Save is Save As, offering readme.rtf,
+    // and the .md file stays as it was.
+    activate(recent_item(window, "readme.md"));
+    CHECK(window.get_title() == "Write-It - readme.md");
+    watcher.save_to = md_saved;
+    activate(save);
+    CHECK(watcher.save_choosers == 3);
+    CHECK(watcher.suggested == "readme.rtf");
+    CHECK(Glib::file_test(md_saved, Glib::FILE_TEST_EXISTS) &&
+          Glib::file_get_contents(md_saved).compare(0, 6, "{\\rtf1") == 0);
+    CHECK(window.get_title() == "Write-It - readme.rtf");
+    CHECK(Glib::file_test(md, Glib::FILE_TEST_IS_REGULAR));
+    CHECK(Glib::file_test(md, Glib::FILE_TEST_IS_REGULAR) &&
+          Glib::file_get_contents(md) == md_bytes);
     CHECK(watcher.questions == asked);
 
     // Closing the window over an unedited import asks nothing.
@@ -336,7 +359,7 @@ int main(int argc, char* argv[])
     CHECK(watcher.other == 0);
   }
   watcher.stop();
-  for (const auto& file : {txt, md, rtf, saved})
+  for (const auto& file : {txt, md, rtf, saved, md_saved})
     g_remove(file.c_str());
   g_remove(Glib::build_filename(home, "write-it", "write-it.ini").c_str());
   g_rmdir(Glib::build_filename(home, "write-it").c_str());
