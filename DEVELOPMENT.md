@@ -118,14 +118,14 @@ Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Sa
 
 The menus are File, Edit, View, Insert, Format, Tools, Table, Help. Mnemonics: **F**ile, **E**dit, **V**iew, **I**nsert, F**o**rmat, **T**ools, T**a**ble, **H**elp. A menu item that opens a dialog ends with `…`. Accelerators are visible in the menu.
 
-**File.** Open’s filter lists RTF, Markdown, and plain text. Save writes RTF. Export writes Markdown. Save As adds `.rtf`, and Export adds `.md`, to a typed name unless it already ends in one of theirs, in any case (Export also keeps `.markdown`). Another document extension (`.rtf`, `.md`, `.markdown`, `.txt`) is replaced, not kept, and any other dot is part of the name: `my.report` saves as `my.report.rtf`. The replace question is asked about the file actually written.
+**File.** Open’s filter lists RTF, Markdown, and plain text. Save writes RTF. Export writes Markdown. Save As adds `.rtf`, and Export adds `.md`, to a typed name unless it already ends in one of theirs, in any case (Export also keeps `.markdown`). Another document extension (`.rtf`, `.md`, `.markdown`, `.txt`) is replaced, not kept, and any other dot is part of the name: `my.report` saves as `my.report.rtf`. The replace question is asked about the file actually written. Every way of opening a file (Open, Open Recent, the command line, the desktop’s Open and Open With) says the same sentences, naming the file: “Could not find the file “letter.rtf”.” and “Could not open the file “letter.rtf”.”. A file with no local path is refused with “Write-It can only open files on this computer:” and its URI. Files given on the command line or by the desktop (`Exec=write-it %F`) open one window each. An untouched Untitled window takes the first; a file already open, saved to or imported from, brings its window forward, under any name (a symlink, a hard link, a `..` path) and from Open and Open Recent as well; a window holding a document is never reloaded. A second launch hands its files to the running Write-It.
 
 | Item | Keys | What it does |
 |---|---|---|
 | New | Ctrl+N | A blank untitled document |
 | New from Template… | | Pick an RTF starter |
 | Open… | Ctrl+O | Remember the last directory |
-| Open Recent | | Up to eight basename items. The tooltip is the full path. A missing file uses one sentence: “That file is missing.” |
+| Open Recent | | Up to eight basename items. The tooltip is the full path. A missing file uses one sentence that names it: “Could not find the file “letter.rtf”.” |
 | Save | Ctrl+S | Write the whole RTF file |
 | Save As… | | |
 | Export… | | Markdown |
@@ -269,7 +269,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 - Type, select, and apply font, size, bold, italic, and underline. A new document starts at Sans 11. Sizes are the locked list. No font colour.
 - Undo and Redo for this slice. Find and Replace, one dialog, in the locked field order.
 - New, Open, Save, and Save As write RTF for paragraphs and character format. Dirty state is a trailing `*` on the title. Closing a dirty document asks Save, Don’t Save, Cancel, with Save as the default.
-- Open Recent, up to eight names, tooltip the full path, and the sentence “That file is missing.” Options… can set the recent-file count to 4, 8, or 12, and the default font family and size.
+- Open Recent, up to eight names, tooltip the full path, and the sentence “Could not find the file “letter.rtf”.”, naming the file Options… can set the recent-file count to 4, 8, or 12, and the default font family and size.
 - Plain `.txt` imports as paragraphs.
 - Markdown import and export cover headings, paragraphs, bold, and italic. Lists, tables, and image paths wait until those objects exist.
 
