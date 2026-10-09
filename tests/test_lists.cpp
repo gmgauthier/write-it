@@ -325,6 +325,113 @@ void edits()
   }
 }
 
+// Turning a list off gives the paragraph back exactly the indents it had
+// before it joined, whatever they were, after level changes and switches too.
+void restore()
+{
+  const int lefts[] = {0, 360, 720, 1080, 1440, 2000, writeit::kMaxIndent};
+  const int firsts[] = {0, 360, 720, -360, -720, -1440};
+  const int rights[] = {0, 720};
+  const ListKind kinds[] = {ListKind::Bullet, ListKind::Number};
+  int failures = 0;
+  for (const ListKind kind : kinds) {
+    for (const int left : lefts) {
+      for (const int first : firsts) {
+        for (const int right : rights) {
+          const Indents own = writeit::clamp_indents(Indents{left, right, first});
+          if (own.first != first)
+            continue;  // a hang past the left margin is not a paragraph's own indent
+          writeit::Paragraph original = item("text", ListKind::None);
+          original.indents = own;
+          // On and straight off.
+          {
+            std::vector<writeit::Paragraph> p{original};
+            toggle_list(p, kind);
+            toggle_list(p, kind);
+            if (!(p[0] == original) || p[0].indents != own)
+              ++failures;
+          }
+          // On, down two levels, up one, then off.
+          {
+            std::vector<writeit::Paragraph> p{original};
+            toggle_list(p, kind);
+            writeit::set_list_level(p[0], 2);
+            writeit::set_list_level(p[0], 1);
+            toggle_list(p, kind);
+            if (p[0].indents != own || p[0].list != ListFormat{})
+              ++failures;
+          }
+          // On, switched to the other kind, then off with that kind.
+          {
+            const ListKind other = kind == ListKind::Bullet ? ListKind::Number : ListKind::Bullet;
+            std::vector<writeit::Paragraph> p{original};
+            toggle_list(p, kind);
+            toggle_list(p, other);
+            toggle_list(p, other);
+            if (p[0].indents != own || p[0].list != ListFormat{})
+              ++failures;
+          }
+          // An undo snapshot is a copy: the copy remembers the indents too.
+          {
+            writeit::Document doc;
+            doc.paragraphs.push_back(original);
+            toggle_list(doc.paragraphs, kind);
+            writeit::Document snapshot = doc;
+            toggle_list(snapshot.paragraphs, kind);
+            if (snapshot.paragraphs[0].indents != own)
+              ++failures;
+          }
+        }
+      }
+    }
+  }
+  CHECK(failures == 0);
+  // The cases the review found, spelled out.
+  {
+    writeit::Paragraph p = item("l720", ListKind::None);
+    p.indents = Indents{720, 0, 0};
+    std::vector<writeit::Paragraph> v{p};
+    toggle_list(v, ListKind::Bullet);
+    CHECK(v[0].indents == writeit::list_indents(0) || v[0].indents == (Indents{720, 0, -360}));
+    toggle_list(v, ListKind::Bullet);
+    CHECK(v[0].indents == (Indents{720, 0, 0}));
+  }
+  {
+    writeit::Paragraph p = item("first", ListKind::None);
+    p.indents = Indents{0, 0, 360};
+    std::vector<writeit::Paragraph> v{p};
+    toggle_list(v, ListKind::Number);
+    toggle_list(v, ListKind::Number);
+    CHECK(v[0].indents == (Indents{0, 0, 360}));
+  }
+  {
+    writeit::Paragraph p = item("hanging", ListKind::None);
+    p.indents = Indents{1440, 0, -720};
+    std::vector<writeit::Paragraph> v{p};
+    toggle_list(v, ListKind::Bullet);
+    toggle_list(v, ListKind::Bullet);
+    CHECK(v[0].indents == (Indents{1440, 0, -720}));
+  }
+  // The remembered indents are editing memory, not document content: they
+  // are not written to the file and two paragraphs differing only there are
+  // equal, so a saved and reopened list item is the same document.
+  {
+    std::vector<writeit::Paragraph> v{item("x", ListKind::None)};
+    v[0].indents = Indents{360, 0, 360};
+    toggle_list(v, ListKind::Bullet);
+    writeit::Document doc;
+    doc.paragraphs = v;
+    writeit::Document loaded;
+    CHECK(writeit::rtf_import(writeit::rtf_export(doc), loaded));
+    CHECK(loaded == doc);
+    // Without the memory (a reopened file), off falls back to removing the
+    // list's own indents.
+    std::vector<writeit::Paragraph> reopened{item("y", ListKind::Bullet)};
+    toggle_list(reopened, ListKind::Bullet);
+    CHECK(reopened[0].indents == Indents{});
+  }
+}
+
 void rtf_write()
 {
   writeit::Document doc;
@@ -546,6 +653,23 @@ void rtf_read()
 
 void rtf_hostile()
 {
+  // A hand-written list item with no indents takes the list's indents for its
+  // level, so its label has somewhere to hang. Given indents are kept.
+  {
+    const writeit::Document doc =
+        import(std::string(kHead) + kTables +
+               "\\pard\\ls1 a\\par\\pard\\ls2\\ilvl2\\ri300 b\\par"
+               "\\pard\\ls1\\li1000 c\\par\\pard\\ls1\\fi200 d\\par"
+               "\\pard{\\*\\pn\\pnlvlblt}e\\par\\pard\\ls77 f\\par\\pard g\\par}");
+    CHECK(doc.paragraphs.size() == 7);
+    CHECK(doc.paragraphs[0].indents == writeit::list_indents(0));
+    CHECK(doc.paragraphs[1].indents == (Indents{2160, 300, -360}));
+    CHECK(doc.paragraphs[2].indents == (Indents{1000, 0, 0}));
+    CHECK(doc.paragraphs[3].indents == (Indents{0, 0, 200}));
+    CHECK(doc.paragraphs[4].indents == writeit::list_indents(0));
+    CHECK(doc.paragraphs[5].indents == writeit::list_indents(0));
+    CHECK(doc.paragraphs[6].indents == Indents{});
+  }
   // \ls pointing at no override: still a list, as a bullet, rather than lost.
   {
     const writeit::Document doc = import(std::string(kHead) + "\\pard\\ls3 orphan\\par}");
@@ -689,6 +813,7 @@ int main()
   labels();
   numbering();
   edits();
+  restore();
   rtf_write();
   rtf_round_trip();
   rtf_read();
