@@ -337,6 +337,11 @@ class Reader {
     if (state_.ignore || state_.in_fonttbl)
       return;
     if (word == "par" || word == "line") {
+      // A paragraph with text took its level from its runs. An empty one
+      // takes the level in force at its own \par, not the one left over
+      // from the paragraph before it.
+      if (paragraph_.runs.empty())
+        paragraph_.heading = state_.heading;
       finish_paragraph(true);
       return;
     }
