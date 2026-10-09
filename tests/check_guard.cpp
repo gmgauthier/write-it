@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: Unlicense */
 
-// Proves check.hpp's guard: a suite that returns before its checks have run,
-// or that gives no minimum, fails. Meson runs this three ways; the first two
-// are expected to fail (should_fail), the third to pass.
+// Proves check.hpp's guard: a suite must run exactly the number of checks it
+// names. One too few (an early return), one too many, or no count at all
+// fails; exactly the count passes. Meson runs each mode as its own test.
 
 #include "check.hpp"
 
@@ -23,10 +23,19 @@ int early()
   return suite_test::done("guard-early", 3);
 }
 
-int no_minimum()
+int too_many()
 {
   CHECK(true);
-  return suite_test::done("guard-no-minimum", 0);
+  CHECK(true);
+  CHECK(true);
+  CHECK(true);
+  return suite_test::done("guard-too-many", 3);
+}
+
+int no_count()
+{
+  CHECK(true);
+  return suite_test::done("guard-no-count", 0);
 }
 
 int exact()
@@ -44,8 +53,10 @@ int main(int argc, char** argv)
   const char* mode = argc > 1 ? argv[1] : "";
   if (std::strcmp(mode, "early") == 0)
     return early();
-  if (std::strcmp(mode, "no-minimum") == 0)
-    return no_minimum();
+  if (std::strcmp(mode, "too-many") == 0)
+    return too_many();
+  if (std::strcmp(mode, "no-count") == 0)
+    return no_count();
   if (std::strcmp(mode, "exact") == 0)
     return exact();
   return EXIT_FAILURE;

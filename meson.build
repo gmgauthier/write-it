@@ -74,11 +74,12 @@ write_it_settings_tests = executable(
 )
 test('settings', write_it_settings_tests)
 
-# check.hpp's guard. A suite that stops early, or names no minimum, fails;
-# done() without a minimum does not compile.
+# check.hpp's guard. A suite that runs one check too few or too many, or
+# names no count, fails; done() without a count does not compile.
 check_guard = executable('check-guard', 'tests/check_guard.cpp', include_directories: inc)
-test('guard-early-return-fails', check_guard, args: ['early'], should_fail: true)
-test('guard-no-minimum-fails', check_guard, args: ['no-minimum'], should_fail: true)
+test('guard-too-few-fails', check_guard, args: ['early'], should_fail: true)
+test('guard-too-many-fails', check_guard, args: ['too-many'], should_fail: true)
+test('guard-no-count-fails', check_guard, args: ['no-count'], should_fail: true)
 test('guard-exact-passes', check_guard, args: ['exact'])
 # The header's text goes into the probe itself, so editing check.hpp
 # reconfigures and the probe is never answered from meson's cache.
