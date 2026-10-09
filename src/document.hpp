@@ -84,6 +84,8 @@ constexpr const char* kNormalStyle = "Normal";
 constexpr size_t kMaxStyles = 4096;
 // Style names are capped at this many bytes of UTF-8.
 constexpr size_t kMaxStyleName = 255;
+// A style's largest size in points, Word's largest.
+constexpr int kMaxStyleSize = 1638;
 
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.
@@ -157,7 +159,9 @@ void set_list_level(Paragraph& paragraph, int level);
 // in Monospace a point smaller, as Word 97's Plain Text is Courier New.
 std::vector<Style> builtin_styles(const std::string& font, int size);
 // The document's sheet: its own, or the built-in one in Sans 11.
-std::vector<Style> style_sheet(const Document& doc);
+const std::vector<Style>& style_sheet(const Document& doc);
+// builtin_styles("Sans", 11), the sheet of a document without its own.
+const std::vector<Style>& default_styles();
 // A sheet holding every built-in style, Normal first: the built-ins a sheet
 // lacks are added in the font and size of its Normal.
 std::vector<Style> complete_sheet(std::vector<Style> sheet);

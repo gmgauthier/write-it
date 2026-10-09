@@ -524,12 +524,12 @@ bool operator!=(const Style& a, const Style& b)
 std::vector<Style> builtin_styles(const std::string& font, int size)
 {
   const std::string face = font.empty() ? "Sans" : font;
-  const int base = std::max(1, size);
+  const int base = std::max(1, std::min(kMaxStyleSize, size));
   auto style = [&](const char* name, int points, bool bold, bool italic) {
     Style s;
     s.name = name;
     s.format.font = face;
-    s.format.size = points;
+    s.format.size = std::min(kMaxStyleSize, points);
     s.format.bold = bold;
     s.format.italic = italic;
     if (std::string(name) != kNormalStyle)
@@ -560,9 +560,15 @@ std::vector<Style> builtin_styles(const std::string& font, int size)
   return sheet;
 }
 
-std::vector<Style> style_sheet(const Document& doc)
+const std::vector<Style>& default_styles()
 {
-  return doc.styles.empty() ? builtin_styles("Sans", 11) : doc.styles;
+  static const std::vector<Style> kDefault = builtin_styles("Sans", 11);
+  return kDefault;
+}
+
+const std::vector<Style>& style_sheet(const Document& doc)
+{
+  return doc.styles.empty() ? default_styles() : doc.styles;
 }
 
 std::vector<Style> complete_sheet(std::vector<Style> sheet)
@@ -570,7 +576,7 @@ std::vector<Style> complete_sheet(std::vector<Style> sheet)
   auto normal = std::find_if(sheet.begin(), sheet.end(),
                              [](const Style& s) { return same_name(s.name, kNormalStyle); });
   if (normal == sheet.end()) {
-    sheet.insert(sheet.begin(), builtin_styles("Sans", 11).front());
+    sheet.insert(sheet.begin(), default_styles().front());
   } else {
     Style first = *normal;
     sheet.erase(normal);
@@ -684,6 +690,7 @@ bool update_style(Document& doc, const std::string& name, const Style& changed)
   const Style old = sheet[index];
   Style updated = changed;
   updated.name = clean_style_name(changed.name);
+  updated.format.size = std::max(1, std::min(kMaxStyleSize, updated.format.size));
   if (updated.name.empty())
     return false;
   if (same_name(old.name, kNormalStyle) && updated.name != kNormalStyle)
@@ -726,6 +733,7 @@ bool add_style(Document& doc, const Style& style)
   std::vector<Style> sheet = style_sheet(doc);
   Style added = style;
   added.name = clean_style_name(style.name);
+  added.format.size = std::max(1, std::min(kMaxStyleSize, added.format.size));
   if (added.name.empty() || find_style(sheet, added.name) || sheet.size() >= kMaxStyles)
     return false;
   if (!added.based_on.empty()) {

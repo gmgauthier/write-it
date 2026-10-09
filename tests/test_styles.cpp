@@ -459,6 +459,62 @@ void rtf_round_trip()
   CHECK(contains(writeit::rtf_export(serif), "{\\stylesheet"));
   CHECK(import(writeit::rtf_export(serif)) == serif);
 
+  // A style without something its base has (found by fuzzing): the base
+  // here is bold, centred, indented and a heading; the child is none of them.
+  {
+    Document off = writeit::blank_document("Sans", 11);
+    Style base;
+    base.name = "Loud";
+    base.based_on = "Normal";
+    base.format.font = "Sans";
+    base.format.size = 11;
+    base.format.bold = true;
+    base.format.italic = true;
+    base.format.underline = true;
+    base.indents = Indents{720, 360, -360};
+    base.align = Align::Center;
+    base.heading = 2;
+    Style quiet;
+    quiet.name = "Quiet";
+    quiet.based_on = "Loud";
+    quiet.format.font = "Sans";
+    quiet.format.size = 11;
+    CHECK(writeit::add_style(off, base));
+    CHECK(writeit::add_style(off, quiet));
+    const Document read = import(writeit::rtf_export(off));
+    const Style* q = writeit::find_style(read.styles, "Quiet");
+    CHECK(q != nullptr && !q->format.bold && !q->format.italic && !q->format.underline);
+    CHECK(q != nullptr && q->indents == Indents{} && q->align == Align::Left && q->heading == 0);
+    CHECK(read == off);
+    // A paragraph without what its style has: left in a centred, indented
+    // Normal (also found by fuzzing).
+    Document plain = writeit::blank_document("Sans", 11);
+    Style centred = plain.styles.front();
+    centred.align = Align::Center;
+    centred.indents = Indents{720, 0, 0};
+    CHECK(writeit::update_style(plain, "Normal", centred));
+    plain.paragraphs[0].align = Align::Left;
+    plain.paragraphs[0].indents = Indents{};
+    const Document plain_back = import(writeit::rtf_export(plain));
+    CHECK(plain_back == plain);
+    // A huge Normal (fuzzing again): style sizes stop at Word's largest, so
+    // the headings built from it still round-trip.
+    const Document huge =
+        import(std::string(kHead) + "{\\stylesheet{\\fs999999999 Normal;}}\\pard x\\par}");
+    CHECK(!huge.styles.empty() && huge.styles[0].format.size == writeit::kMaxStyleSize);
+    const Style* huge_h1 = writeit::find_style(huge.styles, "Heading 1");
+    CHECK(huge_h1 != nullptr && huge_h1->format.size == writeit::kMaxStyleSize);
+    CHECK(import(writeit::rtf_export(huge)) == huge);
+    // "Heading 1" made body text stays body text, though its name says
+    // otherwise to a reader.
+    const Document unheaded =
+        import(std::string(kHead) +
+               "{\\stylesheet{Normal;}{\\s1\\outlinelevel9 Heading 1;}}\\pard x\\par}");
+    const Style* unheaded_h1 = writeit::find_style(unheaded.styles, "Heading 1");
+    CHECK(unheaded_h1 != nullptr && unheaded_h1->heading == 0);
+    CHECK(import(writeit::rtf_export(unheaded)) == unheaded);
+  }
+
   // A file without a style sheet reads as before: no sheet, all Normal.
   const Document old = import(std::string(kHead) + "\\pard\\outlinelevel1 Sec\\par\\pard x\\par}");
   CHECK(old.styles.empty());
@@ -494,7 +550,8 @@ void rtf_read()
   CHECK(h1 != nullptr && h1->format.font == "Serif" && h1->heading == 1);
   CHECK(h1 != nullptr && h1->based_on == "Normal" && h1->next == "Normal");
   const Style* block = writeit::find_style(word.styles, "Block Text");
-  CHECK(block != nullptr && block->next == "Block Text" && block->indents.left == 1440);
+  CHECK(block != nullptr && writeit::next_style(word.styles, "Block Text") == "Block Text" &&
+        block->indents.left == 1440);
   CHECK(writeit::find_style(word.styles, "Default Paragraph Font") == nullptr);
   // The built-ins the file lacks are there, and Normal is first.
   CHECK(!word.styles.empty() && word.styles[0].name == "Normal");
@@ -550,8 +607,8 @@ void rtf_read()
   // Styles and lists on one paragraph.
   const Document both =
       import(std::string(kHead) + "{\\stylesheet{\\fs22 Normal;}{\\s2\\fs28 heading 2;}}" +
-             "{\\*\\listtable{\\list{\\listlevel\\levelnfc23}\\listid7}}"
-             "{\\*\\listoverridetable{\\listoverride\\listid7\\ls1}}"
+             "{\\*\\listtable{\\list{\\listlevel\\levelnfc23}{\\listlevel\\levelnfc23}"
+             "\\listid7}}{\\*\\listoverridetable{\\listoverride\\listid7\\ls1}}"
              "\\pard\\s2\\ls1\\ilvl1 item\\par}");
   CHECK(!both.paragraphs.empty());
   if (!both.paragraphs.empty()) {
