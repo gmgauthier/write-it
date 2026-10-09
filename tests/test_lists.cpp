@@ -499,9 +499,9 @@ void rtf_write()
   lists.paragraphs.push_back(numbered("b1", 2));
   lists.paragraphs.push_back(numbered("a2", 1));
   const std::string separate = writeit::rtf_export(lists);
-  CHECK(contains(separate, "\\ls2\\ilvl0\\f0\\fs22 a1"));
-  CHECK(contains(separate, "\\ls3\\ilvl0\\f0\\fs22 b1"));
-  CHECK(contains(separate, "\\ls2\\ilvl0\\f0\\fs22 a2"));
+  CHECK(contains(separate, "\\ls2\\ilvl0\\f0\\fs22\\b0\\i0\\ulnone a1"));
+  CHECK(contains(separate, "\\ls3\\ilvl0\\f0\\fs22\\b0\\i0\\ulnone b1"));
+  CHECK(contains(separate, "\\ls2\\ilvl0\\f0\\fs22\\b0\\i0\\ulnone a2"));
   CHECK(count_of(separate, "{\\listoverride\\listid") == 3);
   CHECK(count_of(separate, "{\\pntext\\f0\\fs22 1.\\tab}") == 2);
   CHECK(count_of(separate, "{\\pntext\\f0\\fs22 2.\\tab}") == 1);
@@ -870,10 +870,10 @@ void continuing()
     p.push_back(numbered("b2", 0));
     p.push_back(numbered("a3", 1));
     p.push_back(numbered("b3", 2));
-    p.push_back(numbered("a4", 0));
+    p.push_back(numbered("b4", 0));
     CHECK(list_numbers(p) == (std::vector<int>{1, 2, 1, 0, 2, 3, 3, 4}));
     // list_ids: each numbered item's list, numbered by first appearance.
-    CHECK(list_ids(p) == (std::vector<int>{1, 1, 2, 0, 2, 1, 2, 1}));
+    CHECK(list_ids(p) == (std::vector<int>{1, 1, 2, 0, 2, 1, 2, 2}));
   }
   // Ids are labels: any numbers, in any order, give the same lists.
   {

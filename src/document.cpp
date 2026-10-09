@@ -3,6 +3,8 @@
 #include "document.hpp"
 
 #include <algorithm>
+#include <array>
+#include <map>
 #include <iterator>
 
 namespace writeit {
@@ -147,7 +149,7 @@ bool operator!=(const Indents& a, const Indents& b)
 
 bool operator==(const ListFormat& a, const ListFormat& b)
 {
-  return a.kind == b.kind && a.level == b.level;
+  return a.kind == b.kind && a.level == b.level && (a.kind != ListKind::Number || a.list == b.list);
 }
 
 bool operator!=(const ListFormat& a, const ListFormat& b)
@@ -179,6 +181,8 @@ ListFormat clamp_list(ListFormat list)
   if (list.kind != ListKind::Bullet && list.kind != ListKind::Number)
     return ListFormat{};
   list.level = std::max(0, std::min(kListLevels - 1, list.level));
+  if (list.kind != ListKind::Number || list.list < 0)
+    list.list = 0;
   list.own = list.has_own ? clamp_indents(list.own) : Indents{};
   return list;
 }
@@ -196,49 +200,112 @@ std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
 {
   std::vector<int> numbers;
   numbers.reserve(paragraphs.size());
-  int counters[kListLevels] = {};
-  for (const Paragraph& paragraph : paragraphs) {
-    const ListFormat list = clamp_list(paragraph.list);
-    if (list.kind == ListKind::None) {
-      std::fill(std::begin(counters), std::end(counters), 0);
+  // One set of level counters per list. Plain paragraphs and bullets leave
+  // them alone, so a list counts on past them.
+  const std::vector<int> ids = list_ids(paragraphs);
+  std::vector<std::array<int, kListLevels>> counters;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const ListFormat list = clamp_list(paragraphs[i].list);
+    if (list.kind != ListKind::Number) {
       numbers.push_back(0);
       continue;
     }
-    if (list.kind == ListKind::Bullet) {
-      numbers.push_back(0);
-      continue;
-    }
+    const size_t id = static_cast<size_t>(ids[i]);
+    if (counters.size() <= id)
+      counters.resize(id + 1, std::array<int, kListLevels>{});
+    std::array<int, kListLevels>& count = counters[id];
     // Paragraph counts cannot reach INT_MAX, but stay defined if they did.
-    if (counters[list.level] < 2000000000)
-      ++counters[list.level];
+    if (count[static_cast<size_t>(list.level)] < 2000000000)
+      ++count[static_cast<size_t>(list.level)];
     for (int deeper = list.level + 1; deeper < kListLevels; ++deeper)
-      counters[deeper] = 0;
-    numbers.push_back(counters[list.level]);
+      count[static_cast<size_t>(deeper)] = 0;
+    numbers.push_back(count[static_cast<size_t>(list.level)]);
   }
   return numbers;
 }
 
 std::vector<int> list_ids(const std::vector<Paragraph>& paragraphs)
 {
-  return std::vector<int>(paragraphs.size(), 0);
+  std::vector<int> ids;
+  ids.reserve(paragraphs.size());
+  // Label to id, in order of first appearance.
+  std::map<int, int> seen;
+  int previous = 0;
+  for (const Paragraph& paragraph : paragraphs) {
+    const ListFormat list = clamp_list(paragraph.list);
+    if (list.kind != ListKind::Number) {
+      ids.push_back(0);
+      continue;
+    }
+    int id = previous;
+    if (list.list != 0 || previous == 0) {
+      // The document's first numbered item with no label begins list 1.
+      const int label = list.list != 0 ? list.list : 1;
+      const auto found = seen.find(label);
+      if (found != seen.end()) {
+        id = found->second;
+      } else if (seen.size() < static_cast<size_t>(kMaxLists)) {
+        id = static_cast<int>(seen.size()) + 1;
+        seen.emplace(label, id);
+      } else {
+        id = kMaxLists;
+      }
+    }
+    ids.push_back(id);
+    previous = id;
+  }
+  return ids;
 }
 
 void canonical_lists(std::vector<Paragraph>& paragraphs)
 {
-  (void)paragraphs;
+  const std::vector<int> ids = list_ids(paragraphs);
+  for (size_t i = 0; i < paragraphs.size(); ++i)
+    paragraphs[i].list.list = ids[i];
 }
+
+namespace {
+
+// Moves the item at `index` and the rest of its list into list `to`.
+void move_rest_of_list(std::vector<Paragraph>& paragraphs, const std::vector<int>& ids,
+                       size_t index, int to)
+{
+  const int from = ids[index];
+  canonical_lists(paragraphs);
+  for (size_t i = index; i < paragraphs.size(); ++i)
+    if (ids[i] == from)
+      paragraphs[i].list.list = to;
+  canonical_lists(paragraphs);
+}
+
+}  // namespace
 
 bool restart_numbering(std::vector<Paragraph>& paragraphs, size_t index)
 {
-  (void)paragraphs;
-  (void)index;
-  return false;
+  if (index >= paragraphs.size() || clamp_list(paragraphs[index].list).kind != ListKind::Number)
+    return false;
+  const std::vector<int> ids = list_ids(paragraphs);
+  const int newest = *std::max_element(ids.begin(), ids.end());
+  const bool starts_here =
+      std::find(ids.begin(), ids.begin() + static_cast<std::ptrdiff_t>(index), ids[index]) ==
+      ids.begin() + static_cast<std::ptrdiff_t>(index);
+  if (starts_here || newest >= kMaxLists)
+    return false;
+  move_rest_of_list(paragraphs, ids, index, newest + 1);
+  return true;
 }
 
 bool continue_numbering(std::vector<Paragraph>& paragraphs, size_t index)
 {
-  (void)paragraphs;
-  (void)index;
+  if (index >= paragraphs.size() || clamp_list(paragraphs[index].list).kind != ListKind::Number)
+    return false;
+  const std::vector<int> ids = list_ids(paragraphs);
+  for (size_t above = index; above-- > 0;) {
+    if (ids[above] != 0 && ids[above] != ids[index]) {
+      move_rest_of_list(paragraphs, ids, index, ids[above]);
+      return true;
+    }
+  }
   return false;
 }
 
@@ -291,13 +358,16 @@ bool at_list_indents(const Indents& indents, int level)
 void join_list(Paragraph& paragraph, ListKind kind)
 {
   if (paragraph.list.kind != ListKind::None) {
-    // Switching between bullets and numbers keeps the level and indents.
+    // Switching between bullets and numbers keeps the level and indents. A
+    // new number joins the numbered list above, as one added in Word does.
     paragraph.list = clamp_list(paragraph.list);
     paragraph.list.kind = kind;
+    paragraph.list.list = 0;
     return;
   }
   paragraph.list.kind = kind;
   paragraph.list.level = 0;
+  paragraph.list.list = 0;
   paragraph.list.has_own = true;
   paragraph.list.own = clamp_indents(paragraph.indents);
   Indents indents = paragraph.indents;
@@ -370,7 +440,20 @@ void set_list_level(Paragraph& paragraph, int level)
 
 bool operator==(const Document& a, const Document& b)
 {
-  return a.paragraphs == b.paragraphs;
+  // List ids are labels: two documents are equal when their numbered items
+  // fall into the same lists, whatever the labels say.
+  if (a.paragraphs.size() != b.paragraphs.size())
+    return false;
+  bool numbered = false;
+  for (size_t i = 0; i < a.paragraphs.size(); ++i) {
+    const Paragraph& x = a.paragraphs[i];
+    const Paragraph& y = b.paragraphs[i];
+    if (x.heading != y.heading || x.indents != y.indents || x.align != y.align ||
+        x.list.kind != y.list.kind || x.list.level != y.list.level || !(x.runs == y.runs))
+      return false;
+    numbered = numbered || x.list.kind == ListKind::Number;
+  }
+  return !numbered || list_ids(a.paragraphs) == list_ids(b.paragraphs);
 }
 
 Document blank_document(const std::string& font, int size)
