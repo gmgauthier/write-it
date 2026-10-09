@@ -207,6 +207,27 @@ write_it_window_width_tests = executable(
 )
 test('window-width', write_it_window_width_tests, timeout: 60)
 
+# The real window under a display: the first launch's size and zoom, and the
+# size and zoom it saves and restores.
+write_it_window_memory_tests = executable(
+  'write-it-window-memory-tests',
+  'tests/test_window_memory.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/narrow_combo.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('window-memory', write_it_window_memory_tests, timeout: 60)
+
 # The real window under a display: View > Zoom and View > Page / Draft, and
 # the width GTK allocates and wraps at after each change.
 write_it_page_width_tests = executable(

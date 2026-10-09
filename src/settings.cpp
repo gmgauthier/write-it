@@ -171,4 +171,29 @@ void Settings::save_to(const std::string& path) const
   }
 }
 
+void clamp_window(int& width, int& height, int area_width, int area_height)
+{
+  (void)width;
+  (void)height;
+  (void)area_width;
+  (void)area_height;
+}
+
+WindowMemory::WindowMemory(const Settings& settings)
+{
+  (void)settings;
+}
+
+void WindowMemory::update(int new_width, int new_height, bool maximized_now)
+{
+  (void)new_width;
+  (void)new_height;
+  (void)maximized_now;
+}
+
+void WindowMemory::store(Settings& settings) const
+{
+  (void)settings;
+}
+
 }  // namespace writeit
