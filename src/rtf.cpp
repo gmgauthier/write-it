@@ -500,8 +500,8 @@ class Reader {
     for (Paragraph& paragraph : paragraphs_) {
       Paragraph merged;
       merged.heading = paragraph.heading;
-      merged.indents = paragraph.indents;
       merged.align = paragraph.align;
+      merged.indents = paragraph.indents;
       for (Run& run : paragraph.runs)
         add_run(merged, std::move(run));
       doc.paragraphs.push_back(std::move(merged));
