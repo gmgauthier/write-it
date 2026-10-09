@@ -32,6 +32,7 @@ inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
+  ~MainWindow() override;
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -268,7 +269,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool pending_insert_ = false;
   bool sizing_ = false;
   bool follow_caret_ = false;
-  bool caret_idle_ = false;
+  // The idle follow_caret() queues; one at a time, and gone with the window.
+  sigc::connection caret_idle_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

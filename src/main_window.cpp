@@ -35,6 +35,11 @@ void framed(Gtk::Box& row, Gtk::Widget& child, bool expand)
 
 }  // namespace
 
+MainWindow::~MainWindow()
+{
+  caret_idle_.disconnect();
+}
+
 MainWindow::MainWindow()
 {
   settings_.load();
@@ -461,12 +466,11 @@ void MainWindow::follow_caret()
     scroll_to_caret();
   // The layout may not have caught up with the move yet; look again once
   // the main loop is idle.
-  if (caret_idle_)
+  if (caret_idle_.connected())
     return;
-  caret_idle_ = true;
-  Glib::signal_idle().connect_once([this] {
-    caret_idle_ = false;
+  caret_idle_ = Glib::signal_idle().connect([this] {
     scroll_to_caret();
+    return false;
   });
 }
 
