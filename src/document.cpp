@@ -151,8 +151,7 @@ bool operator==(const Paragraph& a, const Paragraph& b)
 
 bool indents_fit(const Indents& indents)
 {
-  (void)indents;
-  return true;
+  return indents.left + indents.first >= 0;
 }
 
 Indents clamp_indents(Indents indents)

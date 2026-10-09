@@ -51,6 +51,15 @@ double twips_to_units(int twips, Units units)
 
 int units_to_twips(double value, Units units)
 {
+  // Clamp the input, not the product: a huge value overflows the multiply
+  // or lround long before the result could be clamped.
+  if (std::isnan(value))
+    return 0;
+  const double limit = kMaxMeasureTwips / twips_per_unit(units);
+  if (value >= limit)
+    return kMaxMeasureTwips;
+  if (value <= -limit)
+    return -kMaxMeasureTwips;
   return static_cast<int>(std::lround(value * twips_per_unit(units)));
 }
 
@@ -153,10 +162,9 @@ int keep_twips(int original, double shown, double now, Units units)
 
 int hang_twips(double now, int twips, int left_twips, double left_now, Units units)
 {
-  (void)now;
-  (void)left_twips;
-  (void)left_now;
-  (void)units;
+  const double half = 0.5 / std::pow(10.0, units_digits(units));
+  if (std::fabs(now - left_now) < half)
+    return left_twips;
   return twips;
 }
 
