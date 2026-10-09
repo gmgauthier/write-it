@@ -15,6 +15,9 @@
 #   libglib        GTK's file chooser, run by Save As in toolbar-overflow and
 #                  import-clean: GFiles from its async enumeration, and the
 #                  GError it drops for a cancelled GTask.
+#   libdbus-1      With no session bus (CI's container has none), GTK's AT-SPI
+#                  bridge fails to connect and libdbus keeps one DBusString
+#                  (_dbus_string_lengthen). write-it never calls libdbus.
 #
 # How a match works: LSan suppresses a leak if any frame of its allocation
 # stack matches. CI uses ASan's fast unwinder, which stops at the first
@@ -26,3 +29,4 @@
 leak:libfontconfig.so
 leak:libGLX_mesa.so
 leak:libglib-2.0.so
+leak:libdbus-1.so
