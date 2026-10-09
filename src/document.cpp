@@ -3,6 +3,8 @@
 #include "document.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <iterator>
 
 namespace writeit {
@@ -106,20 +108,169 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, int si
   return paragraph;
 }
 
-std::string inline_export(const Paragraph& paragraph)
+// Emphasis is written where a run differs from its paragraph's style, so a
+// heading whose style is bold is not wrapped in **.
+std::string inline_export(const Paragraph& paragraph, const Run& style)
 {
   std::string out;
   for (const Run& run : paragraph.runs) {
-    if (run.bold && run.italic)
+    const bool bold = run.bold && !style.bold;
+    const bool italic = run.italic && !style.italic;
+    if (bold && italic)
       out += "***" + run.text + "***";
-    else if (run.bold)
+    else if (bold)
       out += "**" + run.text + "**";
-    else if (run.italic)
+    else if (italic)
       out += "*" + run.text + "*";
     else
       out += run.text;
   }
   return out;
+}
+
+bool same_name(const std::string& a, const std::string& b)
+{
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(a[i])) !=
+        std::tolower(static_cast<unsigned char>(b[i])))
+      return false;
+  }
+  return true;
+}
+
+// One well-formed UTF-8 sequence at i: advances i and returns true, or
+// leaves i alone and returns false.
+bool decode_one(const std::string& text, size_t& i, uint32_t& cp)
+{
+  const auto c = static_cast<unsigned char>(text[i]);
+  size_t len = 0;
+  uint32_t min = 0;
+  if (c < 0x80) {
+    cp = c;
+    ++i;
+    return true;
+  }
+  if ((c & 0xE0) == 0xC0) {
+    len = 2;
+    cp = c & 0x1F;
+    min = 0x80;
+  } else if ((c & 0xF0) == 0xE0) {
+    len = 3;
+    cp = c & 0x0F;
+    min = 0x800;
+  } else if ((c & 0xF8) == 0xF0) {
+    len = 4;
+    cp = c & 0x07;
+    min = 0x10000;
+  } else {
+    return false;
+  }
+  if (i + len > text.size())
+    return false;
+  for (size_t k = 1; k < len; ++k) {
+    const auto b = static_cast<unsigned char>(text[i + k]);
+    if ((b & 0xC0) != 0x80)
+      return false;
+    cp = (cp << 6) | (b & 0x3F);
+  }
+  if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+    return false;
+  i += len;
+  return true;
+}
+
+// At most `bytes` bytes of valid UTF-8 `text`, never splitting a character.
+std::string cut_utf8(const std::string& text, size_t bytes)
+{
+  if (text.size() <= bytes)
+    return text;
+  size_t end = bytes;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80)
+    --end;
+  return text.substr(0, end);
+}
+
+// The style a paragraph is in: its own, or Normal for a name the sheet does
+// not know.
+const Style& paragraph_style(const std::vector<Style>& sheet, const Paragraph& paragraph)
+{
+  if (const Style* style = find_style(sheet, paragraph.style))
+    return *style;
+  if (const Style* normal = find_style(sheet, kNormalStyle))
+    return *normal;
+  return sheet.front();
+}
+
+void restyle_indents(Indents& indents, const Indents& from, const Indents& to)
+{
+  if (indents.left == from.left)
+    indents.left = to.left;
+  if (indents.right == from.right)
+    indents.right = to.right;
+  if (indents.first == from.first)
+    indents.first = to.first;
+}
+
+// Attribute by attribute, as restyle_run() does for a run.
+void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
+{
+  for (Run& run : paragraph.runs)
+    restyle_run(run, from, to);
+  if (paragraph.list.kind == ListKind::None) {
+    restyle_indents(paragraph.indents, from.indents, to.indents);
+    paragraph.indents = clamp_indents(paragraph.indents);
+  } else if (paragraph.list.has_own) {
+    restyle_indents(paragraph.list.own, from.indents, to.indents);
+    paragraph.list.own = clamp_indents(paragraph.list.own);
+  }
+  if (paragraph.align == from.align)
+    paragraph.align = to.align;
+  if (paragraph.heading == from.heading)
+    paragraph.heading = to.heading;
+  paragraph.style = to.name;
+}
+
+// A style based on one that changed takes the change wherever it agreed with
+// its base. Its name, base, next style and outline level are its own.
+Style restyle_style(Style style, const Style& from, const Style& to)
+{
+  restyle_run(style.format, from, to);
+  restyle_indents(style.indents, from.indents, to.indents);
+  if (style.align == from.align)
+    style.align = to.align;
+  return style;
+}
+
+// Puts `updated` in place of sheet[index], carries the change to the
+// paragraphs in that style, renames references to it, and goes on to the
+// styles based on it. `visited` stops a circle a hand-made sheet might hold.
+void carry_style(Document& doc, std::vector<Style>& sheet, size_t index, const Style& updated,
+                 std::vector<bool>& visited)
+{
+  if (visited[index])
+    return;
+  visited[index] = true;
+  const Style old = sheet[index];
+  sheet[index] = updated;
+  for (Paragraph& paragraph : doc.paragraphs) {
+    if (same_name(paragraph.style, old.name))
+      restyle_paragraph(paragraph, old, updated);
+  }
+  if (old.name != updated.name) {
+    for (Style& style : sheet) {
+      if (same_name(style.based_on, old.name))
+        style.based_on = updated.name;
+      if (same_name(style.next, old.name))
+        style.next = updated.name;
+    }
+  }
+  for (size_t i = 0; i < sheet.size(); ++i) {
+    if (i == index || visited[i] || !same_name(sheet[i].based_on, updated.name))
+      continue;
+    carry_style(doc, sheet, i, restyle_style(sheet[i], old, updated), visited);
+  }
 }
 
 }  // namespace
@@ -157,8 +308,8 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
-  return a.heading == b.heading && a.indents == b.indents && a.align == b.align &&
-         a.list == b.list && a.runs == b.runs;
+  return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
+         a.align == b.align && a.list == b.list && a.runs == b.runs;
 }
 
 bool indents_fit(const Indents& indents)
@@ -346,7 +497,7 @@ void set_list_level(Paragraph& paragraph, int level)
 
 bool operator==(const Document& a, const Document& b)
 {
-  return a.paragraphs == b.paragraphs;
+  return a.paragraphs == b.paragraphs && style_sheet(a) == style_sheet(b);
 }
 
 int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap)
@@ -370,65 +521,234 @@ bool operator!=(const Style& a, const Style& b)
   return !(a == b);
 }
 
-std::vector<Style> builtin_styles(const std::string& /*font*/, int /*size*/)
+std::vector<Style> builtin_styles(const std::string& font, int size)
 {
-  return {};
+  const std::string face = font.empty() ? "Sans" : font;
+  const int base = std::max(1, size);
+  auto style = [&](const char* name, int points, bool bold, bool italic) {
+    Style s;
+    s.name = name;
+    s.format.font = face;
+    s.format.size = points;
+    s.format.bold = bold;
+    s.format.italic = italic;
+    if (std::string(name) != kNormalStyle)
+      s.based_on = kNormalStyle;
+    return s;
+  };
+  std::vector<Style> sheet;
+  sheet.push_back(style(kNormalStyle, base, false, false));
+  // Five points up for the first level, then three, then one, then body
+  // size: bold, bold italic, and italic, as AbiWord's and LibreOffice's sets
+  // step down.
+  const int sizes[] = {base + 5, base + 3, base + 1, base, base, base};
+  const bool bolds[] = {true, true, true, true, true, false};
+  const bool italics[] = {false, false, false, false, true, true};
+  for (int level = 1; level <= 6; ++level) {
+    const std::string name = "Heading " + std::to_string(level);
+    Style h = style(name.c_str(), sizes[level - 1], bolds[level - 1], italics[level - 1]);
+    h.heading = level;
+    h.next = kNormalStyle;
+    sheet.push_back(h);
+  }
+  Style block = style("Block Text", base, false, false);
+  block.indents = Indents{1440, 1440, 0};
+  sheet.push_back(block);
+  Style plain = style("Plain Text", std::max(1, base - 1), false, false);
+  plain.format.font = "Monospace";
+  sheet.push_back(plain);
+  return sheet;
 }
 
 std::vector<Style> style_sheet(const Document& doc)
 {
-  return doc.styles;
+  return doc.styles.empty() ? builtin_styles("Sans", 11) : doc.styles;
 }
 
 std::vector<Style> complete_sheet(std::vector<Style> sheet)
 {
+  auto normal = std::find_if(sheet.begin(), sheet.end(),
+                             [](const Style& s) { return same_name(s.name, kNormalStyle); });
+  if (normal == sheet.end()) {
+    sheet.insert(sheet.begin(), builtin_styles("Sans", 11).front());
+  } else {
+    Style first = *normal;
+    sheet.erase(normal);
+    first.name = kNormalStyle;
+    first.based_on.clear();
+    sheet.insert(sheet.begin(), first);
+  }
+  const Style& front = sheet.front();
+  for (const Style& builtin : builtin_styles(front.format.font, front.format.size)) {
+    if (!find_style(sheet, builtin.name))
+      sheet.push_back(builtin);
+  }
   return sheet;
 }
 
-const Style* find_style(const std::vector<Style>& /*sheet*/, const std::string& /*name*/)
+const Style* find_style(const std::vector<Style>& sheet, const std::string& name)
 {
+  for (const Style& style : sheet) {
+    if (same_name(style.name, name))
+      return &style;
+  }
   return nullptr;
 }
 
 std::string clean_style_name(const std::string& name)
 {
-  return name;
+  std::string out;
+  size_t i = 0;
+  while (i < name.size()) {
+    const size_t begin = i;
+    uint32_t cp = 0;
+    if (!decode_one(name, i, cp)) {
+      ++i;
+      continue;
+    }
+    if (cp < 0x20 || cp == 0x7F || (cp >= 0x80 && cp <= 0x9F))
+      continue;
+    out.append(name, begin, i - begin);
+  }
+  size_t first = 0;
+  while (first < out.size() && out[first] == ' ')
+    ++first;
+  size_t last = out.size();
+  while (last > first && out[last - 1] == ' ')
+    --last;
+  out = out.substr(first, last - first);
+  out = cut_utf8(out, kMaxStyleName);
+  while (!out.empty() && out.back() == ' ')
+    out.pop_back();
+  return out;
 }
 
-std::string unique_style_name(const std::vector<Style>& /*sheet*/, const std::string& wanted)
+std::string unique_style_name(const std::vector<Style>& sheet, const std::string& wanted)
 {
-  return wanted;
+  if (!find_style(sheet, wanted))
+    return wanted;
+  for (size_t n = 2;; ++n) {
+    const std::string suffix = " (" + std::to_string(n) + ")";
+    const std::string base =
+        cut_utf8(wanted, kMaxStyleName > suffix.size() ? kMaxStyleName - suffix.size() : 0);
+    const std::string candidate = base + suffix;
+    if (!find_style(sheet, candidate))
+      return candidate;
+  }
 }
 
-std::string next_style(const std::vector<Style>& /*sheet*/, const std::string& name)
+std::string next_style(const std::vector<Style>& sheet, const std::string& name)
 {
-  return name;
+  const Style* style = find_style(sheet, name);
+  if (!style)
+    return name;
+  const Style* next = style->next.empty() ? nullptr : find_style(sheet, style->next);
+  return next ? next->name : style->name;
 }
 
-void restyle_run(Run& /*run*/, const Style& /*from*/, const Style& /*to*/)
+void restyle_run(Run& run, const Style& from, const Style& to)
 {
+  if (run.font == from.format.font)
+    run.font = to.format.font;
+  if (run.size == from.format.size)
+    run.size = to.format.size;
+  if (run.bold == from.format.bold)
+    run.bold = to.format.bold;
+  if (run.italic == from.format.italic)
+    run.italic = to.format.italic;
+  if (run.underline == from.format.underline)
+    run.underline = to.format.underline;
 }
 
-bool apply_style(Document& /*doc*/, size_t /*first*/, size_t /*last*/, const std::string& /*name*/)
+bool apply_style(Document& doc, size_t first, size_t last, const std::string& name)
 {
-  return false;
+  const std::vector<Style> sheet = style_sheet(doc);
+  const Style* to = find_style(sheet, name);
+  if (!to || first > last || first >= doc.paragraphs.size())
+    return false;
+  last = std::min(last, doc.paragraphs.size() - 1);
+  for (size_t i = first; i <= last; ++i) {
+    Paragraph& paragraph = doc.paragraphs[i];
+    restyle_paragraph(paragraph, paragraph_style(sheet, paragraph), *to);
+  }
+  return true;
 }
 
-bool update_style(Document& /*doc*/, const std::string& /*name*/, const Style& /*changed*/)
+bool update_style(Document& doc, const std::string& name, const Style& changed)
 {
-  return false;
+  std::vector<Style> sheet = style_sheet(doc);
+  const Style* found = find_style(sheet, name);
+  if (!found)
+    return false;
+  const size_t index = static_cast<size_t>(found - sheet.data());
+  const Style old = sheet[index];
+  Style updated = changed;
+  updated.name = clean_style_name(changed.name);
+  if (updated.name.empty())
+    return false;
+  if (same_name(old.name, kNormalStyle) && updated.name != kNormalStyle)
+    return false;
+  for (size_t i = 0; i < sheet.size(); ++i) {
+    if (i != index && same_name(sheet[i].name, updated.name))
+      return false;
+  }
+  if (!updated.based_on.empty()) {
+    const Style* base = find_style(sheet, updated.based_on);
+    if (!base || base == &sheet[index] || same_name(updated.based_on, updated.name))
+      return false;
+    updated.based_on = base->name;
+    // Walking up from the new base must not come back to this style.
+    const Style* at = base;
+    for (size_t steps = 0; at && steps <= sheet.size(); ++steps) {
+      if (at == &sheet[index])
+        return false;
+      at = at->based_on.empty() ? nullptr : find_style(sheet, at->based_on);
+    }
+  }
+  if (!updated.next.empty()) {
+    if (same_name(updated.next, old.name) || same_name(updated.next, updated.name)) {
+      updated.next = updated.name;
+    } else {
+      const Style* next = find_style(sheet, updated.next);
+      if (!next)
+        return false;
+      updated.next = next->name;
+    }
+  }
+  std::vector<bool> visited(sheet.size(), false);
+  carry_style(doc, sheet, index, updated, visited);
+  doc.styles = sheet;
+  return true;
 }
 
-bool add_style(Document& /*doc*/, const Style& /*style*/)
+bool add_style(Document& doc, const Style& style)
 {
-  return false;
+  std::vector<Style> sheet = style_sheet(doc);
+  Style added = style;
+  added.name = clean_style_name(style.name);
+  if (added.name.empty() || find_style(sheet, added.name) || sheet.size() >= kMaxStyles)
+    return false;
+  if (!added.based_on.empty()) {
+    const Style* base = find_style(sheet, added.based_on);
+    if (!base)
+      return false;
+    added.based_on = base->name;
+  }
+  if (!added.next.empty() && !same_name(added.next, added.name)) {
+    const Style* next = find_style(sheet, added.next);
+    if (!next)
+      return false;
+    added.next = next->name;
+  }
+  sheet.push_back(added);
+  doc.styles = sheet;
+  return true;
 }
 
 Document blank_document(const std::string& font, int size)
 {
-  (void)font;
-  (void)size;
   Document doc;
+  doc.styles = builtin_styles(font, size);
   doc.paragraphs.push_back(Paragraph{});
   return doc;
 }
@@ -436,6 +756,7 @@ Document blank_document(const std::string& font, int size)
 Document plain_import(const std::string& text, const std::string& font, int size)
 {
   Document doc;
+  doc.styles = builtin_styles(font, size);
   const std::string clean = strip_cr(text);
   std::string line;
   auto push = [&]() {
@@ -470,6 +791,7 @@ Document plain_import(const std::string& text, const std::string& font, int size
 Document markdown_import(const std::string& text, const std::string& font, int size)
 {
   Document doc;
+  doc.styles = builtin_styles(font, size);
   const std::vector<std::string> lines = lines_of(text);
   size_t i = 0;
   while (i < lines.size()) {
@@ -480,7 +802,11 @@ Document markdown_import(const std::string& text, const std::string& font, int s
     int level = 0;
     std::string body;
     if (heading_marks(lines[i], level, body)) {
-      doc.paragraphs.push_back(parse_inlines(body, font, size, level));
+      // A heading takes its Heading style, as if applied to body text.
+      Paragraph paragraph = parse_inlines(body, font, size, level);
+      const std::string name = "Heading " + std::to_string(level);
+      restyle_paragraph(paragraph, doc.styles.front(), *find_style(doc.styles, name));
+      doc.paragraphs.push_back(paragraph);
       ++i;
       continue;
     }
@@ -502,8 +828,9 @@ std::string markdown_export(const Document& doc)
 {
   std::string out;
   bool any = false;
+  const std::vector<Style> sheet = style_sheet(doc);
   for (const Paragraph& paragraph : doc.paragraphs) {
-    const std::string body = inline_export(paragraph);
+    const std::string body = inline_export(paragraph, paragraph_style(sheet, paragraph).format);
     if (paragraph.heading == 0 && body.empty())
       continue;
     if (any)
