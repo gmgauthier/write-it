@@ -3,6 +3,7 @@
 #include "document.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 namespace writeit {
 namespace {
@@ -144,9 +145,20 @@ bool operator!=(const Indents& a, const Indents& b)
   return !(a == b);
 }
 
+bool operator==(const ListFormat& a, const ListFormat& b)
+{
+  return a.kind == b.kind && a.level == b.level;
+}
+
+bool operator!=(const ListFormat& a, const ListFormat& b)
+{
+  return !(a == b);
+}
+
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
-  return a.heading == b.heading && a.indents == b.indents && a.align == b.align && a.runs == b.runs;
+  return a.heading == b.heading && a.indents == b.indents && a.align == b.align &&
+         a.list == b.list && a.runs == b.runs;
 }
 
 bool indents_fit(const Indents& indents)
@@ -160,6 +172,167 @@ Indents clamp_indents(Indents indents)
   indents.right = std::max(0, std::min(kMaxIndent, indents.right));
   indents.first = std::max(-indents.left, std::min(kMaxIndent, indents.first));
   return indents;
+}
+
+ListFormat clamp_list(ListFormat list)
+{
+  if (list.kind != ListKind::Bullet && list.kind != ListKind::Number)
+    return ListFormat{};
+  list.level = std::max(0, std::min(kListLevels - 1, list.level));
+  return list;
+}
+
+Indents list_indents(int level)
+{
+  level = std::max(0, std::min(kListLevels - 1, level));
+  Indents indents;
+  indents.left = kListStep * (level + 1);
+  indents.first = -kListHang;
+  return indents;
+}
+
+std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
+{
+  std::vector<int> numbers;
+  numbers.reserve(paragraphs.size());
+  int counters[kListLevels] = {};
+  for (const Paragraph& paragraph : paragraphs) {
+    const ListFormat list = clamp_list(paragraph.list);
+    if (list.kind == ListKind::None) {
+      std::fill(std::begin(counters), std::end(counters), 0);
+      numbers.push_back(0);
+      continue;
+    }
+    if (list.kind == ListKind::Bullet) {
+      numbers.push_back(0);
+      continue;
+    }
+    // Paragraph counts cannot reach INT_MAX, but stay defined if they did.
+    if (counters[list.level] < 2000000000)
+      ++counters[list.level];
+    for (int deeper = list.level + 1; deeper < kListLevels; ++deeper)
+      counters[deeper] = 0;
+    numbers.push_back(counters[list.level]);
+  }
+  return numbers;
+}
+
+std::string list_label(const ListFormat& raw, int number)
+{
+  const ListFormat list = clamp_list(raw);
+  if (list.kind == ListKind::None)
+    return {};
+  if (list.kind == ListKind::Bullet) {
+    // U+2022 bullet, U+25E6 white bullet, U+25AA small black square, in UTF-8.
+    static const char* const kBullets[] = {"\xE2\x80\xA2", "\xE2\x97\xA6", "\xE2\x96\xAA"};
+    return kBullets[list.level % 3];
+  }
+  number = std::max(1, number);
+  const int style = list.level % 3;
+  std::string text;
+  if (style == 1) {
+    // a ... z, aa, ab ...: bijective base 26, as Word letters.
+    unsigned value = static_cast<unsigned>(number);
+    while (value > 0) {
+      --value;
+      text.insert(text.begin(), static_cast<char>('a' + value % 26));
+      value /= 26;
+    }
+  } else if (style == 2 && number < 4000) {
+    static const int kValues[] = {1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1};
+    static const char* const kNumerals[] = {"m",  "cm", "d",  "cd", "c",  "xc", "l",
+                                            "xl", "x",  "ix", "v",  "iv", "i"};
+    int value = number;
+    for (size_t i = 0; i < sizeof(kValues) / sizeof(kValues[0]); ++i) {
+      while (value >= kValues[i]) {
+        text += kNumerals[i];
+        value -= kValues[i];
+      }
+    }
+  } else {
+    text = std::to_string(number);
+  }
+  return text + ".";
+}
+
+namespace {
+
+bool at_list_indents(const Indents& indents, int level)
+{
+  const Indents standard = list_indents(level);
+  return indents.left == standard.left && indents.first == standard.first;
+}
+
+void join_list(Paragraph& paragraph, ListKind kind)
+{
+  if (paragraph.list.kind != ListKind::None) {
+    // Switching between bullets and numbers keeps the level and indents.
+    paragraph.list = clamp_list(paragraph.list);
+    paragraph.list.kind = kind;
+    return;
+  }
+  paragraph.list.kind = kind;
+  paragraph.list.level = 0;
+  Indents indents = paragraph.indents;
+  if (indents.left == 0 && indents.first == 0) {
+    indents.left = list_indents(0).left;
+  } else {
+    // Already indented: the text stays at the left indent and the label
+    // hangs in front of it.
+    indents.left = std::max(kListHang, indents.left);
+  }
+  indents.first = -kListHang;
+  paragraph.indents = clamp_indents(indents);
+}
+
+void leave_list(Paragraph& paragraph)
+{
+  if (paragraph.list.kind == ListKind::None)
+    return;
+  if (at_list_indents(paragraph.indents, clamp_list(paragraph.list).level))
+    paragraph.indents.left = 0;
+  // The label's hang goes with the label.
+  paragraph.indents.first = 0;
+  paragraph.indents = clamp_indents(paragraph.indents);
+  paragraph.list = ListFormat{};
+}
+
+}  // namespace
+
+ListKind toggle_list(std::vector<Paragraph>& paragraphs, ListKind kind)
+{
+  if (paragraphs.empty())
+    return ListKind::None;
+  if (kind != ListKind::Bullet && kind != ListKind::Number)
+    return clamp_list(paragraphs.front().list).kind;
+  const bool all = std::all_of(paragraphs.begin(), paragraphs.end(), [kind](const Paragraph& p) {
+    return clamp_list(p.list).kind == kind;
+  });
+  for (Paragraph& paragraph : paragraphs) {
+    if (all)
+      leave_list(paragraph);
+    else
+      join_list(paragraph, kind);
+  }
+  return all ? ListKind::None : kind;
+}
+
+void set_list_level(Paragraph& paragraph, int level)
+{
+  const ListFormat old = clamp_list(paragraph.list);
+  if (old.kind == ListKind::None)
+    return;
+  level = std::max(0, std::min(kListLevels - 1, level));
+  if (at_list_indents(paragraph.indents, old.level)) {
+    const int right = paragraph.indents.right;
+    paragraph.indents = list_indents(level);
+    paragraph.indents.right = right;
+  } else {
+    paragraph.indents.left += kListStep * (level - old.level);
+    paragraph.indents = clamp_indents(paragraph.indents);
+  }
+  paragraph.list = old;
+  paragraph.list.level = level;
 }
 
 bool operator==(const Document& a, const Document& b)

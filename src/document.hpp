@@ -31,11 +31,28 @@ constexpr int kMaxIndent = 31680;
 // \qj reads as left.
 enum class Align { Left, Center, Right };
 
+// A bulleted or numbered list item. The list sits on top of the indents: the
+// label hangs in the first-line indent and the text starts at the left one.
+// Numbers are not stored; list_numbers() works them out from the paragraphs.
+enum class ListKind { None, Bullet, Number };
+
+struct ListFormat {
+  ListKind kind = ListKind::None;
+  // 0 through kListLevels - 1, as RTF's \ilvl.
+  int level = 0;
+};
+
+constexpr int kListLevels = 9;
+// Word's list indents: half an inch per level, the label hanging a quarter inch.
+constexpr int kListStep = 720;
+constexpr int kListHang = 360;
+
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.
   int heading = 0;
   Indents indents;
   Align align = Align::Left;
+  ListFormat list;
   std::vector<Run> runs;
 };
 
@@ -46,6 +63,8 @@ struct Document {
 bool same_format(const Run& a, const Run& b);
 bool operator==(const Indents& a, const Indents& b);
 bool operator!=(const Indents& a, const Indents& b);
+bool operator==(const ListFormat& a, const ListFormat& b);
+bool operator!=(const ListFormat& a, const ListFormat& b);
 bool operator==(const Run& a, const Run& b);
 bool operator==(const Paragraph& a, const Paragraph& b);
 bool operator==(const Document& a, const Document& b);
@@ -58,6 +77,25 @@ Indents clamp_indents(Indents indents);
 // line would start left of the left margin (a hanging indent larger than
 // Left). The dialog refuses such a choice rather than clamping it.
 bool indents_fit(const Indents& indents);
+
+// A level outside 0 through 8 moves to the nearer end. No list has no level.
+ListFormat clamp_list(ListFormat list);
+// The indents a new list item takes at a level.
+Indents list_indents(int level);
+// Each paragraph's number: 0 for a bullet or plain paragraph. Numbers count
+// up per level, a numbered item restarts the levels below it, and a plain
+// paragraph restarts them all. Bullets neither count nor interrupt.
+std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs);
+// The label in front of an item: a bullet by level, or "1.", "a.", "i." by
+// level for a number. Empty for no list.
+std::string list_label(const ListFormat& list, int number);
+// Format > Bullets and Format > Numbering on the selected paragraphs. When
+// every one already has `kind` the list comes off; otherwise every one takes
+// it. A paragraph joining a list hangs its label in front of its text; one
+// leaving gives back the list indents. Returns the kind the paragraphs have.
+ListKind toggle_list(std::vector<Paragraph>& paragraphs, ListKind kind);
+// Moves a list item to another level, and its indents with it.
+void set_list_level(Paragraph& paragraph, int level);
 
 Document blank_document(const std::string& font, int size);
 Document plain_import(const std::string& text, const std::string& font, int size);

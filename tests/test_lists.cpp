@@ -343,9 +343,11 @@ void rtf_write()
   CHECK(contains(rtf, "\\li720\\fi-360\\ls1\\ilvl0"));
   CHECK(contains(rtf, "\\ls2\\ilvl0"));
   CHECK(contains(rtf, "\\li1440\\fi-360\\ls2\\ilvl1"));
-  // Word 97 and WordPad: \pn, and the label as plain text in \pntext.
-  CHECK(contains(rtf, "{\\*\\pn\\pnlvlblt"));
-  CHECK(contains(rtf, "{\\*\\pn\\pnlvlbody\\pndec"));
+  // WordPad and older readers: the label as plain text in \pntext, ahead of
+  // the paragraph as Word puts it. No Word 6 \pn: LibreOffice lets it win
+  // over \ls and loses the levels.
+  CHECK(contains(rtf, "{\\pntext\\f0\\fs22 \\u8226\\'95\\tab}\\pard\\li720"));
+  CHECK(!contains(rtf, "\\pnlvl"));
   CHECK(contains(rtf, "{\\pntext\\f0\\fs22 \\u8226\\'95\\tab}"));
   CHECK(contains(rtf, "{\\pntext\\f0\\fs22 1.\\tab}"));
   CHECK(contains(rtf, "{\\pntext\\f0\\fs22 a.\\tab}"));
@@ -510,13 +512,13 @@ void rtf_read()
   }
   // Level kinds come from the definition: a list may mix bullets and numbers.
   {
-    const writeit::Document doc = import(
-        std::string(kHead) +
-        "{\\*\\listtable{\\list{\\listlevel\\levelnfc0}{\\listlevel\\levelnfc23}"
-        "{\\listlevel\\levelnfc255}{\\listlevel\\levelnfc2}\\listid5}}"
-        "{\\*\\listoverridetable{\\listoverride\\listid5\\ls7}}"
-        "\\pard\\ls7\\ilvl0 a\\par\\pard\\ls7\\ilvl1 b\\par\\pard\\ls7\\ilvl2 c\\par"
-        "\\pard\\ls7\\ilvl3 d\\par\\pard\\ls7\\ilvl6 e\\par}");
+    const writeit::Document doc =
+        import(std::string(kHead) +
+               "{\\*\\listtable{\\list{\\listlevel\\levelnfc0}{\\listlevel\\levelnfc23}"
+               "{\\listlevel\\levelnfc255}{\\listlevel\\levelnfc2}\\listid5}}"
+               "{\\*\\listoverridetable{\\listoverride\\listid5\\ls7}}"
+               "\\pard\\ls7\\ilvl0 a\\par\\pard\\ls7\\ilvl1 b\\par\\pard\\ls7\\ilvl2 c\\par"
+               "\\pard\\ls7\\ilvl3 d\\par\\pard\\ls7\\ilvl6 e\\par}");
     CHECK(is_list(doc.paragraphs[0], ListKind::Number, 0));
     CHECK(is_list(doc.paragraphs[1], ListKind::Bullet, 1));
     // No number at all (255) is closest to a bullet.
@@ -527,10 +529,10 @@ void rtf_read()
   }
   // \listsimple: one level, used for every \ilvl.
   {
-    const writeit::Document doc = import(
-        std::string(kHead) +
-        "{\\*\\listtable{\\list\\listsimple1{\\listlevel\\levelnfc23}\\listid9}}"
-        "{\\*\\listoverridetable{\\listoverride\\listid9\\ls1}}\\pard\\ls1\\ilvl4 s\\par}");
+    const writeit::Document doc =
+        import(std::string(kHead) +
+               "{\\*\\listtable{\\list\\listsimple1{\\listlevel\\levelnfc23}\\listid9}}"
+               "{\\*\\listoverridetable{\\listoverride\\listid9\\ls1}}\\pard\\ls1\\ilvl4 s\\par}");
     CHECK(is_list(doc.paragraphs[0], ListKind::Bullet, 4));
   }
   // The table text (\leveltext, \listname) never reaches the document.
@@ -623,13 +625,12 @@ void rtf_hostile()
     std::string overrides = "{\\*\\listoverridetable";
     for (int n = 1; n <= 5000; ++n) {
       tables += "{\\list{\\listlevel\\levelnfc0}\\listid" + std::to_string(n) + "}";
-      overrides +=
-          "{\\listoverride\\listid" + std::to_string(n) + "\\ls" + std::to_string(n) + "}";
+      overrides += "{\\listoverride\\listid" + std::to_string(n) + "\\ls" + std::to_string(n) + "}";
     }
     tables += "}";
     overrides += "}";
-    const writeit::Document doc =
-        import(std::string(kHead) + tables + overrides + "\\pard\\ls1 a\\par\\pard\\ls5000 b\\par}");
+    const writeit::Document doc = import(std::string(kHead) + tables + overrides +
+                                         "\\pard\\ls1 a\\par\\pard\\ls5000 b\\par}");
     CHECK(doc.paragraphs.size() == 2);
     CHECK(is_list(doc.paragraphs[0], ListKind::Number, 0));
     CHECK(doc.paragraphs[1].list.kind != ListKind::None);
@@ -646,7 +647,7 @@ void rtf_hostile()
                                          "\\pard{\\*\\pn\\pnlvl-1\\pndec}g\\par}");
     CHECK(doc.paragraphs.size() == 6);
     CHECK(is_list(doc.paragraphs[0], ListKind::Bullet, 0));
-    CHECK(text_of(doc.paragraphs[1]) == "b c");
+    CHECK(text_of(doc.paragraphs[1]) == "bc");
     CHECK(doc.paragraphs[2].list == ListFormat{});
     CHECK(doc.paragraphs[3].list == ListFormat{});
     CHECK(text_of(doc.paragraphs[3]) == "e");
