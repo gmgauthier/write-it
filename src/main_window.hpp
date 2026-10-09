@@ -303,6 +303,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The list-tab idle, likewise; tabbing_ while it retags.
   sigc::connection list_tabs_idle_;
   bool tabbing_ = false;
+  // Paste's sensitivity follows the clipboard, which outlives the window.
+  sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

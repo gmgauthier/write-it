@@ -331,7 +331,8 @@ void MainWindow::build_editor()
           queue_page_status();
       });
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
-  Gtk::Clipboard::get()->signal_owner_change().connect(
+  // The clipboard outlives the window: ~MainWindow disconnects this.
+  clipboard_owner_ = Gtk::Clipboard::get()->signal_owner_change().connect(
       [this](GdkEventOwnerChange*) { update_actions(); });
 
   auto activate = [](Gtk::MenuItem* item, const sigc::slot<void>& slot) {
