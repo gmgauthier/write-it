@@ -70,3 +70,12 @@ write_it_document_tests = executable(
   include_directories: inc,
 )
 test('document', write_it_document_tests)
+
+write_it_indents_tests = executable(
+  'write-it-indents-tests',
+  'tests/test_indents.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+)
+test('indents', write_it_indents_tests)
