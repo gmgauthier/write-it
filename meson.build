@@ -304,5 +304,8 @@ test(
 test(
   'desktop-file',
   find_program('tests/desktop_file.sh'),
-  args: [meson.current_source_dir() / 'data' / 'write-it.desktop'],
+  args: [
+    meson.current_source_dir() / 'data' / 'write-it.desktop',
+    meson.current_source_dir() / 'src' / 'editor.cpp',
+  ],
 )
