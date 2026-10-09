@@ -102,6 +102,13 @@ write_it_settings_tests = executable(
 )
 test('settings', write_it_settings_tests)
 
+# Every test that opens a GTK window passes is_parallel: false. They all
+# share the one Xvfb display, and with it the X PRIMARY selection and the
+# CLIPBOARD, so two running at once can take each other's selection: a
+# Shift+PageDown in caret-scroll, a cut or paste in toolbar-overflow. meson
+# runs a non-parallel test alone, with nothing else running beside it.
+# A new test that opens a window needs it too.
+#
 # Opening a .txt or .md in the real window, under a display: unmodified until
 # edited, and Save still goes through Save As.
 write_it_import_clean_tests = executable(
@@ -109,7 +116,7 @@ write_it_import_clean_tests = executable(
   'tests/test_import_clean.cpp',
   dependencies: [writeit_dep],
 )
-test('import-clean', write_it_import_clean_tests, timeout: 60)
+test('import-clean', write_it_import_clean_tests, timeout: 60, is_parallel: false)
 
 # check.hpp's guard. A suite that runs one check too few or too many, or
 # names no count, fails; done() without a count does not compile.
@@ -189,7 +196,7 @@ write_it_justify_ui_tests = executable(
   'tests/test_justify_ui.cpp',
   dependencies: [writeit_dep],
 )
-test('justify-ui', write_it_justify_ui_tests, timeout: 60)
+test('justify-ui', write_it_justify_ui_tests, timeout: 60, is_parallel: false)
 
 write_it_lists_tests = executable(
   'write-it-lists-tests',
@@ -235,7 +242,7 @@ write_it_status_bar_tests = executable(
   'tests/test_status_bar.cpp',
   dependencies: [writeit_dep],
 )
-test('status-bar', write_it_status_bar_tests, timeout: 120)
+test('status-bar', write_it_status_bar_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: View > Zoom and View > Page / Draft, and
 # the width GTK allocates and wraps at after each change.
@@ -244,7 +251,7 @@ write_it_page_width_tests = executable(
   'tests/test_page_width.cpp',
   dependencies: [writeit_dep],
 )
-test('page-width', write_it_page_width_tests, timeout: 120)
+test('page-width', write_it_page_width_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: every way the caret moves (Ctrl+End,
 # arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
@@ -254,7 +261,7 @@ write_it_caret_scroll_tests = executable(
   'tests/test_caret_scroll.cpp',
   dependencies: [writeit_dep],
 )
-test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)
+test('caret-scroll', write_it_caret_scroll_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: it fits a 1024 px screen.
 write_it_window_width_tests = executable(
@@ -262,7 +269,7 @@ write_it_window_width_tests = executable(
   'tests/test_window_width.cpp',
   dependencies: [writeit_dep],
 )
-test('window-width', write_it_window_width_tests, timeout: 60)
+test('window-width', write_it_window_width_tests, timeout: 60, is_parallel: false)
 
 # The real window under a display: a closed window leaves nothing on the
 # clipboard, which outlives it (run under ASan to see a use after free).
@@ -271,7 +278,7 @@ write_it_window_lifetime_tests = executable(
   'tests/test_window_lifetime.cpp',
   dependencies: [writeit_dep],
 )
-test('window-lifetime', write_it_window_lifetime_tests, timeout: 60)
+test('window-lifetime', write_it_window_lifetime_tests, timeout: 60, is_parallel: false)
 
 # The real window under a display: what overflows the toolbars at 960 px and
 # at the narrowest reaches the overflow menus with its label, and does there
@@ -281,7 +288,7 @@ write_it_toolbar_overflow_tests = executable(
   'tests/test_toolbar_overflow.cpp',
   dependencies: [writeit_dep],
 )
-test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120)
+test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: a list label wider than its hang moves a
 # left-aligned or justified item's text to the next default tab stop.
@@ -290,7 +297,7 @@ write_it_list_tabs_tests = executable(
   'tests/test_list_tabs.cpp',
   dependencies: [writeit_dep],
 )
-test('list-tabs', write_it_list_tabs_tests, timeout: 120)
+test('list-tabs', write_it_list_tabs_tests, timeout: 120, is_parallel: false)
 
 # The real application under a display: a file already open, asked for by a
 # symlink, a hard link or a ".." path, from Application::open or File > Open.
@@ -299,7 +306,7 @@ write_it_open_identity_tests = executable(
   'tests/test_open_identity.cpp',
   dependencies: [writeit_dep],
 )
-test('open-identity', write_it_open_identity_tests, timeout: 60)
+test('open-identity', write_it_open_identity_tests, timeout: 60, is_parallel: false)
 
 # Launches the program with files, on its own Xvfb and private D-Bus; see the script.
 test(
