@@ -714,7 +714,7 @@ bool update_style(Document& doc, const std::string& name, const Style& changed)
   }
   if (!updated.next.empty()) {
     if (same_name(updated.next, old.name) || same_name(updated.next, updated.name)) {
-      updated.next = updated.name;
+      updated.next.clear();  // itself, as the reader and the built-ins have it
     } else {
       const Style* next = find_style(sheet, updated.next);
       if (!next)
@@ -742,7 +742,9 @@ bool add_style(Document& doc, const Style& style)
       return false;
     added.based_on = base->name;
   }
-  if (!added.next.empty() && !same_name(added.next, added.name)) {
+  if (same_name(added.next, added.name)) {
+    added.next.clear();  // itself
+  } else if (!added.next.empty()) {
     const Style* next = find_style(sheet, added.next);
     if (!next)
       return false;
@@ -751,6 +753,38 @@ bool add_style(Document& doc, const Style& style)
   sheet.push_back(added);
   doc.styles = sheet;
   return true;
+}
+
+void adopt_sheet(Document& doc, const std::string& font, int size)
+{
+  if (!doc.styles.empty())
+    return;
+  // The font and size carrying the most characters, ties to the first.
+  std::vector<std::pair<std::pair<std::string, int>, size_t>> counts;
+  for (const Paragraph& paragraph : doc.paragraphs) {
+    for (const Run& run : paragraph.runs) {
+      if (run.text.empty())
+        continue;
+      const auto key = std::make_pair(run.font, run.size);
+      auto found = std::find_if(counts.begin(), counts.end(),
+                                [&key](const auto& item) { return item.first == key; });
+      if (found == counts.end())
+        counts.emplace_back(key, run.text.size());
+      else
+        found->second += run.text.size();
+    }
+  }
+  std::string chosen_font = font;
+  int chosen_size = size;
+  size_t best = 0;
+  for (const auto& item : counts) {
+    if (item.second > best) {
+      best = item.second;
+      chosen_font = item.first.first;
+      chosen_size = item.first.second;
+    }
+  }
+  doc.styles = builtin_styles(chosen_font, chosen_size);
 }
 
 Document blank_document(const std::string& font, int size)

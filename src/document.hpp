@@ -192,6 +192,10 @@ bool update_style(Document& doc, const std::string& name, const Style& changed);
 // Adds a new style. False for an empty or taken name, an unknown base or
 // next style, or a full sheet.
 bool add_style(Document& doc, const Style& style);
+// Gives a document without a sheet the built-in one, in the font and size
+// of most of its text (font and size when it has none). The editor does this
+// when such a document first takes a style.
+void adopt_sheet(Document& doc, const std::string& font, int size);
 
 Document blank_document(const std::string& font, int size);
 Document plain_import(const std::string& text, const std::string& font, int size);

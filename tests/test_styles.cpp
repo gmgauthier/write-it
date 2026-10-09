@@ -249,6 +249,31 @@ void applying()
   CHECK(!writeit::apply_style(same, 1, 0, "Heading 2"));
 }
 
+// A document without a sheet, when it first takes a style, adopts the
+// built-in sheet in its body text's font and size.
+void adopting()
+{
+  Document old;
+  old.paragraphs.resize(3);
+  old.paragraphs[0].runs.push_back(run("Title", "Sans", 20));
+  old.paragraphs[1].runs.push_back(run("Body text that is longer", "Serif", 12));
+  old.paragraphs[2].runs.push_back(run("more body", "Serif", 12));
+  writeit::adopt_sheet(old, "Sans", 11);
+  CHECK(old.styles == writeit::builtin_styles("Serif", 12));
+  // A sheet already there stays.
+  Document has = writeit::blank_document("Mono", 9);
+  writeit::adopt_sheet(has, "Sans", 11);
+  CHECK(has.styles == writeit::builtin_styles("Mono", 9));
+  // No text: the fallback.
+  Document empty;
+  empty.paragraphs.resize(1);
+  writeit::adopt_sheet(empty, "Serif", 14);
+  CHECK(empty.styles == writeit::builtin_styles("Serif", 14));
+  // Then Heading 1 builds on the body text.
+  CHECK(writeit::apply_style(old, 1, 1, "Heading 1"));
+  CHECK(old.paragraphs[1].runs[0].size == 17 && old.paragraphs[1].runs[0].bold);
+}
+
 void editing()
 {
   Document doc = sample();
@@ -307,7 +332,7 @@ void editing()
   CHECK(writeit::find_style(doc.styles, "Quote") == nullptr);
   const Style* small = writeit::find_style(doc.styles, "Quote Small");
   CHECK(small != nullptr && small->based_on == "Citation" && small->next == "Citation");
-  CHECK(writeit::find_style(doc.styles, "Citation")->next == "Citation");
+  CHECK(writeit::next_style(doc.styles, "Citation") == "Citation");
 
   // Refusals change nothing.
   const Document before = doc;
@@ -513,6 +538,20 @@ void rtf_round_trip()
     const Style* unheaded_h1 = writeit::find_style(unheaded.styles, "Heading 1");
     CHECK(unheaded_h1 != nullptr && unheaded_h1->heading == 0);
     CHECK(import(writeit::rtf_export(unheaded)) == unheaded);
+    // LibreOffice: a style's level comes from its "heading 2" name and its
+    // children inherit it; and a paragraph repeats its style's paragraph
+    // format, as Word writes it, or LibreOffice reads it as left and flush.
+    const Document lo_levels =
+        import(std::string(kHead) +
+               "{\\stylesheet{\\s0 Normal;}{\\s2\\sbasedon0\\b heading 2;}{\\s22\\sbasedon2\\i My "
+               "Quote;}}\\pard\\s22 q\\par}");
+    const Style* lo_quote = writeit::find_style(lo_levels.styles, "My Quote");
+    CHECK(lo_quote != nullptr && lo_quote->heading == 2 && lo_quote->format.bold);
+    CHECK(!lo_levels.paragraphs.empty() && lo_levels.paragraphs[0].heading == 2);
+    Document block_doc = writeit::blank_document("Sans", 11);
+    block_doc.paragraphs[0].runs.push_back(run("b"));
+    CHECK(writeit::apply_style(block_doc, 0, 0, "Block Text"));
+    CHECK(contains(writeit::rtf_export(block_doc), "\\pard\\s7\\li1440\\ri1440"));
   }
 
   // A file without a style sheet reads as before: no sheet, all Normal.
@@ -767,6 +806,7 @@ int main()
 {
   builtins();
   applying();
+  adopting();
   editing();
   rtf_write();
   rtf_round_trip();

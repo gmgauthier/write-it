@@ -305,6 +305,19 @@ int builtin_heading(const std::string& name)
   return 0;
 }
 
+// The level a "heading N" name stands for, in any case, else `otherwise`.
+int name_heading(const std::string& name, int otherwise)
+{
+  if (name.size() != 9 || name[8] < '1' || name[8] > '6')
+    return otherwise;
+  static const char kHeading[] = "heading ";
+  for (size_t i = 0; i < 8; ++i) {
+    if (std::tolower(static_cast<unsigned char>(name[i])) != kHeading[i])
+      return otherwise;
+  }
+  return name[8] - '0';
+}
+
 struct StyleEntry {
   int index = 0;
   bool paragraph = true;
@@ -1063,8 +1076,12 @@ class Reader {
     r.indents = clamp_indents(r.indents);
     if (e.align)
       r.align = *e.align;
+    // A level from the file, else from a "heading N" name (LibreOffice
+    // writes none in its sheet), else the base's.
     if (e.heading)
       r.heading = *e.heading;
+    else if (e.index != 0)
+      r.heading = name_heading(clean_style_name(e.name), r.heading);
     return r;
   }
 
@@ -1548,26 +1565,25 @@ std::string rtf_export(const Document& doc)
     const int style = any_style ? style_index(paragraph.style) : -1;
     if (style > 0)
       out << "\\s" << style;
-    // Written where the paragraph differs from what \\pard and its style
-    // give it: no indents and left aligned without a sheet.
+    // Written whole after \\sN, as Word writes it: LibreOffice takes \\pard
+    // as flush left whatever the style says. Zero and left are written too
+    // where the style has otherwise.
     const Style* given_style =
         any_style ? &sheet[static_cast<size_t>(std::max(0, style))] : nullptr;
     const Indents from = given_style ? clamp_indents(given_style->indents) : Indents{};
     const Indents indents = clamp_indents(paragraph.indents);
-    if (indents.left != from.left)
+    if (indents.left != 0 || indents.left != from.left)
       out << "\\li" << indents.left;
-    if (indents.right != from.right)
+    if (indents.right != 0 || indents.right != from.right)
       out << "\\ri" << indents.right;
-    if (indents.first != from.first)
+    if (indents.first != 0 || indents.first != from.first)
       out << "\\fi" << indents.first;
-    if (paragraph.align != (given_style ? given_style->align : Align::Left)) {
-      if (paragraph.align == Align::Center)
-        out << "\\qc";
-      else if (paragraph.align == Align::Right)
-        out << "\\qr";
-      else
-        out << "\\ql";
-    }
+    if (paragraph.align == Align::Center)
+      out << "\\qc";
+    else if (paragraph.align == Align::Right)
+      out << "\\qr";
+    else if (given_style && given_style->align != Align::Left)
+      out << "\\ql";
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.
