@@ -88,15 +88,14 @@ std::string save_name(const std::string& chosen, const FileType& type)
   return dir + base + type.ext;
 }
 
-std::optional<std::string> resolve_save(
-    const std::string& chosen, const FileType& type,
-    const std::function<bool(const std::string&)>& exists,
-    const std::function<bool(const std::string&)>& confirm_replace)
+SaveDecision resolve_save(const std::string& chosen, const FileType& type,
+                          const std::function<PathKind(const std::string&)>& kind_of,
+                          const std::function<bool(const std::string&)>& confirm_replace)
 {
   const std::string path = save_name(chosen, type);
-  if (exists(path) && !confirm_replace(path))
-    return std::nullopt;
-  return path;
+  if (kind_of(path) != PathKind::Missing && !confirm_replace(path))
+    return {SaveOutcome::Declined, path};
+  return {SaveOutcome::Write, path};
 }
 
 }  // namespace writeit

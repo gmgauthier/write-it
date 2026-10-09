@@ -44,14 +44,15 @@ std::optional<std::string> run_save_chooser(Gtk::FileChooserDialog& dialog, cons
 {
   dialog.set_do_overwrite_confirmation(false);
   while (dialog.run() == Gtk::RESPONSE_ACCEPT) {
-    const auto path = resolve_save(
+    const auto decision = resolve_save(
         dialog.get_filename(), type,
         [](const std::string& candidate) {
-          return Glib::file_test(candidate, Glib::FILE_TEST_EXISTS);
+          return Glib::file_test(candidate, Glib::FILE_TEST_EXISTS) ? PathKind::File
+                                                                    : PathKind::Missing;
         },
         [&dialog](const std::string& candidate) { return confirm_replace(dialog, candidate); });
-    if (path)
-      return path;
+    if (decision.outcome == SaveOutcome::Write)
+      return decision.path;
   }
   return std::nullopt;
 }

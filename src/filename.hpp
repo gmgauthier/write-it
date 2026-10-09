@@ -37,12 +37,27 @@ std::string extension_of(const std::string& path);
 // - a name that is only an extension (".rtf") is "Untitled" plus it.
 std::string save_name(const std::string& chosen, const FileType& type);
 
-// The path to write, or nothing when the user declines to replace a file
-// and should choose again. `exists` and `confirm_replace` are asked about
-// the final name, after save_name, never about what was typed.
-std::optional<std::string> resolve_save(
-    const std::string& chosen, const FileType& type,
-    const std::function<bool(const std::string&)>& exists,
-    const std::function<bool(const std::string&)>& confirm_replace);
+// What is at a path on disk.
+enum class PathKind { Missing, File, Folder };
+
+// What a Save As or Export does with the chooser's answer.
+enum class SaveOutcome {
+  Write,     // write `path`
+  Declined,  // `path` exists and the user kept it: choose again
+  NoPath,    // no local, absolute path (a non-local location): choose again
+  Folder,    // `path` is a folder: say so and choose again
+};
+
+struct SaveDecision {
+  SaveOutcome outcome;
+  std::string path;  // the final name; empty for NoPath
+};
+
+// Decides a save. `kind_of` and `confirm_replace` are asked about the final
+// name, after save_name, never about what was typed, and confirm_replace
+// only when that name is an existing file.
+SaveDecision resolve_save(const std::string& chosen, const FileType& type,
+                          const std::function<PathKind(const std::string&)>& kind_of,
+                          const std::function<bool(const std::string&)>& confirm_replace);
 
 }  // namespace writeit

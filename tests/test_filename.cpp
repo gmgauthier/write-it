@@ -127,22 +127,35 @@ void extensions()
 // be replaced, after any extension is added or collapsed.
 struct Disk {
   std::set<std::string> files;
+  std::set<std::string> folders;
   std::vector<std::string> checked;
   std::vector<std::string> asked;
   bool replace = true;
 
-  std::optional<std::string> save(const std::string& chosen)
+  writeit::SaveDecision decide(const std::string& chosen,
+                               const writeit::FileType& type = rtf_file())
   {
     return resolve_save(
-        chosen, rtf_file(),
+        chosen, type,
         [this](const std::string& path) {
           checked.push_back(path);
-          return files.count(path) > 0;
+          if (folders.count(path))
+            return writeit::PathKind::Folder;
+          return files.count(path) ? writeit::PathKind::File : writeit::PathKind::Missing;
         },
         [this](const std::string& path) {
           asked.push_back(path);
           return replace;
         });
+  }
+
+  // The path written, or nothing.
+  std::optional<std::string> save(const std::string& chosen)
+  {
+    const auto decision = decide(chosen);
+    if (decision.outcome != writeit::SaveOutcome::Write)
+      return std::nullopt;
+    return decision.path;
   }
 };
 
@@ -201,6 +214,60 @@ void overwrite_order()
   }
 }
 
+// The chooser gives no local path for a non-local location. That must not
+// become a relative "Untitled.rtf" in whatever folder the app runs in.
+void no_local_path()
+{
+  using writeit::SaveOutcome;
+  for (const auto* type : {&rtf_file(), &markdown_file()}) {
+    for (const std::string chosen : {"", "Untitled.rtf", "zout", "docs/zout.rtf", "./zout"}) {
+      Disk disk;
+      disk.files = {"Untitled.rtf", "Untitled.md", "zout.rtf"};
+      const auto decision = disk.decide(chosen, *type);
+      CHECK(decision.outcome == SaveOutcome::NoPath);
+      CHECK(decision.path.empty());
+      CHECK(disk.checked.empty());
+      CHECK(disk.asked.empty());
+    }
+  }
+  // An absolute path is still fine.
+  Disk disk;
+  CHECK(disk.decide("/d/zout").outcome == SaveOutcome::Write);
+}
+
+// The final name is a folder: no replace question, nothing written, choose
+// again.
+void folder_named_like_the_file()
+{
+  using writeit::SaveOutcome;
+  {
+    Disk disk;
+    disk.folders = {"/d/zout.rtf"};
+    const auto decision = disk.decide("/d/zout");
+    CHECK(decision.outcome == SaveOutcome::Folder);
+    CHECK(decision.path == "/d/zout.rtf");
+    CHECK(disk.asked.empty());
+    CHECK(!disk.save("/d/zout.rtf.rtf"));
+    CHECK(disk.asked.empty());
+  }
+  {
+    Disk disk;
+    disk.folders = {"/d/notes.md"};
+    const auto decision = disk.decide("/d/notes", markdown_file());
+    CHECK(decision.outcome == SaveOutcome::Folder);
+    CHECK(decision.path == "/d/notes.md");
+    CHECK(disk.asked.empty());
+  }
+  {
+    // A folder called plain "zout" is not in the way of zout.rtf.
+    Disk disk;
+    disk.folders = {"/d/zout"};
+    const auto decision = disk.decide("/d/zout");
+    CHECK(decision.outcome == SaveOutcome::Write);
+    CHECK(decision.path == "/d/zout.rtf");
+  }
+}
+
 }  // namespace
 
 int main()
@@ -211,5 +278,7 @@ int main()
   idempotent();
   extensions();
   overwrite_order();
+  no_local_path();
+  folder_named_like_the_file();
   return suite_test::done("filename");
 }
