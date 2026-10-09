@@ -304,6 +304,108 @@ void MainWindow::tell(const std::string& sentence)
   dialog.run();
 }
 
+namespace {
+
+// A key that edits text or the selection: Delete, Backspace, Home, End,
+// and Ctrl with A, C, X, V, Z or Y. The window has accelerators for some
+// of them, which act on the document.
+bool editing_key(const GdkEventKey* event)
+{
+  const guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+  const guint shift_ctrl = GDK_SHIFT_MASK | GDK_CONTROL_MASK;
+  if ((mods & ~shift_ctrl) != 0)
+    return false;
+  switch (event->keyval) {
+    case GDK_KEY_Delete:
+    case GDK_KEY_KP_Delete:
+    case GDK_KEY_BackSpace:
+    case GDK_KEY_Home:
+    case GDK_KEY_KP_Home:
+    case GDK_KEY_End:
+    case GDK_KEY_KP_End:
+      return true;
+    default:
+      break;
+  }
+  if ((mods & GDK_CONTROL_MASK) == 0)
+    return false;
+  switch (gdk_keyval_to_lower(event->keyval)) {
+    case GDK_KEY_a:
+    case GDK_KEY_c:
+    case GDK_KEY_x:
+    case GDK_KEY_v:
+    case GDK_KEY_z:
+    case GDK_KEY_y:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// An entry, or a combo box or a part of one, such as the size box.
+bool field(Gtk::Widget* widget)
+{
+  for (GtkWidget* w = widget ? widget->gobj() : nullptr; w; w = gtk_widget_get_parent(w)) {
+    if (GTK_IS_EDITABLE(w) || GTK_IS_COMBO_BOX(w))
+      return true;
+    if (GTK_IS_TOOLBAR(w))
+      break;
+  }
+  return false;
+}
+
+}  // namespace
+
+bool MainWindow::on_key_press_event(GdkEventKey* event)
+{
+  // GTK's window tries its accelerators before the focused widget, so the
+  // Edit menu's Delete, Select All and Undo took these keys from the size
+  // box and acted on the document. A field gets them first here, as Word's
+  // boxes do. One it does not use (an entry has no Ctrl+Z) does nothing,
+  // and never reaches the document. Other keys, Ctrl+S or Alt+F, still go
+  // to the window when the field leaves them.
+  Gtk::Widget* focus = get_focus();
+  if (focus && focus != &text_ && field(focus)) {
+    if (gtk_window_propagate_key_event(GTK_WINDOW(gobj()), event))
+      return true;
+    if (editing_key(event))
+      return true;
+  }
+  return Gtk::ApplicationWindow::on_key_press_event(event);
+}
+
+void MainWindow::on_focus_moved()
+{
+  Gtk::Widget* focus = get_focus();
+  lend_primary(focus != nullptr && focus == size_combo_.get_entry());
+}
+
+void MainWindow::lend_primary(bool lend)
+{
+  if (lend == primary_lent_ || !buffer_)
+    return;
+  // The text view adds PRIMARY to the buffer when it realizes.
+  if (lend && !text_.get_realized())
+    return;
+  auto primary = text_.get_clipboard("PRIMARY");
+  const int insert = buffer_->get_insert()->get_iter().get_offset();
+  const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
+  const bool guard = restoring_;
+  restoring_ = true;
+  if (lend) {
+    // Letting go of PRIMARY collapses the selection; put it back.
+    buffer_->remove_selection_clipboard(primary);
+    primary_lent_ = true;
+  } else {
+    buffer_->add_selection_clipboard(primary);
+    primary_lent_ = false;
+  }
+  // Selecting again makes the buffer take PRIMARY back when it has it.
+  if (insert != bound)
+    buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
+  restoring_ = guard;
+}
+
 void MainWindow::build_editor()
 {
   for (int level = 1; level <= 6; ++level)
@@ -403,13 +505,29 @@ void MainWindow::connect_format()
   size_combo_.signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_size_changed));
   if (Gtk::Entry* entry = size_combo_.get_entry())
     entry->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_size_entered));
+  set_focus_ = signal_set_focus().connect([this](Gtk::Widget*) { on_focus_moved(); });
   font_combo_.property_popup_shown().signal_changed().connect([this] {
     if (!font_combo_.property_popup_shown().get_value())
       text_.grab_focus();
   });
   size_combo_.property_popup_shown().signal_changed().connect([this] {
-    if (!size_combo_.property_popup_shown().get_value())
+    if (!size_combo_.property_popup_shown().get_value()) {
       text_.grab_focus();
+      return;
+    }
+    // Text in the box that the list does not hold (a size being typed)
+    // highlights no item. GTK would highlight the first, 8.
+    // It does so after the list is shown, so this waits for that.
+    if (size_combo_.get_active_row_number() < 0) {
+      size_popup_idle_.disconnect();
+      size_popup_idle_ = Glib::signal_idle().connect([this] {
+        AtkObject* popup = gtk_combo_box_get_popup_accessible(GTK_COMBO_BOX(size_combo_.gobj()));
+        GtkWidget* menu = popup ? gtk_accessible_get_widget(GTK_ACCESSIBLE(popup)) : nullptr;
+        if (menu && GTK_IS_MENU_SHELL(menu) && size_combo_.get_active_row_number() < 0)
+          gtk_menu_shell_deselect(GTK_MENU_SHELL(menu));
+        return false;
+      });
+    }
   });
   if (bold_toggle_)
     bold_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Bold); });
@@ -1573,7 +1691,9 @@ void MainWindow::toggle_flag(TextFlag flag)
   bool all = true;
   bool any = false;
   for (auto iter = start_iter; iter != end_iter; ++iter) {
-    if (iter.get_char() == '\n')
+    // A newline counts only for an empty line, whose format it holds
+    // (Paragraph::mark): in Word, the paragraph mark is bolded too.
+    if (iter.get_char() == '\n' && !iter.starts_line())
       continue;
     any = true;
     if (!text_flag(format_of(iter), flag)) {
@@ -1608,10 +1728,7 @@ void MainWindow::show_format(const Run& run)
       size_combo_.append(size_text(choice));
     size_choices_shown_ = choices;
   }
-  // Half points as Word 97 shows them: 10.5.
-  const Glib::ustring size = size_text(run.size);
-  if (size_combo_.get_active_text() != size)
-    size_combo_.set_active_text(size);
+  show_size(run.size);
   if (bold_toggle_ && bold_toggle_->get_active() != run.bold)
     bold_toggle_->set_active(run.bold);
   if (italic_toggle_ && italic_toggle_->get_active() != run.italic)
@@ -1620,6 +1737,29 @@ void MainWindow::show_format(const Run& run)
     underline_toggle_->set_active(run.underline);
   suppress_format_ = false;
   update_caret_font();
+}
+
+void MainWindow::show_size(double run_size)
+{
+  // Half points as Word 97 shows them: 10.5. The entry's own text is not
+  // enough: a size typed and applied leaves no list item active, and the
+  // list then highlighted its first, 8. The item for the size is made
+  // active, so the list highlights it.
+  const Glib::ustring size = size_text(run_size);
+  Glib::ustring active;
+  if (auto row = size_combo_.get_active())
+    row->get_value(0, active);
+  if (active == size && size_combo_.get_active_text() == size)
+    return;
+  const bool guard = suppress_format_;
+  suppress_format_ = true;
+  size_combo_.set_active_text(size);
+  // A size the list lacks highlights nothing, and the box still says it.
+  if (size_combo_.get_active_row_number() < 0) {
+    if (Gtk::Entry* entry = size_combo_.get_entry())
+      entry->set_text(size);
+  }
+  suppress_format_ = guard;
 }
 
 void MainWindow::sync_format_controls()
@@ -1698,19 +1838,30 @@ void MainWindow::on_size_entered()
 {
   if (suppress_format_)
     return;
-  const double size = parse_size(size_combo_.get_active_text().raw());
-  if (size == 0) {
-    // Not a size Word takes (10.3, 2000, "big"): the box goes back to the
-    // size of the text, which keeps it.
-    Gtk::TextBuffer::iterator start_iter;
-    Gtk::TextBuffer::iterator end_iter;
-    if (buffer_->get_selection_bounds(start_iter, end_iter) && start_iter != end_iter)
-      show_format(format_of(start_iter));
-    else
-      show_format(typing_);
+  const std::string typed = size_combo_.get_active_text().raw();
+  const std::string refusal = size_refusal(typed);
+  if (refusal.empty()) {
+    const double size = parse_size(typed);
+    apply_run_edit([size](Run& run) { run.size = size; });
     return;
   }
-  apply_run_edit([size](Run& run) { run.size = size; });
+  // Not a size Word takes (10.3, 2000, "big"). As Word 97 does, say why,
+  // then show the size of the text, which keeps it, selected in the box to
+  // type over.
+  Gtk::MessageDialog dialog(*this, refusal, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+  dialog.set_title("Write-It");
+  dialog.run();
+  dialog.hide();
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  if (buffer_->get_selection_bounds(start_iter, end_iter) && start_iter != end_iter)
+    show_format(format_of(start_iter));
+  else
+    show_format(typing_);
+  if (Gtk::Entry* entry = size_combo_.get_entry()) {
+    entry->grab_focus();
+    entry->select_region(0, -1);
+  }
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)

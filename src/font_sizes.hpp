@@ -41,11 +41,14 @@ std::string size_text(double size);
 // The size an entry in the box stands for: a whole number from 1 to 1638,
 // or a half point between them ("10.5", also "10.0" and "10.50"), else 0.
 // Word refuses other fractions (10.3) rather than rounding them, and so
-// does this.
+// does this. Spaces around the entry are trimmed ("  12 " is 12), and
+// leading zeros count for nothing ("00012" is 12).
 double parse_size(const std::string& text);
 
-// Why the box refuses an entry, as Word 97's message box says it, or "" for
-// an entry parse_size() takes.
+// Why the box refuses an entry, in the words of Word 97's message box, or
+// "" for an entry parse_size() takes: "This is not a valid number." (empty,
+// or not a number), "The number must be between 1 and 1638.", or "Font
+// sizes must be whole numbers or end in .5." (10.3).
 std::string size_refusal(const std::string& text);
 
 }  // namespace writeit

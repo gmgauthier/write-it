@@ -60,34 +60,79 @@ std::string size_text(double size)
   return text;
 }
 
-double parse_size(const std::string& text)
+namespace {
+
+enum class Entry { Size, NotNumber, OutOfRange, BadFraction };
+
+// Reads an entry Word 97's way: spaces around it are trimmed, then an
+// optional minus, digits, and an optional point with digits after it.
+// Leading zeros count for nothing, so "00012" is 12 as "012" is.
+Entry read_entry(const std::string& text, double& size)
 {
-  // Whole points: digits only, and no more than the largest size has, so
-  // nothing overflows. Then at most a half: ".5" or ".50", or ".0", ".00".
-  const size_t dot = text.find('.');
-  const std::string whole = text.substr(0, dot);
-  if (whole.empty() || whole.size() > 4)
-    return 0;
-  int value = 0;
-  for (char c : whole) {
-    if (c < '0' || c > '9')
-      return 0;
-    value = value * 10 + (c - '0');
-  }
-  double size = value;
-  if (dot != std::string::npos) {
-    const std::string fraction = text.substr(dot + 1);
-    if (fraction == "5" || fraction == "50")
-      size += 0.5;
-    else if (fraction != "0" && fraction != "00")
-      return 0;
-  }
-  return valid_size(size) ? size : 0;
+  size = 0;
+  const char* const kSpace = " \t";
+  const size_t first = text.find_first_not_of(kSpace);
+  if (first == std::string::npos)
+    return Entry::NotNumber;
+  const std::string entry = text.substr(first, text.find_last_not_of(kSpace) - first + 1);
+  size_t at = 0;
+  const bool negative = entry[0] == '-';
+  if (negative)
+    ++at;
+  const size_t dot = entry.find('.', at);
+  const std::string whole = entry.substr(at, dot == std::string::npos ? dot : dot - at);
+  const std::string fraction = dot == std::string::npos ? "" : entry.substr(dot + 1);
+  auto digits = [](const std::string& part) {
+    return !part.empty() && part.find_first_not_of("0123456789") == std::string::npos;
+  };
+  if (!digits(whole) || (dot != std::string::npos && !digits(fraction)))
+    return Entry::NotNumber;
+  const size_t significant = whole.find_first_not_of('0');
+  const std::string value = significant == std::string::npos ? "" : whole.substr(significant);
+  const bool zero_fraction = fraction.find_first_not_of('0') == std::string::npos;
+  // Past four digits it is past 1638, and never parsed into an overflow.
+  if (value.size() > 4 || (negative && !(value.empty() && zero_fraction)))
+    return Entry::OutOfRange;
+  double number = value.empty() ? 0 : std::stoi(value);
+  const bool half = !fraction.empty() && fraction[0] == '5' &&
+                    fraction.find_first_not_of('0', 1) == std::string::npos;
+  if (half)
+    number += 0.5;
+  else if (!zero_fraction)
+    // Not a half point; how far from one does not matter here, only the
+    // range: 0.3 and 1638.3 are out of it, 10.3 is in it.
+    number += 0.25;
+  if (number < kMinFontSize || number > kMaxFontSize)
+    return Entry::OutOfRange;
+  if (!half && !zero_fraction)
+    return Entry::BadFraction;
+  size = number;
+  return Entry::Size;
 }
 
-std::string size_refusal(const std::string& /*text*/)
+}  // namespace
+
+double parse_size(const std::string& text)
 {
-  return "";
+  double size = 0;
+  return read_entry(text, size) == Entry::Size ? size : 0;
+}
+
+std::string size_refusal(const std::string& text)
+{
+  double size = 0;
+  switch (read_entry(text, size)) {
+    case Entry::Size:
+      return "";
+    case Entry::NotNumber:
+      return "This is not a valid number.";
+    case Entry::OutOfRange:
+      return "The number must be between " + std::to_string(kMinFontSize) + " and " +
+             std::to_string(kMaxFontSize) + ".";
+    case Entry::BadFraction:
+      break;
+  }
+  return "Font sizes must be whole numbers or end in .5.";
 }
 
 }  // namespace writeit

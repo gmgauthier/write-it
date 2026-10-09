@@ -64,6 +64,10 @@ class MainWindow : public Gtk::ApplicationWindow {
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
+  // A field with the keyboard (the size box) gets its editing keys before
+  // the window's accelerators, so Delete, Ctrl+A or Ctrl+Z typed there edit
+  // the field and never the document.
+  bool on_key_press_event(GdkEventKey* event) override;
 
  private:
   // The window tests in tests/ drive the real window and read back what GTK
@@ -180,8 +184,20 @@ class MainWindow : public Gtk::ApplicationWindow {
   void sync_format_controls();
   void on_font_changed();
   void on_size_changed();
-  // Enter in the size box: the typed size, or back to the text's size.
+  // Enter in the size box: the typed size, or Word 97's message saying why
+  // not, then back to the text's size with the box still to type in.
   void on_size_entered();
+  // Shows `size` in the size box, and highlights it in its list.
+  void show_size(double size);
+  // The keyboard moved. While the size box has it, the document's
+  // selection is kept (lend_primary()).
+  void on_focus_moved();
+  // GTK collapses a text buffer's selection when another widget takes the
+  // X PRIMARY selection, as the size box's entry does when its text is
+  // selected. While the box has the keyboard the buffer stops tracking
+  // PRIMARY, so the document's selection stays for Enter to size, as in
+  // Word; it takes PRIMARY back when the box lets go.
+  void lend_primary(bool lend);
 
   Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
   void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
@@ -377,6 +393,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   // selection as its text view unrealizes, which moves the marks after the
   // menus are gone: the destructor cuts it first.
   sigc::connection mark_set_;
+  // The window's set-focus, cut by the destructor likewise.
+  sigc::connection set_focus_;
+  // The idle that unhighlights the size list's first item; gone with the
+  // window.
+  sigc::connection size_popup_idle_;
+  // The buffer has stopped tracking PRIMARY for the size box.
+  bool primary_lent_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
