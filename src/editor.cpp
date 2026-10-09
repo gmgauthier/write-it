@@ -142,13 +142,16 @@ bool parse_fmt(const std::string& name, Run& run)
   return true;
 }
 
-// Paragraph tags hold the indents in twips and the alignment. Every
-// character of a paragraph, its newline included, carries exactly one.
+// Paragraph tags hold the indents in twips, the alignment, and the list.
+// Every character of a paragraph, its newline included, carries exactly one.
 std::string para_name(const ParaFormat& format)
 {
-  return std::string("para") + '\x1f' + std::to_string(format.indents.left) + '\x1f' +
-         std::to_string(format.indents.right) + '\x1f' + std::to_string(format.indents.first) +
-         '\x1f' + std::to_string(static_cast<int>(format.align));
+  const Indents& indents = format.indents;
+  return std::string("para") + '\x1f' + std::to_string(indents.left) + '\x1f' +
+         std::to_string(indents.right) + '\x1f' + std::to_string(indents.first) + '\x1f' +
+         std::to_string(static_cast<int>(format.align)) + '\x1f' +
+         std::to_string(static_cast<int>(format.list.kind)) + '\x1f' +
+         std::to_string(format.list.level);
 }
 
 bool parse_para(const std::string& name, ParaFormat& format)
@@ -170,13 +173,24 @@ bool parse_para(const std::string& name, ParaFormat& format)
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 4 || values[3] < 0 || values[3] > 2)
+  if (values.size() != 6 || values[3] < 0 || values[3] > 2 || values[4] < 0 ||
+      values[4] > static_cast<int>(ListKind::Number))
     return false;
   format.indents.left = values[0];
   format.indents.right = values[1];
   format.indents.first = values[2];
   format.align = static_cast<Align>(values[3]);
+  format.list.kind = static_cast<ListKind>(values[4]);
+  format.list.level = values[5];
   return true;
+}
+
+// Where a list item's first line of text starts, in twips from the page
+// margin. The label sits at left + first; the text starts at the left indent,
+// or a hang's width past the label when the first line is not hanging.
+int list_text_first(const Indents& indents)
+{
+  return std::max(indents.left, indents.left + indents.first + kListHang);
 }
 
 int heading_level_name(const std::string& name)
@@ -237,6 +251,7 @@ std::vector<Atom> atoms_of(const Document& doc)
         atom.heading = paragraph.heading;
         atom.para.indents = paragraph.indents;
         atom.para.align = paragraph.align;
+        atom.para.list = paragraph.list;
         atoms.push_back(atom);
       }
     }
@@ -290,6 +305,8 @@ void MainWindow::build_editor()
   buffer_->signal_insert().connect(sigc::mem_fun(*this, &MainWindow::on_inserted));
   buffer_->signal_erase().connect(sigc::mem_fun(*this, &MainWindow::on_erase), false);
   buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
+  text_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_text_key), false);
+  text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
   Gtk::Clipboard::get()->signal_owner_change().connect(
       [this](GdkEventOwnerChange*) { update_actions(); });
 
@@ -328,6 +345,8 @@ void MainWindow::build_editor()
   activate(find_item_, [this] { present_find(false); });
   activate(replace_item_, [this] { present_find(true); });
   activate(paragraph_item_, [this] { on_paragraph(); });
+  activate(bullets_item_, [this] { toggle_list_kind(ListKind::Bullet); });
+  activate(numbering_item_, [this] { toggle_list_kind(ListKind::Number); });
   activate(options_item_, [this] { on_options(); });
 
   const std::string font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
@@ -370,6 +389,10 @@ void MainWindow::connect_format()
     align_center_item_->signal_activate().connect([this] { apply_align(Align::Center); });
   if (align_right_item_)
     align_right_item_->signal_activate().connect([this] { apply_align(Align::Right); });
+  if (bullets_toggle_)
+    bullets_toggle_->signal_toggled().connect([this] { toggle_list_kind(ListKind::Bullet); });
+  if (numbering_toggle_)
+    numbering_toggle_->signal_toggled().connect([this] { toggle_list_kind(ListKind::Number); });
   if (bold_item_)
     bold_item_->signal_activate().connect([this] { toggle_flag(TextFlag::Bold); });
   if (italic_item_)
@@ -677,9 +700,11 @@ Document MainWindow::capture() const
       if (pending_para_set_) {
         paragraph.indents = pending_para_.indents;
         paragraph.align = pending_para_.align;
+        paragraph.list = pending_para_.list;
       } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
         paragraph.align = doc.paragraphs.back().align;
+        paragraph.list = doc.paragraphs.back().list;
       }
     }
     doc.paragraphs.push_back(paragraph);
@@ -695,6 +720,7 @@ Document MainWindow::capture() const
         if (parse_para(tag_name(tag), format)) {
           paragraph.indents = format.indents;
           paragraph.align = format.align;
+          paragraph.list = format.list;
           have_para = true;
         }
       }
@@ -727,7 +753,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   pending_para_ = ParaFormat{};
   for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
     const Paragraph& paragraph = doc.paragraphs[i];
-    const auto para = para_tag(ParaFormat{paragraph.indents, paragraph.align});
+    const auto para = para_tag(ParaFormat{paragraph.indents, paragraph.align, paragraph.list});
     bool any = false;
     for (const Run& run : paragraph.runs) {
       if (run.text.empty())
@@ -743,7 +769,8 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
     if (i + 1 < doc.paragraphs.size()) {
       buffer_->insert_with_tag(buffer_->end(), "\n", para);
     } else if (!any) {
-      pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align};
+      pending_para_ =
+          ParaFormat{clamp_indents(paragraph.indents), paragraph.align, clamp_list(paragraph.list)};
       pending_para_set_ = true;
     }
   }
@@ -881,6 +908,8 @@ void MainWindow::on_user_end()
   update_actions();
   apply_page_size();
   sync_format_controls();
+  // An edit on one line can renumber list items on others.
+  text_.queue_draw();
 }
 
 void MainWindow::coalesce_typing(const Document& current)
@@ -1473,6 +1502,7 @@ void MainWindow::sync_format_controls()
     return;
   ruler_.queue_draw();
   show_align();
+  sync_list_controls();
   auto iter = buffer_->get_insert()->get_iter();
   if (iter.get_offset() > 0) {
     auto prev = iter;
@@ -1535,7 +1565,10 @@ void MainWindow::on_size_changed()
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
 {
-  const ParaFormat format{clamp_indents(raw.indents), raw.align};
+  ParaFormat format;
+  format.indents = clamp_indents(raw.indents);
+  format.align = raw.align;
+  format.list = clamp_list(raw.list);
   const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
@@ -1554,8 +1587,16 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
     tag->property_justification() = Gtk::JUSTIFY_CENTER;
   else if (format.align == Align::Right)
     tag->property_justification() = Gtk::JUSTIFY_RIGHT;
-  // No indent leaves the view's page margins in charge.
   const Indents& indents = format.indents;
+  if (format.list.kind != ListKind::None) {
+    // A list item's label is drawn in the hang (on_text_draw), so its first
+    // line of text starts past the label rather than out in the hang.
+    tag->property_left_margin() = std::max(0, margin_left() + indent_px(indents.left));
+    tag->property_right_margin() = margin_right() + indent_px(indents.right);
+    tag->property_indent() = indent_px(list_text_first(indents)) - indent_px(indents.left);
+    return;
+  }
+  // No indent leaves the view's page margins in charge.
   if (indents == Indents{})
     return;
   // A tag's margin replaces the view's, so the page margin is added here.
@@ -1670,7 +1711,7 @@ ParaFormat MainWindow::destination_para(int start, int end) const
 void MainWindow::normalise_paragraphs()
 {
   // A deleted newline joins two paragraphs. The joined paragraph keeps the
-  // first one's indents and alignment, as AbiWord and LibreOffice do.
+  // first one's indents, alignment and list, as AbiWord and LibreOffice do.
   const int count = buffer_->get_char_count();
   Glib::RefPtr<Gtk::TextTag> carry = para_tag(ParaFormat{});
   int begin = 0;
@@ -1723,47 +1764,85 @@ void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
 
 void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
 {
+  // Each paragraph is edited from its own format, so changing one property
+  // keeps the others where the paragraphs differ.
+  apply_paragraphs([&edit](std::vector<Paragraph>& paragraphs) {
+    for (Paragraph& paragraph : paragraphs) {
+      ParaFormat format{paragraph.indents, paragraph.align, paragraph.list};
+      edit(format);
+      paragraph.indents = format.indents;
+      paragraph.align = format.align;
+      paragraph.list = format.list;
+    }
+  });
+}
+
+void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph>&)>& edit)
+{
   Gtk::TextBuffer::iterator start_iter;
   Gtk::TextBuffer::iterator end_iter;
   buffer_->get_selection_bounds(start_iter, end_iter);
   const int sel_start = start_iter.get_offset();
   const int sel_end = end_iter.get_offset();
-  // Every paragraph the selection touches, each with its newline. A
-  // selection that ends just after a newline does not reach the next one.
-  const int start = paragraph_start(sel_start);
-  const int end = paragraph_end(sel_end > sel_start ? sel_end - 1 : sel_end);
+  const int count = buffer_->get_char_count();
+  // Every paragraph the selection touches. A selection that ends just after
+  // a newline does not reach the next one.
+  const int last = paragraph_start(sel_end > sel_start ? sel_end - 1 : sel_end);
+  std::vector<int> starts;
+  for (int at = paragraph_start(sel_start);;) {
+    starts.push_back(at);
+    if (at >= last)
+      break;
+    at = paragraph_end(at);
+  }
+  // The edit sees each paragraph's format, not its text.
+  std::vector<Paragraph> paragraphs;
+  for (int at : starts) {
+    const ParaFormat format = para_at(at);
+    Paragraph paragraph;
+    paragraph.indents = format.indents;
+    paragraph.align = format.align;
+    paragraph.list = format.list;
+    paragraphs.push_back(paragraph);
+  }
+  edit(paragraphs);
   buffer_->begin_user_action();
-  // Each paragraph is edited from its own format, so changing one property
-  // keeps the others where the paragraphs differ.
-  for (int begin = start; begin < end;) {
-    const int stop = paragraph_end(begin);
-    ParaFormat format = para_at(begin);
-    edit(format);
+  // An empty last paragraph left out of the selection keeps what it had,
+  // rather than following the paragraph above into the new format.
+  if (last < count && final_paragraph_empty() && !pending_para_set_) {
+    pending_para_ = para_at(count);
+    pending_para_set_ = true;
+  }
+  for (size_t i = 0; i < starts.size(); ++i) {
+    const ParaFormat format{paragraphs[i].indents, paragraphs[i].align, paragraphs[i].list};
+    const int start = starts[i];
+    const int end = paragraph_end(start);
+    if (start == end) {
+      // The empty last paragraph has nothing to tag. Hold its format aside.
+      pending_para_ =
+          ParaFormat{clamp_indents(format.indents), format.align, clamp_list(format.list)};
+      pending_para_set_ = true;
+      continue;
+    }
     std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
-    for (auto iter = buffer_->get_iter_at_offset(begin); iter.get_offset() < stop; ++iter) {
+    for (auto iter = buffer_->get_iter_at_offset(start); iter.get_offset() < end; ++iter) {
       auto tag = para_tag_at(iter);
       if (tag && std::find(seen.begin(), seen.end(), tag) == seen.end())
         seen.push_back(tag);
     }
     for (const auto& tag : seen)
-      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(begin),
-                          buffer_->get_iter_at_offset(stop));
-    buffer_->apply_tag(para_tag(format), buffer_->get_iter_at_offset(begin),
-                       buffer_->get_iter_at_offset(stop));
-    begin = stop;
-  }
-  // The empty last paragraph has nothing to tag. Hold its format aside.
-  if (end == buffer_->get_char_count() && final_paragraph_empty()) {
-    ParaFormat format = para_at(end);
-    edit(format);
-    pending_para_ = ParaFormat{clamp_indents(format.indents), format.align};
-    pending_para_set_ = true;
+      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start),
+                          buffer_->get_iter_at_offset(end));
+    buffer_->apply_tag(para_tag(format), buffer_->get_iter_at_offset(start),
+                       buffer_->get_iter_at_offset(end));
   }
   buffer_->end_user_action();
   buffer_->select_range(buffer_->get_iter_at_offset(sel_start),
                         buffer_->get_iter_at_offset(sel_end));
   ruler_.queue_draw();
+  text_.queue_draw();
   show_align();
+  sync_list_controls();
   text_.grab_focus();
 }
 
@@ -1802,6 +1881,156 @@ void MainWindow::show_align()
   show(align_center_toggle_, align == Align::Center);
   show(align_right_toggle_, align == Align::Right);
   suppress_format_ = guard;
+}
+
+void MainWindow::toggle_list_kind(ListKind kind)
+{
+  // The toolbar toggles fire when sync_list_controls() sets them, too.
+  if (suppress_format_ || !buffer_)
+    return;
+  apply_paragraphs([kind](std::vector<Paragraph>& paragraphs) { toggle_list(paragraphs, kind); });
+}
+
+bool MainWindow::shift_list_level(int delta)
+{
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  buffer_->get_selection_bounds(start_iter, end_iter);
+  bool any = false;
+  for (int at = paragraph_start(start_iter.get_offset());;) {
+    if (para_at(at).list.kind != ListKind::None)
+      any = true;
+    const int next = paragraph_end(at);
+    if (any || next >= end_iter.get_offset() || next == at)
+      break;
+    at = next;
+  }
+  if (!any)
+    return false;
+  apply_paragraphs([delta](std::vector<Paragraph>& paragraphs) {
+    for (Paragraph& paragraph : paragraphs)
+      set_list_level(paragraph, clamp_list(paragraph.list).level + delta);
+  });
+  return true;
+}
+
+bool MainWindow::on_text_key(GdkEventKey* event)
+{
+  // Word's list keys. Tab and Shift+Tab at the start of a list item, or over
+  // several paragraphs, move it down or up a level. Enter on an empty item
+  // and Backspace at the start of one end the list there.
+  if (!buffer_ || event->type != GDK_KEY_PRESS)
+    return false;
+  const guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  const bool selection = buffer_->get_selection_bounds(start_iter, end_iter);
+  const int caret = cursor_offset();
+  const bool at_start = !selection && paragraph_start(caret) == caret;
+  const bool in_list = para_at(caret).list.kind != ListKind::None;
+  switch (event->keyval) {
+    case GDK_KEY_Tab:
+    case GDK_KEY_KP_Tab:
+    case GDK_KEY_ISO_Left_Tab: {
+      if ((mods & ~static_cast<guint>(GDK_SHIFT_MASK)) != 0)
+        return false;
+      const bool across = selection && paragraph_start(start_iter.get_offset()) !=
+                                           paragraph_start(end_iter.get_offset());
+      if (!(at_start && in_list) && !across)
+        return false;
+      const bool up = (mods & GDK_SHIFT_MASK) != 0 || event->keyval == GDK_KEY_ISO_Left_Tab;
+      return shift_list_level(up ? -1 : 1);
+    }
+    case GDK_KEY_Return:
+    case GDK_KEY_KP_Enter: {
+      if (mods != 0 || !at_start || !in_list)
+        return false;
+      const auto here = buffer_->get_iter_at_offset(caret);
+      if (!here.is_end() && here.get_char() != '\n')
+        return false;
+      toggle_list_kind(para_at(caret).list.kind);
+      return true;
+    }
+    case GDK_KEY_BackSpace:
+      if (mods != 0 || !at_start || !in_list)
+        return false;
+      toggle_list_kind(para_at(caret).list.kind);
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  // List labels are drawn, not typed. They are not in the buffer, so find,
+  // copy, and the file never see them. Each hangs in its paragraph's
+  // first-line indent, in the font of the paragraph's first character.
+  if (!buffer_)
+    return false;
+  const Document doc = capture();
+  const bool any = std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(),
+                               [](const Paragraph& p) { return p.list.kind != ListKind::None; });
+  if (!any)
+    return false;
+  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  Gdk::Rectangle visible;
+  text_.get_visible_rect(visible);
+  const Gdk::RGBA color = text_.get_style_context()->get_color(text_.get_state_flags());
+  int offset = 0;
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    const Paragraph& paragraph = doc.paragraphs[i];
+    int length = 0;
+    for (const Run& run : paragraph.runs)
+      length += static_cast<int>(Glib::ustring(run.text).length());
+    const ListFormat list = clamp_list(paragraph.list);
+    if (list.kind != ListKind::None) {
+      const auto iter = buffer_->get_iter_at_offset(offset);
+      Gdk::Rectangle where;
+      text_.get_iter_location(iter, where);
+      if (where.get_y() + where.get_height() >= visible.get_y() &&
+          where.get_y() <= visible.get_y() + visible.get_height()) {
+        const Run format = paragraph.runs.empty() ? format_of(iter) : paragraph.runs.front();
+        auto layout = text_.create_pango_layout(list_label(list, numbers[i]));
+        Pango::FontDescription desc;
+        desc.set_family(format.font.empty() ? "Sans" : format.font);
+        desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
+        layout->set_font_description(desc);
+        int width = 0;
+        int height = 0;
+        layout->get_pixel_size(width, height);
+        // Buffer x 0 is the page's left edge, as for the tag margins. An
+        // empty last item has no character to carry its tag, so the label
+        // is placed from the indents rather than from the text.
+        const Indents indents = clamp_indents(paragraph.indents);
+        const int x = margin_left() + indent_px(indents.left + indents.first);
+        int wx = 0;
+        int wy = 0;
+        text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
+        cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(),
+                            color.get_alpha());
+        cr->move_to(wx, wy + where.get_height() - height);
+        layout->show_in_cairo_context(cr);
+      }
+    }
+    offset += length + 1;
+  }
+  return false;
+}
+
+void MainWindow::sync_list_controls()
+{
+  // The toolbar's Bullets and Numbering show the caret's paragraph.
+  if (!buffer_)
+    return;
+  const ListKind kind = clamp_list(para_at(cursor_offset()).list).kind;
+  const bool was = suppress_format_;
+  suppress_format_ = true;
+  if (bullets_toggle_ && bullets_toggle_->get_active() != (kind == ListKind::Bullet))
+    bullets_toggle_->set_active(kind == ListKind::Bullet);
+  if (numbering_toggle_ && numbering_toggle_->get_active() != (kind == ListKind::Number))
+    numbering_toggle_->set_active(kind == ListKind::Number);
+  suppress_format_ = was;
 }
 
 void MainWindow::on_paragraph()

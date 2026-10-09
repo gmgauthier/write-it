@@ -16,15 +16,16 @@
 
 namespace writeit {
 
-// What a paragraph tag carries: the paragraph's indents and alignment.
+// What a paragraph tag carries: the paragraph's indents, alignment, and list.
 struct ParaFormat {
   Indents indents;
   Align align = Align::Left;
+  ListFormat list;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
-  return a.indents == b.indents && a.align == b.align;
+  return a.indents == b.indents && a.align == b.align && a.list == b.list;
 }
 
 class MainWindow : public Gtk::ApplicationWindow {
@@ -140,10 +141,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Edits the format of every paragraph the selection touches, each from
   // its own current format.
   void apply_para_edit(const std::function<void(ParaFormat&)>& edit);
+  // The same over all of them at once, for edits such as Bullets that look
+  // at the whole selection.
+  void apply_paragraphs(const std::function<void(std::vector<Paragraph>&)>& edit);
   void apply_align(Align align);
   void on_align_toggled(Align align);
   void show_align();
   void on_paragraph();
+  void toggle_list_kind(ListKind kind);
+  bool shift_list_level(int delta);
+  bool on_text_key(GdkEventKey* event);
+  bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  void sync_list_controls();
 
   void build_find();
   void present_find(bool replace);
@@ -201,6 +210,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bold_item_ = nullptr;
   Gtk::MenuItem* italic_item_ = nullptr;
   Gtk::MenuItem* underline_item_ = nullptr;
+  Gtk::MenuItem* bullets_item_ = nullptr;
+  Gtk::MenuItem* numbering_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
@@ -225,6 +236,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
+  Gtk::ToggleToolButton* bullets_toggle_ = nullptr;
+  Gtk::ToggleToolButton* numbering_toggle_ = nullptr;
 
   std::string save_path_;
   std::string title_name_ = "Untitled";
