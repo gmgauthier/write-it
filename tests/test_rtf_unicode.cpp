@@ -335,6 +335,10 @@ void writer_controls()
   CHECK(rtf.find("a\nb") == std::string::npos);
 }
 
+// The fuzz's rounds. Fixed: no knob, so every run, CI's included, does all
+// of them.
+constexpr int kFuzzRounds = 200000;
+
 void fuzz()
 {
   // Deterministic, offline: a small LCG over RTF-ish tokens and raw bytes.
@@ -350,7 +354,8 @@ void fuzz()
   };
   int bad = 0;
   int raw = 0;
-  for (int round = 0; round < 200000; ++round) {
+  int rounds = 0;
+  for (int round = 0; round < kFuzzRounds; ++round, ++rounds) {
     std::string body;
     const int length = 1 + static_cast<int>(next() % 24);
     for (int k = 0; k < length; ++k)
@@ -368,15 +373,25 @@ void fuzz()
       }
     }
   }
-  std::printf("fuzz: invalid=%d raw-controls-written=%d of 200000\n", bad, raw);
+  std::printf("fuzz: invalid=%d raw-controls-written=%d of %d\n", bad, raw, rounds);
+  // All of them, every run: the round count is fixed, never cut.
+  CHECK(rounds == 200000);
   CHECK(bad == 0);
   CHECK(raw == 0);
 }
 
 }  // namespace
 
-int main()
+// Two meson tests share this file. With no argument it runs the
+// deterministic checks, which are quick under any sanitiser; with "fuzz" it
+// runs the 200,000-round fuzz, which takes about 20 s under ASan and UBSan
+// and has its own timeout (meson.build). Each names its exact check count.
+int main(int argc, char** argv)
 {
+  if (argc > 1 && std::string(argv[1]) == "fuzz") {
+    fuzz();
+    return suite_test::done("rtf-unicode-fuzz", 3);
+  }
   scalar_values();
   surrogates();
   fallback_skips();
@@ -385,6 +400,5 @@ int main()
   font_table();
   control_characters();
   writer_controls();
-  fuzz();
-  return suite_test::done("rtf-unicode");
+  return suite_test::done("rtf-unicode", 243);
 }
