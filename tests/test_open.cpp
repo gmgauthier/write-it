@@ -129,6 +129,46 @@ void missing_files_last()
   CHECK(is(plan, 0, OpenStep::LoadInto, 0, "/d/missing.rtf"));
 }
 
+void imports_are_found_again()
+{
+  // An imported .txt or .md keeps no save path (Save writes a new .rtf), but
+  // the window remembers where it came from: asking for it again brings
+  // that window forward instead of importing a second copy.
+  const WindowState notes{"", false, "/d/n.txt"};
+  auto plan = plan_open({"/d/n.txt"}, {notes});
+  CHECK(plan.size() == 1);
+  CHECK(is(plan, 0, OpenStep::Present, 0, "/d/n.txt"));
+  plan = plan_open({"/d/m.md", "/d/n.txt"}, {kPristine, notes});
+  CHECK(plan.size() == 2);
+  CHECK(is(plan, 0, OpenStep::LoadInto, 0, "/d/m.md"));
+  CHECK(is(plan, 1, OpenStep::Present, 1, "/d/n.txt"));
+  // Another file of the same name elsewhere is another file.
+  plan = plan_open({"/e/n.txt"}, {notes});
+  CHECK(is(plan, 0, OpenStep::LoadNew, -1, "/e/n.txt"));
+}
+
+void refusals_name_the_uri()
+{
+  auto plan = plan_open({writeit::OpenRequest{"", "sftp://example.org/x.rtf"}}, {});
+  CHECK(plan.size() == 1);
+  CHECK(step_is(plan, 0, OpenStep::RefuseNotLocal));
+  CHECK(plan.size() == 1 && plan[0].uri == "sftp://example.org/x.rtf");
+}
+
+void messages()
+{
+  // Word-style, naming the file; the name, not the whole path, for a local
+  // file, and the URI for a remote one.
+  CHECK(writeit::missing_message("/home/greg/docs/missing.rtf") ==
+        "Could not find the file \u201cmissing.rtf\u201d.");
+  CHECK(writeit::unreadable_message("/home/greg/docs/broken.rtf") ==
+        "Could not open the file \u201cbroken.rtf\u201d.");
+  CHECK(writeit::missing_message("/tmp/a b \u00e9.rtf") ==
+        "Could not find the file \u201ca b \u00e9.rtf\u201d.");
+  CHECK(writeit::not_local_message("sftp://example.org/x.rtf") ==
+        "Write-It can only open files on this computer: sftp://example.org/x.rtf");
+}
+
 void failed_windows_close()
 {
   // A window made for a file that failed is closed when another window is
@@ -171,6 +211,9 @@ int main()
   documents_are_never_replaced();
   not_local();
   missing_files_last();
+  imports_are_found_again();
+  refusals_name_the_uri();
+  messages();
   failed_windows_close();
   recent_files();
   return suite_test::done("open", kMinChecks);

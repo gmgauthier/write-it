@@ -34,21 +34,21 @@ void Application::on_activate()
 
 void Application::on_open(const type_vec_files& files, const Glib::ustring&)
 {
-  std::vector<std::string> paths;
-  paths.reserve(files.size());
+  std::vector<OpenRequest> requests;
+  requests.reserve(files.size());
   for (const auto& file : files)
-    paths.push_back(file->get_path());  // "" when the file has no local path
+    requests.emplace_back(file->get_path(), file->get_uri());  // path "" when not local
   // Open from the main loop, not here: an error dialog would otherwise hold
   // a second launch, which waits for this call to return. The hold keeps
   // the program running until then, even with no window yet.
   hold();
-  Glib::signal_idle().connect_once([this, paths] {
-    open_paths(paths);
+  Glib::signal_idle().connect_once([this, requests] {
+    open_paths(requests);
     release();
   });
 }
 
-void Application::open_paths(const std::vector<std::string>& paths)
+void Application::open_paths(const std::vector<OpenRequest>& requests)
 {
   std::vector<MainWindow*> windows;
   std::vector<WindowState> states;
@@ -65,7 +65,7 @@ void Application::open_paths(const std::vector<std::string>& paths)
   const auto exists = [](const std::string& path) {
     return Glib::file_test(path, Glib::FILE_TEST_EXISTS);
   };
-  for (const OpenAction& action : plan_open(paths, states, exists)) {
+  for (const OpenAction& action : plan_open(requests, states, exists)) {
     switch (action.step) {
       case OpenStep::Present:
         windows[static_cast<size_t>(action.window)]->present();

@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace writeit {
@@ -17,6 +18,30 @@ namespace writeit {
 struct WindowState {
   std::string path;       // the RTF file it saves to, or "" (Untitled or an import)
   bool pristine = false;  // Untitled, never edited: a new launch's empty window
+  std::string source{};   // the .md or .txt it was imported from, or ""
+};
+
+// A file handed to the program: its local path ("" when it has none) and
+// its URI, which names it in a refusal.
+struct OpenRequest {
+  std::string path;
+  std::string uri;
+  OpenRequest(std::string p, std::string u)
+      : path(std::move(p)),
+        uri(std::move(u))
+  {
+  }
+  // A local file, named by its path.
+  OpenRequest(const std::string& p)
+      : path(p),
+        uri(p)
+  {
+  }  // NOLINT: implicit on purpose
+  OpenRequest(const char* p)
+      : path(p),
+        uri(p)
+  {
+  }  // NOLINT: implicit on purpose
 };
 
 enum class OpenStep {
@@ -30,16 +55,18 @@ struct OpenAction {
   OpenStep step;
   int window = -1;  // index into the windows given, for Present and LoadInto
   std::string path;
+  std::string uri{};  // for RefuseNotLocal
 };
 
-// One action per requested file. `paths` are local paths from
-// Gio::File::get_path(), "" for a file with none. A file already open, or
+// One action per requested file. A request's path comes from
+// Gio::File::get_path(), "" for a file with none. A file already open
+// (saved to, or imported from, that path), or
 // asked for twice, is presented rather than loaded again. Each pristine
 // window may take one file; the others get new windows. Files that exist
 // come first, in order, then refusals, then missing files, so the error
 // dialogs come after everything that could be opened.
 std::vector<OpenAction> plan_open(
-    const std::vector<std::string>& paths, const std::vector<WindowState>& windows,
+    const std::vector<OpenRequest>& requests, const std::vector<WindowState>& windows,
     const std::function<bool(const std::string&)>& exists = [](const std::string&) {
       return true;
     });
@@ -50,5 +77,12 @@ std::vector<OpenAction> plan_open(
 // them while any other window remains, else all but the first, so the
 // program always has a window to show its error in.
 std::vector<bool> close_after_open(int existing_windows, const std::vector<bool>& created_failed);
+
+// The open errors, Word-style, naming the file: by its name for a local
+// file, by its URI for one with no local path. File > Open, Open Recent and
+// the command line all say these.
+std::string missing_message(const std::string& path);
+std::string unreadable_message(const std::string& path);
+std::string not_local_message(const std::string& uri);
 
 }  // namespace writeit

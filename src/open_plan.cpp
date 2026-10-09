@@ -6,7 +6,7 @@
 
 namespace writeit {
 
-std::vector<OpenAction> plan_open(const std::vector<std::string>& paths,
+std::vector<OpenAction> plan_open(const std::vector<OpenRequest>& requests,
                                   const std::vector<WindowState>& windows,
                                   const std::function<bool(const std::string&)>& exists)
 {
@@ -35,17 +35,18 @@ std::vector<OpenAction> plan_open(const std::vector<std::string>& paths,
   };
 
   std::vector<std::string> missing;
-  int refusals = 0;
-  for (const std::string& path : paths) {
+  std::vector<std::string> refusals;
+  for (const OpenRequest& request : requests) {
+    const std::string& path = request.path;
     if (path.empty())
-      ++refusals;
+      refusals.push_back(request.uri);
     else if (exists(path))
       plan_file(path);
     else
       missing.push_back(path);
   }
-  for (int i = 0; i < refusals; ++i)
-    actions.push_back({OpenStep::RefuseNotLocal, -1, {}});
+  for (const std::string& uri : refusals)
+    actions.push_back({OpenStep::RefuseNotLocal, -1, {}, uri});
   for (const std::string& path : missing)
     plan_file(path);
   return actions;
@@ -64,6 +65,21 @@ std::vector<bool> close_after_open(int existing_windows, const std::vector<bool>
       *first = false;
   }
   return close;
+}
+
+std::string missing_message(const std::string&)
+{
+  return "That file is missing.";
+}
+
+std::string unreadable_message(const std::string&)
+{
+  return "That file could not be opened.";
+}
+
+std::string not_local_message(const std::string&)
+{
+  return "Write-It can only open files on this computer.";
 }
 
 }  // namespace writeit

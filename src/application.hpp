@@ -10,6 +10,7 @@
 namespace writeit {
 
 class MainWindow;
+struct OpenRequest;
 
 class Application : public Gtk::Application {
  public:
@@ -24,7 +25,7 @@ class Application : public Gtk::Application {
 
  private:
   MainWindow* new_window();
-  void open_paths(const std::vector<std::string>& paths);
+  void open_paths(const std::vector<OpenRequest>& requests);
 };
 
 }  // namespace writeit

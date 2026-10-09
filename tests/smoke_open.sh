@@ -189,6 +189,13 @@ stop
 # 4. Plain text imports, as File > Open does.
 start plain plain.txt
 wait_title "Write-It - plain.txt *" || fail "plain: plain.txt did not open"
+# An import has no save path, but asking for it again must find its window,
+# not import a second copy.
+(cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/plain/config" GTK_A11Y=none timeout 20 \
+  "$BIN" plain.txt) >"$WORK/plain/remote.log" 2>&1
+sleep 1
+[ "$(count_title "Write-It - plain.txt *")" = 1 ] || fail "plain: plain.txt opened twice"
+alive || fail "plain: the program exited"
 stop
 
 # 5. A missing file: the program stays up with one usable window and the
