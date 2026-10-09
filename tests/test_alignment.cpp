@@ -179,8 +179,8 @@ void markdown()
 
 }  // namespace
 
-// The CHECK lines in this file; loops run several of them many times.
-constexpr int kMinChecks = 49;
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 71;
 
 int main()
 {
@@ -189,5 +189,5 @@ int main()
   rtf_round_trip();
   rtf_read();
   markdown();
-  return suite_test::done("alignment", kMinChecks);
+  return suite_test::done("alignment", kChecks);
 }

@@ -375,8 +375,8 @@ void fuzz()
 
 }  // namespace
 
-// The CHECK lines in this file; loops run several of them many times.
-constexpr int kMinChecks = 97;
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 245;
 
 int main()
 {
@@ -389,5 +389,5 @@ int main()
   control_characters();
   writer_controls();
   fuzz();
-  return suite_test::done("rtf-unicode", kMinChecks);
+  return suite_test::done("rtf-unicode", kChecks);
 }

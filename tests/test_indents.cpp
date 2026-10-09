@@ -292,8 +292,8 @@ void dialog_validation()
 
 }  // namespace
 
-// The CHECK lines in this file; loops run several of them many times.
-constexpr int kMinChecks = 82;
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 1594;
 
 int main()
 {
@@ -303,5 +303,5 @@ int main()
   rtf_read();
   markdown();
   dialog_validation();
-  return suite_test::done("indents", kMinChecks);
+  return suite_test::done("indents", kChecks);
 }

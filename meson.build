@@ -83,24 +83,24 @@ test('guard-no-count-fails', check_guard, args: ['no-count'], should_fail: true)
 test('guard-exact-passes', check_guard, args: ['exact'])
 # The header's text goes into the probe itself, so editing check.hpp
 # reconfigures and the probe is never answered from meson's cache.
-done_without_minimum = meson.get_compiler('cpp').compiles(
+done_without_count = meson.get_compiler('cpp').compiles(
   import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x"); }\n',
   args: ['-std=c++17'],
-  name: 'suite_test::done() without a minimum',
+  name: 'suite_test::done() without a count',
 )
-# The control: with a minimum it compiles, so the NO above is about the
-# missing minimum and nothing else.
+# The control: with a count it compiles, so the NO above is about the
+# missing count and nothing else.
 assert(
   meson.get_compiler('cpp').compiles(
     import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x", 1); }\n',
     args: ['-std=c++17'],
-    name: 'suite_test::done() with a minimum',
+    name: 'suite_test::done() with a count',
   ),
-  'check.hpp does not compile with a minimum either',
+  'check.hpp does not compile with a count either',
 )
 test(
-  'guard-minimum-required',
-  find_program(done_without_minimum ? 'false' : 'true'),
+  'guard-count-required',
+  find_program(done_without_count ? 'false' : 'true'),
 )
 
 write_it_view_tests = executable(

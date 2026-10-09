@@ -19,8 +19,8 @@ writeit::Run run(const char* text, const char* font, int size, bool bold, bool i
 
 }  // namespace
 
-// Every check here runs once.
-constexpr int kMinChecks = 43;
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 43;
 
 int main()
 {
@@ -113,5 +113,5 @@ int main()
   CHECK(heading_rtf.paragraphs[0].heading == 2);
   CHECK(heading_rtf.paragraphs[0].runs[0].text == "Section");
 
-  return suite_test::done("document", kMinChecks);
+  return suite_test::done("document", kChecks);
 }

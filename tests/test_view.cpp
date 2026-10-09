@@ -91,8 +91,8 @@ void mode_names()
 
 }  // namespace
 
-// The CHECK lines in this file; loops run several of them many times.
-constexpr int kMinChecks = 35;
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 63;
 
 int main()
 {
@@ -100,5 +100,5 @@ int main()
   draft();
   indents_scale();
   mode_names();
-  return suite_test::done("view", kMinChecks);
+  return suite_test::done("view", kChecks);
 }
