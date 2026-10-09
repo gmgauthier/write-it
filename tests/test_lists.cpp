@@ -849,7 +849,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 243;
+constexpr int kChecks = 251;
 
 int main()
 {
