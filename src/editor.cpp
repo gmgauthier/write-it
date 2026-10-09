@@ -179,8 +179,8 @@ bool parse_para(const std::string& name, ParaFormat& format)
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 10 || values[3] < 0 || values[3] > 2 || values[4] < 0 ||
-      values[4] > static_cast<int>(ListKind::Number))
+  if (values.size() != 10 || values[3] < 0 || values[3] > static_cast<int>(Align::Justify) ||
+      values[4] < 0 || values[4] > static_cast<int>(ListKind::Number))
     return false;
   format.indents.left = values[0];
   format.indents.right = values[1];
@@ -391,12 +391,16 @@ void MainWindow::connect_format()
     align_center_toggle_->signal_toggled().connect([this] { on_align_toggled(Align::Center); });
   if (align_right_toggle_)
     align_right_toggle_->signal_toggled().connect([this] { on_align_toggled(Align::Right); });
+  if (justify_toggle_)
+    justify_toggle_->signal_toggled().connect([this] { on_align_toggled(Align::Justify); });
   if (align_left_item_)
     align_left_item_->signal_activate().connect([this] { apply_align(Align::Left); });
   if (align_center_item_)
     align_center_item_->signal_activate().connect([this] { apply_align(Align::Center); });
   if (align_right_item_)
     align_right_item_->signal_activate().connect([this] { apply_align(Align::Right); });
+  if (justify_item_)
+    justify_item_->signal_activate().connect([this] { apply_align(Align::Justify); });
   if (bullets_toggle_)
     bullets_toggle_->signal_toggled().connect([this] { toggle_list_kind(ListKind::Bullet); });
   if (numbering_toggle_)
@@ -1595,6 +1599,8 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
     tag->property_justification() = Gtk::JUSTIFY_CENTER;
   else if (format.align == Align::Right)
     tag->property_justification() = Gtk::JUSTIFY_RIGHT;
+  else if (format.align == Align::Justify)
+    tag->property_justification() = Gtk::JUSTIFY_FILL;
   const Indents& indents = format.indents;
   if (format.list.kind != ListKind::None) {
     // A list item's label is drawn in the hang (on_text_draw), so its first
@@ -1863,12 +1869,13 @@ void MainWindow::on_align_toggled(Align align)
 {
   if (suppress_format_)
     return;
-  // The three buttons act as one group, as in Word 97. Pressing the button
-  // already down leaves the paragraph as it is, except Center and Align
-  // Right, which go back to left.
-  Gtk::ToggleToolButton* button = align == Align::Center  ? align_center_toggle_
-                                  : align == Align::Right ? align_right_toggle_
-                                                          : align_left_toggle_;
+  // The four buttons act as one group, as in Word 97. Pressing the button
+  // already down leaves the paragraph as it is, except Center, Align Right
+  // and Justify, which go back to left.
+  Gtk::ToggleToolButton* button = align == Align::Center    ? align_center_toggle_
+                                  : align == Align::Right   ? align_right_toggle_
+                                  : align == Align::Justify ? justify_toggle_
+                                                            : align_left_toggle_;
   if (button && !button->get_active())
     align = Align::Left;
   apply_align(align);
@@ -1888,6 +1895,7 @@ void MainWindow::show_align()
   show(align_left_toggle_, align == Align::Left);
   show(align_center_toggle_, align == Align::Center);
   show(align_right_toggle_, align == Align::Right);
+  show(justify_toggle_, align == Align::Justify);
   suppress_format_ = guard;
 }
 
@@ -2149,6 +2157,7 @@ void MainWindow::on_paragraph()
   alignment->append("Left");
   alignment->append("Centered");
   alignment->append("Right");
+  alignment->append("Justified");
   alignment->set_active(static_cast<int>(current_align));
   auto* align_row = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 12));
   align_row->set_margin_top(12);

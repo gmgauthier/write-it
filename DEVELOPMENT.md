@@ -10,7 +10,7 @@ Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.co
 
 ## Status (2026-10-09)
 
-**M1, with M2 under way.** Typing, font, size, bold, italic, underline, undo, find and replace, and RTF open and save are in this tree, on the M0 window. Recent files, plain-text import, and Markdown import and export cover headings, paragraphs, bold, and italic. From M2, paragraph indents (left, right, and first line or hanging) are in: Format → Paragraph… sets them, the ruler marks them, and RTF round-trips them as `\li`, `\ri`, and `\fi`. The dialog speaks the measurement units from Tools → Options…, inches (the default) or centimetres. The file keeps twips. Alignment is in too: Format → Align Left, Center, and Align Right, the matching toolbar toggles (which follow the caret), and the Paragraph dialog set it, and RTF writes `\qc` and `\qr` (left is the default and is not written). There is no justified, so `\qj` reads as left. View → Draft is in: the same text without the sheet, its shadow, or the gray pasteboard, wrapped at the page’s text width so lines break where they print, with indents and alignment as on the page. Page stays the default and the view that prints, and the choice is not saved: every launch opens in Page. Bulleted and numbered lists are in too: Format → Bullets and Format → Numbering, and the matching format-toolbar toggles, apply a list to the selected paragraphs or take it off. A list sits on the indents, half an inch per level with the label hanging a quarter inch. Tab and Shift+Tab at the start of an item change its level, Enter on an empty item and Backspace at the start of one end the list there. Numbers restart after a plain paragraph. RTF round-trips lists as `\listtable`, `\listoverridetable`, `\ls`, and `\ilvl`, with a `\pntext` label for readers without lists, and reads Word 6/95’s `\pn` as well. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
+**M1, with M2 under way.** Typing, font, size, bold, italic, underline, undo, find and replace, and RTF open and save are in this tree, on the M0 window. Recent files, plain-text import, and Markdown import and export cover headings, paragraphs, bold, and italic. From M2, paragraph indents (left, right, and first line or hanging) are in: Format → Paragraph… sets them, the ruler marks them, and RTF round-trips them as `\li`, `\ri`, and `\fi`. The dialog speaks the measurement units from Tools → Options…, inches (the default) or centimetres. The file keeps twips. Alignment is in too, as Word 97 has it: Format → Align Left, Center, Align Right, and Justify, the matching toolbar toggles (which follow the caret), and the Paragraph dialog (Left, Centered, Right, Justified) set it. Justify spreads every line but a paragraph’s last to both indents. RTF writes `\qc`, `\qr`, and `\qj` (left is the default and is not written), and reads them back from Word and LibreOffice files. `\qd`, East Asian Word’s distributed, reads as left. View → Draft is in: the same text without the sheet, its shadow, or the gray pasteboard, wrapped at the page’s text width so lines break where they print, with indents and alignment as on the page. Page stays the default and the view that prints, and the choice is not saved: every launch opens in Page. Bulleted and numbered lists are in too: Format → Bullets and Format → Numbering, and the matching format-toolbar toggles, apply a list to the selected paragraphs or take it off. A list sits on the indents, half an inch per level with the label hanging a quarter inch. Tab and Shift+Tab at the start of an item change its level, Enter on an empty item and Backspace at the start of one end the list there. Numbers restart after a plain paragraph. RTF round-trips lists as `\listtable`, `\listoverridetable`, `\ls`, and `\ilvl`, with a `\pntext` label for readers without lists, and reads Word 6/95’s `\pn` as well. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -61,7 +61,7 @@ The page sits on a neutral gray pasteboard, `#808080`.
 | File  Edit  View  Insert  Format  Tools  Table  Help             |
 +------------------------------------------------------------------+
 | [New] [Open] [Save] | [Print] | [Cut] [Copy] [Paste] | [Undo] [Redo]
-| [Font ▾] [Size ▾] [B] [I] [U] | [Left] [Center] [Right] | [Style ▾]
+| [Font ▾] [Size ▾] [B] [I] [U] | [Left] [Center] [Right] [Justify] | [Style ▾]
 +------------------------------------------------------------------+
 | ruler                                                            |
 |                                                                  |
@@ -73,7 +73,7 @@ The page sits on a neutral gray pasteboard, `#808080`.
 +------------------------------------------------------------------+
 ```
 
-Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
+Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-justify-fill`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
 
 Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items.
 
@@ -126,7 +126,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
 
-**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline. No colour in v1.
+**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline. No colour in v1.
 
 The font list and the size list match the other two apps. Sizes are 8, 9, 10, 11, 12, 14, 16, 18, 24, 36. A new document starts at Sans 11.
 
@@ -144,7 +144,7 @@ The only keyboard is the Word 97 map in the menus above. WordPerfect 5.1’s fun
 
 The standard toolbar never grows an app-specific button. Groups, left to right: New Open Save, Print, Cut Copy Paste, Undo Redo.
 
-The format toolbar: font, size, bold, italic, underline, align left, align center, align right, then a separator, then the style combo, bullets, and numbering.
+The format toolbar: font, size, bold, italic, underline, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering.
 
 View → Side by side is on by default, so the two toolbars share one row. Turning it off stacks them, with the standard toolbar above the format toolbar.
 
