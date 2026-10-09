@@ -18,6 +18,7 @@
 #include <gtkmm.h>
 
 #include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <map>
 #include <string>
@@ -72,6 +73,22 @@ struct MainWindowProbe {
   static long evaluated(MainWindow& w)
   {
     return w.list_tabs_evaluated_;
+  }
+  static long updates(MainWindow& w)
+  {
+    return w.list_updates_;
+  }
+  // Deletes the paragraph break at the end of paragraph `line`, as Delete
+  // does there: the next item's text joins this one.
+  static void delete_break(MainWindow& w, int line)
+  {
+    auto start = w.buffer_->get_iter_at_line(line);
+    start.forward_to_line_end();
+    auto end = start;
+    end.forward_char();
+    w.buffer_->begin_user_action();
+    w.buffer_->erase_interactive(start, end, true);
+    w.buffer_->end_user_action();
   }
   // Enter at the end of paragraph `line`, as one user action.
   static void enter_at_end(MainWindow& w, int line)
@@ -208,6 +225,76 @@ bool all_placed(writeit::MainWindow& w, int items)
   return true;
 }
 
+// Nothing changes while the window sits idle: no list update runs, so a
+// list on screen costs no CPU. Two seconds of the main loop, idles and
+// timers included.
+void idle(writeit::MainWindow& w, const char* what)
+{
+  settle();
+  const long before = MainWindowProbe::updates(w);
+  const std::clock_t cpu = std::clock();
+  const gint64 until = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+  auto context = Glib::MainContext::get_default();
+  while (g_get_monotonic_time() < until) {
+    if (context->pending())
+      context->iteration(false);
+    else
+      g_usleep(10000);
+  }
+  const double used = static_cast<double>(std::clock() - cpu) / CLOCKS_PER_SEC;
+  std::cout << "  idle 2 s, " << what << ": " << MainWindowProbe::updates(w) - before
+            << " list updates, " << used << " s CPU\n";
+  CHECK(MainWindowProbe::updates(w) == before);
+}
+
+// Renumbering across 9 and 10 both ways: Enter makes a tenth item, whose
+// wider label sends its text to the next stop; Delete of a paragraph break
+// takes it back to nine, and "9." lets its text back to the hang. Undo
+// either way puts the other back.
+void crossing(const std::string& home)
+{
+  writeit::Document doc;
+  for (int i = 0; i < 9; ++i)
+    doc.paragraphs.push_back(numbered("Item", 1, 1));
+  const std::string path = Glib::build_filename(home, "nine.rtf");
+  Glib::file_set_contents(path, writeit::rtf_export(doc));
+  writeit::MainWindow window;
+  window.show();
+  settle();
+  MainWindowProbe::open(window, path);
+  settle();
+  const writeit::Indents in = writeit::list_indents(0);
+  const int hang = MainWindowProbe::px(window, in.left);
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  idle(window, "nine items");
+
+  // 9 to 10 with Enter.
+  MainWindowProbe::enter_at_end(window, 2);
+  settle();
+  CHECK(all_placed(window, 10) && MainWindowProbe::text_x(window, 9) > hang);
+  // 10 to 9 with Delete.
+  MainWindowProbe::delete_break(window, 2);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  // And back with undo: 9 to 10, then Enter's undo, 10 to 9.
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, 10) && MainWindowProbe::text_x(window, 9) > hang);
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  // 10 to 9 with Delete at an item's own break, the tenth's text joining.
+  MainWindowProbe::enter_at_end(window, 8);
+  settle();
+  CHECK(all_placed(window, 10) && MainWindowProbe::text_x(window, 9) > hang);
+  MainWindowProbe::delete_break(window, 8);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  window.hide();
+  settle();
+  g_remove(path.c_str());
+}
+
 // A long list: typing in one item looks again at that item only, not the
 // whole document, while Enter (which renumbers the items below), undo and
 // zoom still leave every item's text in the right place.
@@ -251,6 +338,7 @@ void long_list(const std::string& home)
   CHECK(all_placed(window, kItems));
   MainWindowProbe::zoom(window, 100);
   settle();
+  idle(window, "2000 items");
   window.hide();
   settle();
   g_remove(path.c_str());
@@ -258,7 +346,7 @@ void long_list(const std::string& home)
 
 }  // namespace
 
-constexpr int kChecks = 44;
+constexpr int kChecks = 53;
 
 int main(int argc, char* argv[])
 {
@@ -307,6 +395,7 @@ int main(int argc, char* argv[])
     settle();
   }
 
+  crossing(home);
   long_list(home);
 
   g_remove(path.c_str());

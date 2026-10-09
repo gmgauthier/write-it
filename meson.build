@@ -253,6 +253,15 @@ write_it_page_width_tests = executable(
 )
 test('page-width', write_it_page_width_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: where list labels land beside centred,
+# right-aligned and left-aligned text, with a non-standard hang.
+write_it_list_labels_tests = executable(
+  'write-it-list-labels-tests',
+  'tests/test_list_labels.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-labels', write_it_list_labels_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: every way the caret moves (Ctrl+End,
 # arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
 # pasteboard scrolls to keep it in view.

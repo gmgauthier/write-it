@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <map>
 #include <iterator>
 
@@ -507,6 +508,38 @@ bool operator==(const Document& a, const Document& b)
   // And the numbers they show, which is where the starts matter.
   return !numbered || (list_ids(a.paragraphs) == list_ids(b.paragraphs) &&
                        list_numbers(a.paragraphs) == list_numbers(b.paragraphs));
+}
+
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap)
+{
+  // Only centred and right-aligned text moves; anything else, Justify when
+  // it lands included, starts at the indent like Left.
+  if (align != Align::Center && align != Align::Right)
+    return hang_x;
+  const int width = std::max(0, label_width);
+  const int before = std::max(std::max(0, space), width + std::max(0, gap));
+  return std::max(0, text_x - before);
+}
+
+int list_centre_from(Align align, int hang_x, int label_width, int space, int gap)
+{
+  if (align != Align::Center)
+    return -1;
+  const long long before = std::max<long long>(
+      std::max(0, space), static_cast<long long>(std::max(0, label_width)) + std::max(0, gap));
+  return static_cast<int>(std::min<long long>(std::max(0, hang_x) + before, INT_MAX));
+}
+
+int list_text_start(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return std::max(indents.left, indents.left + indents.first + kListHang);
+}
+
+int list_label_space(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return list_text_start(indents) - (indents.left + indents.first);
 }
 
 Document blank_document(const std::string& font, int size)

@@ -8,6 +8,7 @@
 #include "check.hpp"
 #include "document.hpp"
 
+#include <climits>
 #include <string>
 #include <vector>
 
@@ -853,6 +854,77 @@ void rtf_hostile()
   }
 }
 
+void label_position()
+{
+  using writeit::Align;
+  using writeit::list_label_x;
+  // Left-aligned: the label stays in the hang, wherever the text starts.
+  CHECK(list_label_x(Align::Left, 100, 124, 8, 24, 4) == 100);
+  CHECK(list_label_x(Align::Left, 100, 400, 40, 24, 4) == 100);
+  // Centred and right-aligned: the label moves with the text, a hang's width
+  // before the first character, not back at the left indent.
+  CHECK(list_label_x(Align::Center, 100, 400, 8, 24, 4) == 376);
+  CHECK(list_label_x(Align::Right, 100, 700, 8, 24, 4) == 676);
+  // A label wider than the hang ("viii.") ends `gap` before the text.
+  CHECK(list_label_x(Align::Center, 100, 400, 40, 24, 4) == 356);
+  CHECK(list_label_x(Align::Right, 100, 700, 40, 24, 4) == 656);
+  // Text pushed against the left edge cannot push the label off the page.
+  CHECK(list_label_x(Align::Center, 0, 10, 8, 24, 4) == 0);
+  // Hostile sizes: negative widths count as nothing.
+  CHECK(list_label_x(Align::Right, 100, 400, -50, -24, -4) == 400);
+  // Only centred and right-aligned text moves the label. Every other
+  // alignment, Justify included when it lands (Align has no value for it yet,
+  // so values past Right stand in for it), keeps the label in the hang like
+  // Left: here a non-standard hang at 37, where moving would give 376.
+  CHECK(list_label_x(static_cast<Align>(3), 37, 400, 8, 24, 4) == 37);
+  CHECK(list_label_x(static_cast<Align>(4), 37, 400, 40, 24, 4) == 37);
+  CHECK(list_label_x(static_cast<Align>(3), 37, 400, 8, 24, 4) ==
+        list_label_x(Align::Left, 37, 400, 8, 24, 4));
+
+  // A centred item's text is centred from its first-line indent plus the
+  // label's room, the paragraph's own hang or the label and a space when
+  // that is wider.
+  using writeit::list_centre_from;
+  CHECK(list_centre_from(Align::Center, 100, 8, 24, 4) == 124);
+  CHECK(list_centre_from(Align::Center, 100, 20, 24, 4) == 124);
+  CHECK(list_centre_from(Align::Center, 100, 28, 24, 4) == 132);
+  // Only centred items: right-aligned text ends at the right indent
+  // whatever the label, and Left and Justify keep the label in the hang.
+  CHECK(list_centre_from(Align::Right, 100, 40, 24, 4) == -1);
+  CHECK(list_centre_from(Align::Left, 100, 40, 24, 4) == -1);
+  CHECK(list_centre_from(static_cast<Align>(3), 100, 40, 24, 4) == -1);
+  // Hostile sizes neither go negative nor overflow.
+  CHECK(list_centre_from(Align::Center, -5, -5, -24, -4) == 0);
+  CHECK(list_centre_from(Align::Center, INT_MAX, INT_MAX, 24, INT_MAX) >= 0);
+  {
+    // Column 100..500, room 24, label 28 + gap 4, text 100 wide. GTK centres
+    // the text from list_centre_from() to the right indent; the unit's
+    // midpoint is the column's.
+    const int from = list_centre_from(Align::Center, 100, 28, 24, 4);
+    const int text_x = (from + 500 - 100) / 2;
+    const int label_x = list_label_x(Align::Center, 100, text_x, 28, 24, 4);
+    CHECK((label_x + text_x + 100) / 2 == 300);
+  }
+
+  // The room the label gets before the text is the paragraph's own hang,
+  // never less than the standard quarter inch: where the text starts.
+  using writeit::list_label_space;
+  using writeit::list_text_start;
+  CHECK(list_label_space(Indents{720, 0, -360}) == 360);
+  CHECK(list_text_start(Indents{720, 0, -360}) == 720);
+  // A 0.75" hang: 1080 twips, and the text at the left indent.
+  CHECK(list_label_space(Indents{1440, 0, -1080}) == 1080);
+  CHECK(list_text_start(Indents{1440, 0, -1080}) == 1440);
+  // A hang smaller than the standard one, none, or a first line indented:
+  // the text starts a standard hang past the label.
+  CHECK(list_label_space(Indents{720, 0, -200}) == 360);
+  CHECK(list_text_start(Indents{720, 0, -200}) == 880);
+  CHECK(list_label_space(Indents{720, 0, 0}) == 360);
+  CHECK(list_label_space(Indents{720, 0, 200}) == 360);
+  // A hostile hang past the left margin is clamped first.
+  CHECK(list_label_space(Indents{100, 0, -5000}) == 360);
+}
+
 // Word 97's rule: a numbered list keeps counting until it is restarted.
 void continuing()
 {
@@ -1233,7 +1305,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 356;
+constexpr int kChecks = 385;
 
 int main()
 {
@@ -1246,6 +1318,7 @@ int main()
   rtf_round_trip();
   rtf_read();
   rtf_hostile();
+  label_position();
   continuing();
   starting();
   markdown();
