@@ -513,7 +513,8 @@ void MainWindow::scroll_to_caret()
     v->set_value(std::max(v->get_lower(), v->get_upper() - v->get_page_size()));
   else
     reveal(v, y, rect.get_height());
-  reveal(paste_.get_hadjustment(), x, std::max(1, rect.get_width()));
+  // Vertical only for now. Sideways following waits until the window can
+  // be narrow enough to test it (#16).
 }
 
 void MainWindow::build_status()
