@@ -246,6 +246,50 @@ void markdown()
   CHECK(plain.paragraphs[0].indents == writeit::Indents{});
 }
 
+// Bug Basher: a hanging indent larger than Left used to shrink silently.
+// Word 97 refuses it in the Paragraph dialog instead; indents_fit is that
+// check. The model clamp stays as a safety net for RTF input.
+writeit::Indents indents(int left, int right, int first)
+{
+  writeit::Indents value;
+  value.left = left;
+  value.right = right;
+  value.first = first;
+  return value;
+}
+
+void dialog_validation()
+{
+  using writeit::Units;
+  using writeit::indents_fit;
+  // Boundary: hanging exactly to the margin is fine, one twip past is not.
+  CHECK(indents_fit(indents(720, 0, -720)));
+  CHECK(!indents_fit(indents(720, 0, -721)));
+  CHECK(indents_fit(indents(0, 0, 0)));
+  CHECK(!indents_fit(indents(0, 0, -1)));
+  // Left 0 with a positive first line is fine, and so is any first line.
+  CHECK(indents_fit(indents(0, 0, 360)));
+  CHECK(indents_fit(indents(0, 0, writeit::kMaxIndent)));
+  CHECK(indents_fit(indents(1440, 720, 720)));
+  CHECK(indents_fit(indents(0, writeit::kMaxIndent, 0)));
+  // Both units, the way the dialog builds them.
+  auto hanging = [](double left, double by, Units units) {
+    const int left_twips = writeit::units_to_twips(left, units);
+    const int by_twips = writeit::units_to_twips(by, units);
+    return indents(left_twips, 0, -writeit::hang_twips(by, by_twips, left_twips, left, units));
+  };
+  CHECK(indents_fit(hanging(1.0, 1.0, Units::Inches)));
+  CHECK(indents_fit(hanging(1.0, 0.99, Units::Inches)));
+  CHECK(!indents_fit(hanging(1.0, 1.01, Units::Inches)));
+  CHECK(indents_fit(hanging(2.54, 2.54, Units::Centimetres)));
+  CHECK(indents_fit(hanging(2.49, 2.49, Units::Centimetres)));
+  CHECK(!indents_fit(hanging(2.54, 2.55, Units::Centimetres)));
+  CHECK(!indents_fit(hanging(0.0, 0.5, Units::Inches)));
+  CHECK(!indents_fit(hanging(0.0, 1.27, Units::Centimetres)));
+  // The model clamp is unchanged: RTF can still say anything.
+  CHECK(writeit::clamp_indents(indents(720, 0, -1440)) == indents(720, 0, -720));
+}
+
 }  // namespace
 
 int main()
@@ -255,5 +299,6 @@ int main()
   rtf_round_trip();
   rtf_read();
   markdown();
+  dialog_validation();
   return suite_test::done("indents");
 }

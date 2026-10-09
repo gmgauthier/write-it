@@ -149,6 +149,11 @@ bool operator==(const Paragraph& a, const Paragraph& b)
   return a.heading == b.heading && a.indents == b.indents && a.align == b.align && a.runs == b.runs;
 }
 
+bool indents_fit(const Indents& indents)
+{
+  return indents.left + indents.first >= 0;
+}
+
 Indents clamp_indents(Indents indents)
 {
   indents.left = std::max(0, std::min(kMaxIndent, indents.left));

@@ -1850,21 +1850,42 @@ void MainWindow::on_paragraph()
   frame->add(*grid);
   dialog.get_content_area()->pack_start(*frame, Gtk::PACK_SHRINK);
   dialog.show_all_children();
-  if (dialog.run() != Gtk::RESPONSE_OK) {
-    text_.grab_focus();
-    return;
-  }
-  left->update();
-  right->update();
-  by->update();
-  // An untouched field keeps the file's twips, so OK on an unchanged dialog
-  // changes nothing even where the value on screen is rounded.
+  // Word 97 will not let the first line start left of the left margin. OK
+  // on such a choice explains why and goes back to the dialog, with the
+  // field to fix focused, rather than quietly changing the value.
   Indents chosen;
-  chosen.left = keep_twips(current.left, left_shown, left->get_value(), units);
-  chosen.right = keep_twips(current.right, right_shown, right->get_value(), units);
-  const int amount = keep_twips(magnitude, by_shown, by->get_value(), units);
-  const int row = special->get_active_row_number();
-  chosen.first = row == 1 ? amount : row == 2 ? -amount : 0;
+  for (;;) {
+    if (dialog.run() != Gtk::RESPONSE_OK) {
+      text_.grab_focus();
+      return;
+    }
+    left->update();
+    right->update();
+    by->update();
+    // An untouched field keeps the file's twips, so OK on an unchanged
+    // dialog changes nothing even where the value on screen is rounded.
+    chosen.left = keep_twips(current.left, left_shown, left->get_value(), units);
+    chosen.right = keep_twips(current.right, right_shown, right->get_value(), units);
+    int amount = keep_twips(magnitude, by_shown, by->get_value(), units);
+    const int row = special->get_active_row_number();
+    if (row == 2)
+      amount = hang_twips(by->get_value(), amount, chosen.left, left->get_value(), units);
+    chosen.first = row == 1 ? amount : row == 2 ? -amount : 0;
+    if (indents_fit(chosen))
+      break;
+    Gtk::MessageDialog message(dialog,
+                               "The hanging indent is larger than the left indent. The first "
+                               "line cannot start to the left of the margin.",
+                               false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+    message.set_title("Paragraph");
+    message.run();
+    message.hide();
+    // The By field is at fault unless only Left changed.
+    const bool by_edited = row != special_was || std::fabs(by->get_value() - by_shown) > 1e-9;
+    Gtk::SpinButton* offending = by_edited || left->get_value() == left_shown ? by : left;
+    offending->grab_focus();
+    offending->select_region(0, -1);
+  }
   if (chosen == current) {
     // Only what changed is applied, so a new alignment keeps each selected
     // paragraph's own indents, and new indents keep each one's alignment.

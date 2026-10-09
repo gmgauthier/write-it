@@ -4,6 +4,8 @@
 
 #include <string>
 
+#include "document.hpp"
+
 namespace writeit {
 
 // Tools > Options... measurement units. Only the Paragraph dialog uses them.
@@ -14,7 +16,13 @@ enum class Units { Inches, Centimetres };
 Units units_from_text(const std::string& text);
 const char* units_text(Units units);
 
+// The largest measure the dialog can produce, either side of zero: 22 inches,
+// the model's indent ceiling.
+constexpr int kMaxMeasureTwips = kMaxIndent;
+
 double twips_to_units(int twips, Units units);
+// Clamped to -kMaxMeasureTwips..kMaxMeasureTwips before it is converted, so
+// no input overflows. NaN is 0.
 int units_to_twips(double value, Units units);
 
 // Word 97 steps: 0.1" and 0.25 cm, both shown to two decimals.
@@ -31,5 +39,11 @@ bool parse_measure(const std::string& text, Units units, double& value);
 // The twips to store for a dialog field. An untouched field keeps the file's
 // twips exactly, because the value on screen is rounded.
 int keep_twips(int original, double shown, double now, Units units);
+
+// The twips a Hanging By of `now` stores, given `twips` as worked out for it
+// (keep_twips). A
+// By equal to Left on screen takes Left's twips, so a rounded Left can hang
+// by its own displayed amount without landing a twip past the margin.
+int hang_twips(double now, int twips, int left_twips, double left_now, Units units);
 
 }  // namespace writeit

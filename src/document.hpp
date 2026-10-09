@@ -54,6 +54,11 @@ bool operator==(const Document& a, const Document& b);
 // to the left margin and no further, and may indent up to kMaxIndent.
 Indents clamp_indents(Indents indents);
 
+// The Paragraph dialog's check, as Word 97 does it: false when the first
+// line would start left of the left margin (a hanging indent larger than
+// Left). The dialog refuses such a choice rather than clamping it.
+bool indents_fit(const Indents& indents);
+
 Document blank_document(const std::string& font, int size);
 Document plain_import(const std::string& text, const std::string& font, int size);
 Document markdown_import(const std::string& text, const std::string& font, int size);
