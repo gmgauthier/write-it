@@ -23,6 +23,8 @@ jobs:
       image: ${{ matrix.image }}
     env:
       DEBIAN_FRONTEND: noninteractive
+      # smoke-open and desktop-file must run here, not skip.
+      WRITE_IT_SMOKE_REQUIRED: 1
     steps:
       - name: Install build dependencies
         run: |
@@ -31,7 +33,8 @@ jobs:
             ca-certificates git \
             meson ninja-build g++ pkg-config \
             libgtkmm-3.0-dev \
-            xvfb xauth
+            xvfb xauth \
+            x11-utils dbus-daemon desktop-file-utils
 
       - uses: actions/checkout@v4
 
