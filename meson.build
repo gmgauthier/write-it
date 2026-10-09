@@ -217,6 +217,7 @@ write_it_status_bar_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/page_text.cpp',
+  'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
