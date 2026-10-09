@@ -90,6 +90,23 @@ struct MainWindowProbe {
     w.buffer_->erase_interactive(start, end, true);
     w.buffer_->end_user_action();
   }
+  // Backspace at the start of paragraph `line`, as one user action.
+  static void backspace_at_start(MainWindow& w, int line)
+  {
+    auto iter = w.buffer_->get_iter_at_line(line);
+    w.buffer_->place_cursor(iter);
+    w.buffer_->begin_user_action();
+    w.buffer_->backspace(iter, true, true);
+    w.buffer_->end_user_action();
+  }
+  // Deletes paragraphs `first` to `last` whole, as one user action.
+  static void delete_items(MainWindow& w, int first, int last)
+  {
+    w.buffer_->begin_user_action();
+    w.buffer_->erase_interactive(w.buffer_->get_iter_at_line(first),
+                                 w.buffer_->get_iter_at_line(last + 1), true);
+    w.buffer_->end_user_action();
+  }
   // Enter at the end of paragraph `line`, as one user action.
   static void enter_at_end(MainWindow& w, int line)
   {
@@ -283,11 +300,43 @@ void crossing(const std::string& home)
   MainWindowProbe::undo(window);
   settle();
   CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
-  // 10 to 9 with Delete at an item's own break, the tenth's text joining.
-  MainWindowProbe::enter_at_end(window, 8);
-  settle();
+  // A tenth item with text, then Delete at the ninth's break: the tenth's
+  // text joins the ninth, whose label is narrow again.
+  auto tenth = [&](int at) {
+    MainWindowProbe::enter_at_end(window, at);
+    MainWindowProbe::type_at_end(window, at + 1, "Item");
+    settle();
+  };
+  tenth(8);
   CHECK(all_placed(window, 10) && MainWindowProbe::text_x(window, 9) > hang);
   MainWindowProbe::delete_break(window, 8);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  // Backspace at the start of the tenth, and of an item higher up, whose
+  // join renumbers every item below it.
+  tenth(8);
+  MainWindowProbe::backspace_at_start(window, 9);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  tenth(8);
+  MainWindowProbe::backspace_at_start(window, 3);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  // Eleven items, then two deleted whole: 11 to 9, and back with undo.
+  tenth(8);
+  tenth(9);
+  CHECK(all_placed(window, 11) && MainWindowProbe::text_x(window, 10) > hang);
+  MainWindowProbe::delete_items(window, 3, 4);
+  settle();
+  CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, 11) && MainWindowProbe::text_x(window, 10) > hang);
+  // Backspace twice high up: 11 to 10, the wide labels moving up one, then 9.
+  MainWindowProbe::backspace_at_start(window, 2);
+  settle();
+  CHECK(all_placed(window, 10) && MainWindowProbe::text_x(window, 9) > hang);
+  MainWindowProbe::backspace_at_start(window, 2);
   settle();
   CHECK(all_placed(window, 9) && MainWindowProbe::text_x(window, 8) == hang);
   window.hide();
@@ -346,7 +395,7 @@ void long_list(const std::string& home)
 
 }  // namespace
 
-constexpr int kChecks = 53;
+constexpr int kChecks = 60;
 
 int main(int argc, char* argv[])
 {

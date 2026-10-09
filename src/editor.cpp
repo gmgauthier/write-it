@@ -2384,20 +2384,31 @@ void MainWindow::update_list_tabs()
     for (size_t i = 0; i < fresh.size(); ++i)
       fresh[i].number = numbers[i];
     dirty.assign(fresh.size(), 0);
-    if (tabs_full_ || static_cast<int>(fresh.size()) != lines) {
+    const bool moved = fresh.size() != tab_lines_.size();
+    if (tabs_full_ || static_cast<int>(fresh.size()) != lines || (moved && !tabs_noted_)) {
       std::fill(dirty.begin(), dirty.end(), 1);
     } else {
       // Paragraphs whose format or number changed, matching the old list
       // from the top and from the bottom around the paragraphs added or
-      // removed.
+      // removed. The match stops at the edit: past it the text has moved,
+      // so a paragraph at the old index may carry another one's tab, as
+      // when Delete joins two items and every number below drops by one.
       auto same = [](const TabLine& a, const TabLine& b) {
         return a.format == b.format && a.number == b.number;
       };
+      size_t head_max = fresh.size();
+      size_t tail_max = fresh.size();
+      if (tabs_noted_) {
+        const int from = std::max(0, tabs_from_->get_iter().get_line());
+        const int to = std::max(from, tabs_to_->get_iter().get_line());
+        head_max = std::min(fresh.size(), static_cast<size_t>(from));
+        tail_max = fresh.size() - std::min(fresh.size(), static_cast<size_t>(to) + 1);
+      }
       size_t head = 0;
-      while (head < fresh.size() && head < tab_lines_.size() && same(fresh[head], tab_lines_[head]))
+      while (head < head_max && head < tab_lines_.size() && same(fresh[head], tab_lines_[head]))
         ++head;
       size_t tail = 0;
-      while (tail < fresh.size() - head && tail < tab_lines_.size() - head &&
+      while (tail < tail_max && tail < fresh.size() - head && tail < tab_lines_.size() - head &&
              same(fresh[fresh.size() - 1 - tail], tab_lines_[tab_lines_.size() - 1 - tail]))
         ++tail;
       for (size_t i = head; i < fresh.size() - tail; ++i)
