@@ -146,7 +146,7 @@ bool operator!=(const Indents& a, const Indents& b)
 
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
-  return a.heading == b.heading && a.indents == b.indents && a.runs == b.runs;
+  return a.heading == b.heading && a.indents == b.indents && a.align == b.align && a.runs == b.runs;
 }
 
 Indents clamp_indents(Indents indents)

@@ -97,7 +97,7 @@ void rtf_round_trip()
   writeit::Paragraph heading = para("Heading", Align::Right);
   heading.heading = 2;
   doc.paragraphs.push_back(heading);
-  doc.paragraphs.push_back(para("", Align::Right));
+  doc.paragraphs.push_back(para("End", Align::Right));
   writeit::Document back;
   CHECK(writeit::rtf_import(writeit::rtf_export(doc), back));
   CHECK(back == doc);
