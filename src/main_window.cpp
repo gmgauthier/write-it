@@ -517,6 +517,7 @@ void MainWindow::build_toolbars()
   proxy_align(*align_left_toggle_, "Align _Left", align_group);
   proxy_align(*align_center_toggle_, "_Center", align_group);
   proxy_align(*align_right_toggle_, "Align _Right", align_group);
+  proxy_align(*justify_toggle_, "_Justify", align_group);
   proxy_combo(*style_item, style_combo_, "_Style");
   proxy_toggle(*bullets_toggle_, "Bull_ets");
   proxy_toggle(*numbering_toggle_, "_Numbering");
