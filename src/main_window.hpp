@@ -3,6 +3,7 @@
 #pragma once
 
 #include "document.hpp"
+#include "page_text.hpp"
 #include "settings.hpp"
 #include "view.hpp"
 
@@ -36,6 +37,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool on_delete_event(GdkEventAny* event) override;
 
  private:
+  // The window tests in tests/ drive the real window and read back what GTK
+  // made of it.
+  friend struct MainWindowProbe;
+
   struct Snapshot {
     Document doc;
     int offset = 0;
@@ -179,7 +184,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ScrolledWindow paste_;
   Gtk::Box board_{Gtk::ORIENTATION_VERTICAL};
   Gtk::EventBox page_;
-  Gtk::TextView text_;
+  PageText text_;
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   Gtk::Box status_{Gtk::ORIENTATION_HORIZONTAL};
   Gtk::Label message_;

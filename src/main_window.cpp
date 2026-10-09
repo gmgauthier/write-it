@@ -13,7 +13,7 @@
 namespace writeit {
 namespace {
 
-constexpr int kZooms[] = {50, 75, 100, 150, 200, 0};
+constexpr const int (&kZooms)[6] = kZoomChoices;
 
 Glib::ustring zoom_label(int zoom)
 {
@@ -446,7 +446,11 @@ void MainWindow::apply_page_size()
   sizing_ = true;
   const double z = zoom_factor();
   const ViewGeometry g = geometry();
-  const int width = g.page_width;
+  // Recomputed from the zoom and the view every time, never kept from the
+  // last layout: the text view asks for exactly this width, so a smaller
+  // zoom is a narrower allocation and a narrower wrap.
+  const int width = page_widths(view_, z).page;
+  text_.set_layout_width(width);
   // Draft's white area is at least as tall as the visible pasteboard, so
   // the text starts at the top and there is no gray below it.
   const int base_h = g.chrome ? g.page_height : std::max(1, paste_.get_allocated_height() - 4);
