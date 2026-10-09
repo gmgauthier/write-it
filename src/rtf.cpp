@@ -1705,28 +1705,38 @@ std::string rtf_export(const Document& doc)
     for (const Run& run : paragraph.runs) {
       if (run.text.empty())
         continue;
+      // A delimiter only after a control word: a run that looks like the
+      // one before (its direct bits aside) carries straight on.
+      bool word = first;
       const int fi = index_of(run.font);
       if (first || fi != font) {
         out << "\\f" << fi;
         font = fi;
+        word = true;
       }
       if (first || run.size != size) {
         out << "\\fs" << std::max(1, run.size) * 2;
         size = run.size;
+        word = true;
       }
       if (first || run.bold != bold) {
         out << (run.bold ? "\\b" : "\\b0");
         bold = run.bold;
+        word = true;
       }
       if (first || run.italic != italic) {
         out << (run.italic ? "\\i" : "\\i0");
         italic = run.italic;
+        word = true;
       }
       if (first || run.underline != underline) {
         out << (run.underline ? "\\ul" : "\\ulnone");
         underline = run.underline;
+        word = true;
       }
-      out << " " << escape_rtf(run.text);
+      if (word)
+        out << " ";
+      out << escape_rtf(run.text);
       first = false;
     }
     out << "\\par\n";

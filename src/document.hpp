@@ -14,7 +14,18 @@ struct Run {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  // What was set directly rather than by the paragraph's style (kDirect*
+  // bits). A style applied or edited leaves these alone. Not saved: a file
+  // holds only values, and a reader takes what differs from the style as
+  // direct, as Word does.
+  unsigned direct = 0;
 };
+
+constexpr unsigned kDirectFont = 1;
+constexpr unsigned kDirectSize = 2;
+constexpr unsigned kDirectBold = 4;
+constexpr unsigned kDirectItalic = 8;
+constexpr unsigned kDirectUnderline = 16;
 
 // Paragraph indents in twips (1/1440 inch), the unit RTF writes. `first` is
 // the first line relative to `left`. A negative `first` is a hanging indent.
@@ -113,7 +124,14 @@ struct Paragraph {
   Align align = Align::Left;
   ListFormat list;
   std::vector<Run> runs;
+  // The paragraph format set directly (kDirect* bits below), as Run's.
+  unsigned direct = 0;
 };
+
+constexpr unsigned kDirectLeft = 1;
+constexpr unsigned kDirectRight = 2;
+constexpr unsigned kDirectFirst = 4;
+constexpr unsigned kDirectAlign = 8;
 
 struct Document {
   std::vector<Paragraph> paragraphs;
@@ -122,7 +140,10 @@ struct Document {
   std::vector<Style> styles;
 };
 
+// Same values and the same direct bits: runs that may be one run.
 bool same_format(const Run& a, const Run& b);
+// Same values, whatever was set directly: what a reader would see.
+bool same_look(const Run& a, const Run& b);
 bool operator==(const Indents& a, const Indents& b);
 bool operator!=(const Indents& a, const Indents& b);
 bool operator==(const ListFormat& a, const ListFormat& b);

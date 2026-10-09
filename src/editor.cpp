@@ -117,7 +117,7 @@ std::string fmt_name(const Run& run)
 {
   return std::string("fmt") + '\x1f' + run.font + '\x1f' + std::to_string(run.size) + '\x1f' +
          (run.bold ? "1" : "0") + '\x1f' + (run.italic ? "1" : "0") + '\x1f' +
-         (run.underline ? "1" : "0");
+         (run.underline ? "1" : "0") + '\x1f' + std::to_string(run.direct);
 }
 
 bool parse_fmt(const std::string& name, Run& run)
@@ -133,11 +133,12 @@ bool parse_fmt(const std::string& name, Run& run)
     }
   }
   parts.push_back(current);
-  if (parts.size() != 6 || parts[0] != "fmt")
+  if (parts.size() != 7 || parts[0] != "fmt")
     return false;
   try {
     run.font = parts[1];
     run.size = std::stoi(parts[2]);
+    run.direct = static_cast<unsigned>(std::stoul(parts[6]));
   } catch (const std::exception&) {
     return false;
   }
@@ -161,7 +162,7 @@ std::string para_name(const ParaFormat& format)
   for (const int value :
        {indents.left, indents.right, indents.first, static_cast<int>(format.align),
         static_cast<int>(list.kind), list.level, list.has_own ? 1 : 0, list.own.left,
-        list.own.right, list.own.first, list.list, list.start}) {
+        list.own.right, list.own.first, list.list, list.start, static_cast<int>(format.direct)}) {
     name += '\x1f';
     name += std::to_string(value);
   }
@@ -185,18 +186,19 @@ bool parse_para(const std::string& name, ParaFormat& format)
       current.push_back(name[i]);
     }
   }
-  // Twelve numbers, then the style's name.
-  if (parts.size() != 13)
+  // Thirteen numbers, then the style's name.
+  if (parts.size() != 14)
     return false;
   std::vector<int> values;
   try {
-    for (size_t i = 0; i < 12; ++i)
+    for (size_t i = 0; i < 13; ++i)
       values.push_back(std::stoi(parts[i]));
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 12 || values[3] < 0 || values[3] > static_cast<int>(Align::Justify) ||
-      values[4] < 0 || values[4] > static_cast<int>(ListKind::Number))
+  if (values.size() != 13 || values[12] < 0 || values[3] < 0 ||
+      values[3] > static_cast<int>(Align::Justify) || values[4] < 0 ||
+      values[4] > static_cast<int>(ListKind::Number))
     return false;
   format.indents.left = values[0];
   format.indents.right = values[1];
@@ -208,7 +210,8 @@ bool parse_para(const std::string& name, ParaFormat& format)
   format.list.own = Indents{values[7], values[8], values[9]};
   format.list.list = values[10];
   format.list.start = values[11];
-  format.style = parts[12];
+  format.direct = static_cast<unsigned>(values[12]);
+  format.style = parts[13];
   return true;
 }
 
@@ -789,11 +792,13 @@ Document MainWindow::capture() const
         paragraph.align = pending_para_.align;
         paragraph.list = pending_para_.list;
         paragraph.style = pending_para_.style;
+        paragraph.direct = pending_para_.direct;
       } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
         paragraph.align = doc.paragraphs.back().align;
         paragraph.list = doc.paragraphs.back().list;
         paragraph.style = doc.paragraphs.back().style;
+        paragraph.direct = doc.paragraphs.back().direct;
       }
     }
     doc.paragraphs.push_back(paragraph);
@@ -811,6 +816,7 @@ Document MainWindow::capture() const
           paragraph.align = format.align;
           paragraph.list = format.list;
           paragraph.style = format.style;
+          paragraph.direct = format.direct;
           have_para = true;
         }
       }
@@ -862,7 +868,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       buffer_->insert_with_tag(buffer_->end(), "\n", para);
     } else if (!any) {
       pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align,
-                                 clamp_list(paragraph.list), paragraph.style};
+                                 clamp_list(paragraph.list), paragraph.style, paragraph.direct};
       pending_para_set_ = true;
     }
   }
@@ -1535,12 +1541,15 @@ void MainWindow::set_text_flag(Run& run, TextFlag flag, bool on)
   switch (flag) {
     case TextFlag::Bold:
       run.bold = on;
+      run.direct |= kDirectBold;
       break;
     case TextFlag::Italic:
       run.italic = on;
+      run.direct |= kDirectItalic;
       break;
     case TextFlag::Underline:
       run.underline = on;
+      run.direct |= kDirectUnderline;
       break;
   }
 }
@@ -1666,7 +1675,10 @@ void MainWindow::on_font_changed()
   const Glib::ustring name = font_combo_.get_active_text();
   if (name.empty())
     return;
-  apply_run_edit([name](Run& run) { run.font = name.raw(); });
+  apply_run_edit([name](Run& run) {
+    run.font = name.raw();
+    run.direct |= kDirectFont;
+  });
 }
 
 void MainWindow::on_size_changed()
@@ -1676,7 +1688,10 @@ void MainWindow::on_size_changed()
   const int size = parse_size(size_combo_.get_active_text().raw());
   if (size == 0)
     return;
-  apply_run_edit([size](Run& run) { run.size = size; });
+  apply_run_edit([size](Run& run) {
+    run.size = size;
+    run.direct |= kDirectSize;
+  });
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
@@ -1686,6 +1701,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
   format.align = raw.align;
   format.list = clamp_list(raw.list);
   format.style = raw.style;
+  format.direct = raw.direct;
   const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
@@ -1885,13 +1901,24 @@ void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
 {
   // Each paragraph is edited from its own format, so changing one property
   // keeps the others where the paragraphs differ.
-  apply_paragraphs([&edit](std::vector<Paragraph>& paragraphs) {
+  apply_paragraphs([this, &edit](std::vector<Paragraph>& paragraphs) {
     for (Paragraph& paragraph : paragraphs) {
       ParaFormat format = para_format(paragraph);
       edit(format);
+      // What the edit changed is the paragraph's own now, as is an
+      // alignment chosen with the buttons or menu, changed or not.
+      if (format.indents.left != paragraph.indents.left)
+        format.direct |= kDirectLeft;
+      if (format.indents.right != paragraph.indents.right)
+        format.direct |= kDirectRight;
+      if (format.indents.first != paragraph.indents.first)
+        format.direct |= kDirectFirst;
+      if (format.align != paragraph.align || chose_align_)
+        format.direct |= kDirectAlign;
       paragraph.indents = format.indents;
       paragraph.align = format.align;
       paragraph.list = format.list;
+      paragraph.direct = format.direct;
     }
   });
 }
@@ -1923,6 +1950,7 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     paragraph.align = format.align;
     paragraph.list = format.list;
     paragraph.style = format.style;
+    paragraph.direct = format.direct;
     paragraphs.push_back(paragraph);
   }
   edit(paragraphs);
@@ -1951,7 +1979,7 @@ void MainWindow::tag_paragraph(int start, const ParaFormat& format)
   if (start == end) {
     // The empty last paragraph has nothing to tag. Hold its format aside.
     pending_para_ = ParaFormat{clamp_indents(format.indents), format.align, clamp_list(format.list),
-                               format.style};
+                               format.style, format.direct};
     pending_para_set_ = true;
     return;
   }
@@ -2040,7 +2068,9 @@ void MainWindow::sync_context_numbering()
 
 void MainWindow::apply_align(Align align)
 {
+  chose_align_ = true;
   apply_para_edit([align](ParaFormat& format) { format.align = align; });
+  chose_align_ = false;
 }
 
 void MainWindow::on_align_toggled(Align align)

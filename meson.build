@@ -297,6 +297,15 @@ write_it_window_memory_tests = executable(
 )
 test('window-memory', write_it_window_memory_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: direct formatting made with the toolbar
+# stays through named styles applied and edited.
+write_it_style_direct_tests = executable(
+  'write-it-style-direct-tests',
+  'tests/test_style_direct.cpp',
+  dependencies: [writeit_dep],
+)
+test('style-direct', write_it_style_direct_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: a closed window leaves nothing on the
 # clipboard, which outlives it (run under ASan to see a use after free).
 write_it_window_lifetime_tests = executable(

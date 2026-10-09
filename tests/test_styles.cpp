@@ -167,14 +167,27 @@ void builtins()
 
 void applying()
 {
-  // Runs the style makes alike become one run, as a reader would read them
-  // (found by fuzzing).
+  // Runs the style makes alike compare as one run, as a reader would read
+  // them (found by fuzzing), but stay apart: the bold word's bold is its own.
   {
     Document alike = writeit::blank_document("Sans", 11);
     alike.paragraphs[0].runs = {run("plain "), run("bold", "Sans", 11, true)};
     CHECK(writeit::apply_style(alike, 0, 0, "Heading 4"));
-    CHECK(alike.paragraphs[0].runs.size() == 1 &&
-          alike.paragraphs[0].runs[0].text == "plain bold" && alike.paragraphs[0].runs[0].bold);
+    const Paragraph& p = alike.paragraphs[0];
+    CHECK(p.runs.size() == 2 && p.runs[0].bold && p.runs[1].bold &&
+          (p.runs[1].direct & writeit::kDirectBold) && !(p.runs[0].direct & writeit::kDirectBold));
+    Paragraph read = p;
+    read.runs = {p.runs[0]};
+    read.runs[0].text = "plain bold";
+    read.runs[0].direct = 0;
+    CHECK(read == p);
+    CHECK(import(writeit::rtf_export(alike)) == alike);
+    // Markdown too: the bold word's run carries on its neighbour's emphasis.
+    Document normal = writeit::blank_document("Sans", 11);
+    normal.paragraphs[0].runs = {run("a "), run("bold", "Sans", 11, true),
+                                 run(" word", "Sans", 11, true)};
+    normal.paragraphs[0].runs[1].direct = writeit::kDirectBold;
+    CHECK(writeit::markdown_export(normal) == "a **bold word**");
   }
   Document doc;
   doc.styles = writeit::builtin_styles("Sans", 11);
@@ -898,8 +911,8 @@ void justified_styles()
   CHECK(contains(rtf, "{\\snext0\\qj"));
   const size_t h1 = rtf.find(" Heading 1;}");
   const size_t h1_start = rtf.rfind('{', h1);
-  CHECK(h1 != std::string::npos && rtf.substr(h1_start, h1 - h1_start).find("\\qj") !=
-                                       std::string::npos);
+  CHECK(h1 != std::string::npos &&
+        rtf.substr(h1_start, h1 - h1_start).find("\\qj") != std::string::npos);
   const size_t flush = rtf.find(" Flush;}");
   CHECK(flush != std::string::npos &&
         rtf.substr(rtf.rfind('{', flush), flush - rtf.rfind('{', flush)).find("\\ql") !=
@@ -922,7 +935,70 @@ void justified_styles()
   CHECK(far != nullptr && far->align == Align::Left);
 }
 
-constexpr int kChecks = 559;
+// Each character's bold, as 'b' or '.'.
+std::string bolds(const Paragraph& paragraph)
+{
+  std::string out;
+  for (const Run& r : paragraph.runs)
+    out += std::string(r.text.size(), r.bold ? 'b' : '.');
+  return out;
+}
+
+// Direct formatting stays through styles applied and edited, even where a
+// style passes through the direct value, as in Word 97.
+void direct_kept()
+{
+  // A bold word in Normal, Heading 1 (bold) applied, then Normal again.
+  Document doc = writeit::blank_document("Sans", 11);
+  doc.paragraphs[0].runs = {run("Plain "), run("bold", "Sans", 11, true), run(" end")};
+  CHECK(writeit::apply_style(doc, 0, 0, "Heading 1"));
+  CHECK(bolds(doc.paragraphs[0]) == std::string(14, 'b'));
+  CHECK(writeit::apply_style(doc, 0, 0, "Normal"));
+  CHECK(bolds(doc.paragraphs[0]) == "......bbbb....");
+  CHECK(text_of(doc.paragraphs[0]) == "Plain bold end");
+  // And again, the word still direct.
+  CHECK(writeit::apply_style(doc, 0, 0, "Heading 1"));
+  CHECK(writeit::apply_style(doc, 0, 0, "Normal"));
+  CHECK(bolds(doc.paragraphs[0]) == "......bbbb....");
+
+  // Two Heading 1 paragraphs, the first with its own alignment, size, font,
+  // bold and left indent. Heading 1 takes each value, then another one.
+  Document two = writeit::blank_document("Sans", 11);
+  two.paragraphs = {para("First"), para("Second")};
+  CHECK(writeit::apply_style(two, 0, 1, "Heading 1"));
+  Style h1 = *writeit::find_style(two.styles, "Heading 1");
+  Paragraph& first = two.paragraphs[0];
+  first.align = Align::Center;
+  first.indents.left = 720;
+  first.runs[0].size = 30;
+  first.runs[0].font = "Serif";
+  first.runs[0].bold = !h1.format.bold;
+  const bool own_bold = first.runs[0].bold;
+  h1.align = Align::Center;
+  h1.indents.left = 720;
+  h1.format.size = 30;
+  h1.format.font = "Serif";
+  h1.format.bold = own_bold;
+  CHECK(writeit::update_style(two, "Heading 1", h1));
+  CHECK(two.paragraphs[1].align == Align::Center && two.paragraphs[1].indents.left == 720 &&
+        two.paragraphs[1].runs[0].size == 30 && two.paragraphs[1].runs[0].font == "Serif" &&
+        two.paragraphs[1].runs[0].bold == own_bold);
+  h1.align = Align::Right;
+  h1.indents.left = 1440;
+  h1.format.size = 18;
+  h1.format.font = "Mono";
+  h1.format.bold = !own_bold;
+  CHECK(writeit::update_style(two, "Heading 1", h1));
+  const Paragraph& p0 = two.paragraphs[0];
+  const Paragraph& p1 = two.paragraphs[1];
+  CHECK(p0.align == Align::Center && p1.align == Align::Right);
+  CHECK(p0.indents.left == 720 && p1.indents.left == 1440);
+  CHECK(p0.runs[0].size == 30 && p1.runs[0].size == 18);
+  CHECK(p0.runs[0].font == "Serif" && p1.runs[0].font == "Mono");
+  CHECK(p0.runs[0].bold == own_bold && p1.runs[0].bold == !own_bold);
+}
+
+constexpr int kChecks = 580;
 
 int main()
 {
@@ -937,5 +1013,6 @@ int main()
   markdown();
   m1_files();
   justified_styles();
+  direct_kept();
   return suite_test::done("styles", kChecks);
 }

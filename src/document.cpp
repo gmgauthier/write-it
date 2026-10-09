@@ -115,8 +115,16 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, int si
 // heading whose style is bold is not wrapped in **.
 std::string inline_export(const Paragraph& paragraph, const Run& style)
 {
-  std::string out;
+  // Runs that look alike are one run here, so emphasis is not broken up.
+  std::vector<Run> runs;
   for (const Run& run : paragraph.runs) {
+    if (!runs.empty() && runs.back().bold == run.bold && runs.back().italic == run.italic)
+      runs.back().text += run.text;
+    else
+      runs.push_back(run);
+  }
+  std::string out;
+  for (const Run& run : runs) {
     const bool bold = run.bold && !style.bold;
     const bool italic = run.italic && !style.italic;
     if (bold && italic)
@@ -206,13 +214,26 @@ const Style& paragraph_style(const std::vector<Style>& sheet, const Paragraph& p
   return sheet.front();
 }
 
-void restyle_indents(Indents& indents, const Indents& from, const Indents& to)
+// Whether an attribute is the paragraph's or run's own: set directly, or
+// different from the style it was in (as a file read it). An attribute
+// found to be its own is marked so, so it stays even when a later style
+// passes through its value.
+bool own(unsigned& direct, unsigned bit, bool differs)
 {
-  if (indents.left == from.left)
+  if ((direct & bit) || differs) {
+    direct |= bit;
+    return true;
+  }
+  return false;
+}
+
+void restyle_indents(Indents& indents, unsigned& direct, const Indents& from, const Indents& to)
+{
+  if (!own(direct, kDirectLeft, indents.left != from.left))
     indents.left = to.left;
-  if (indents.right == from.right)
+  if (!own(direct, kDirectRight, indents.right != from.right))
     indents.right = to.right;
-  if (indents.first == from.first)
+  if (!own(direct, kDirectFirst, indents.first != from.first))
     indents.first = to.first;
 }
 
@@ -231,13 +252,13 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
   }
   paragraph.runs = std::move(merged);
   if (paragraph.list.kind == ListKind::None) {
-    restyle_indents(paragraph.indents, from.indents, to.indents);
+    restyle_indents(paragraph.indents, paragraph.direct, from.indents, to.indents);
     paragraph.indents = clamp_indents(paragraph.indents);
   } else if (paragraph.list.has_own) {
-    restyle_indents(paragraph.list.own, from.indents, to.indents);
+    restyle_indents(paragraph.list.own, paragraph.direct, from.indents, to.indents);
     paragraph.list.own = clamp_indents(paragraph.list.own);
   }
-  if (paragraph.align == from.align)
+  if (!own(paragraph.direct, kDirectAlign, paragraph.align != from.align))
     paragraph.align = to.align;
   if (paragraph.heading == from.heading)
     paragraph.heading = to.heading;
@@ -248,8 +269,14 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
 // its base. Its name, base, next style and outline level are its own.
 Style restyle_style(Style style, const Style& from, const Style& to)
 {
-  restyle_run(style.format, from, to);
-  restyle_indents(style.indents, from.indents, to.indents);
+  // A style's attributes are its own where they differ from its base.
+  Run format = style.format;
+  format.direct = 0;
+  restyle_run(format, from, to);
+  format.direct = 0;
+  style.format = format;
+  unsigned none = 0;
+  restyle_indents(style.indents, none, from.indents, to.indents);
   if (style.align == from.align)
     style.align = to.align;
   return style;
@@ -287,15 +314,39 @@ void carry_style(Document& doc, std::vector<Style>& sheet, size_t index, const S
 
 }  // namespace
 
-bool same_format(const Run& a, const Run& b)
+bool same_look(const Run& a, const Run& b)
 {
   return a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
          a.underline == b.underline;
 }
 
+bool same_format(const Run& a, const Run& b)
+{
+  return same_look(a, b) && a.direct == b.direct;
+}
+
+// Runs compare as a reader would read them: by value, adjacent runs that
+// look alike counting as one.
 bool operator==(const Run& a, const Run& b)
 {
-  return same_format(a, b) && a.text == b.text;
+  return same_look(a, b) && a.text == b.text;
+}
+
+static bool same_runs(const std::vector<Run>& a, const std::vector<Run>& b)
+{
+  auto looks = [](const std::vector<Run>& runs) {
+    std::vector<Run> out;
+    for (const Run& run : runs) {
+      if (run.text.empty())
+        continue;
+      if (!out.empty() && same_look(out.back(), run))
+        out.back().text += run.text;
+      else
+        out.push_back(run);
+    }
+    return out;
+  };
+  return looks(a) == looks(b);
 }
 
 bool operator==(const Indents& a, const Indents& b)
@@ -322,7 +373,7 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
-         a.align == b.align && a.list == b.list && a.runs == b.runs;
+         a.align == b.align && a.list == b.list && same_runs(a.runs, b.runs);
 }
 
 bool indents_fit(const Indents& indents)
@@ -662,7 +713,7 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.style != y.style || x.indents != y.indents ||
         x.align != y.align || x.list.kind != y.list.kind || x.list.level != y.list.level ||
-        !(x.runs == y.runs))
+        !same_runs(x.runs, y.runs))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -829,15 +880,16 @@ std::string next_style(const std::vector<Style>& sheet, const std::string& name)
 
 void restyle_run(Run& run, const Style& from, const Style& to)
 {
-  if (run.font == from.format.font)
+  const Run& f = from.format;
+  if (!own(run.direct, kDirectFont, run.font != f.font))
     run.font = to.format.font;
-  if (run.size == from.format.size)
+  if (!own(run.direct, kDirectSize, run.size != f.size))
     run.size = to.format.size;
-  if (run.bold == from.format.bold)
+  if (!own(run.direct, kDirectBold, run.bold != f.bold))
     run.bold = to.format.bold;
-  if (run.italic == from.format.italic)
+  if (!own(run.direct, kDirectItalic, run.italic != f.italic))
     run.italic = to.format.italic;
-  if (run.underline == from.format.underline)
+  if (!own(run.direct, kDirectUnderline, run.underline != f.underline))
     run.underline = to.format.underline;
 }
 

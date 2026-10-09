@@ -26,16 +26,20 @@ struct ParaFormat {
   Align align = Align::Left;
   ListFormat list;
   std::string style = kNormalStyle;
+  // What of it was set directly (Paragraph::direct).
+  unsigned direct = 0;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
-  return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style;
+  return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
+         a.direct == b.direct;
 }
 
 inline ParaFormat para_format(const Paragraph& paragraph)
 {
-  return ParaFormat{paragraph.indents, paragraph.align, paragraph.list, paragraph.style};
+  return ParaFormat{paragraph.indents, paragraph.align, paragraph.list, paragraph.style,
+                    paragraph.direct};
 }
 
 class MainWindow : public Gtk::ApplicationWindow {
@@ -407,6 +411,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<Style> styles_;
   // Enter at the end of a paragraph: the new one takes the next style.
   bool next_style_pending_ = false;
+  // apply_align() is under way: the alignment was chosen, so it is direct.
+  bool chose_align_ = false;
   int next_style_from_ = -1;
   Glib::RefPtr<Gtk::TextMark> insert_start_;
   Glib::RefPtr<Gtk::TextMark> insert_end_;
