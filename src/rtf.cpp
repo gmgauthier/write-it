@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Unlicense */
 
 #include "document.hpp"
+#include "font_sizes.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -504,9 +505,14 @@ class Reader {
       state_.marks = ListMarks{};
       return;
     }
-    // There is no justified: \qj (and \qd, distributed) read as left.
-    if (word == "ql" || word == "qj" || word == "qd") {
+    // \qd, distributed, is East Asian Word's and has no Word 97 button: it
+    // reads as left.
+    if (word == "ql" || word == "qd") {
       state_.align = Align::Left;
+      return;
+    }
+    if (word == "qj") {
+      state_.align = Align::Justify;
       return;
     }
     if (word == "qc") {
@@ -561,7 +567,8 @@ class Reader {
       return;
     }
     if (word == "fs" && has_param) {
-      state_.half_points = std::max(2, param);
+      // Word's largest size, 1638 pt (\fs3276), which the size box can show.
+      state_.half_points = std::max(2, std::min(2 * kMaxFontSize, param));
       return;
     }
     if (word == "b") {
@@ -1190,6 +1197,8 @@ std::string rtf_export(const Document& doc)
       out << "\\qc";
     else if (paragraph.align == Align::Right)
       out << "\\qr";
+    else if (paragraph.align == Align::Justify)
+      out << "\\qj";
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.

@@ -27,9 +27,9 @@ struct Indents {
 // The largest indent Word and RTF accept: 22 inches.
 constexpr int kMaxIndent = 31680;
 
-// Word 97's Align Left, Center and Align Right. There is no justified; RTF's
-// \qj reads as left.
-enum class Align { Left, Center, Right };
+// Word 97's Align Left, Center, Align Right and Justify. RTF's \ql, \qc, \qr
+// and \qj; Justify is GTK's JUSTIFY_FILL.
+enum class Align { Left, Center, Right, Justify };
 
 // A bulleted or numbered list item. The list sits on top of the indents: the
 // label hangs in the first-line indent and the text starts at the left one.
