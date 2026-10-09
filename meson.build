@@ -128,6 +128,15 @@ write_it_lists_tests = executable(
 )
 test('lists', write_it_lists_tests)
 
+write_it_styles_tests = executable(
+  'write-it-styles-tests',
+  'tests/test_styles.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+)
+test('styles', write_it_styles_tests)
+
 write_it_units_tests = executable(
   'write-it-units-tests',
   'tests/test_units.cpp',

@@ -358,6 +358,72 @@ int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_
   return std::max(0, text_x - before);
 }
 
+bool operator==(const Style& a, const Style& b)
+{
+  return a.name == b.name && a.based_on == b.based_on && a.next == b.next &&
+         same_format(a.format, b.format) && a.indents == b.indents && a.align == b.align &&
+         a.heading == b.heading;
+}
+
+bool operator!=(const Style& a, const Style& b)
+{
+  return !(a == b);
+}
+
+std::vector<Style> builtin_styles(const std::string& /*font*/, int /*size*/)
+{
+  return {};
+}
+
+std::vector<Style> style_sheet(const Document& doc)
+{
+  return doc.styles;
+}
+
+std::vector<Style> complete_sheet(std::vector<Style> sheet)
+{
+  return sheet;
+}
+
+const Style* find_style(const std::vector<Style>& /*sheet*/, const std::string& /*name*/)
+{
+  return nullptr;
+}
+
+std::string clean_style_name(const std::string& name)
+{
+  return name;
+}
+
+std::string unique_style_name(const std::vector<Style>& /*sheet*/, const std::string& wanted)
+{
+  return wanted;
+}
+
+std::string next_style(const std::vector<Style>& /*sheet*/, const std::string& name)
+{
+  return name;
+}
+
+void restyle_run(Run& /*run*/, const Style& /*from*/, const Style& /*to*/)
+{
+}
+
+bool apply_style(Document& /*doc*/, size_t /*first*/, size_t /*last*/, const std::string& /*name*/)
+{
+  return false;
+}
+
+bool update_style(Document& /*doc*/, const std::string& /*name*/, const Style& /*changed*/)
+{
+  return false;
+}
+
+bool add_style(Document& /*doc*/, const Style& /*style*/)
+{
+  return false;
+}
+
 Document blank_document(const std::string& font, int size)
 {
   (void)font;
