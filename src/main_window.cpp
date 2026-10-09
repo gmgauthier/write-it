@@ -33,6 +33,14 @@ void framed(Gtk::Box& row, Gtk::Widget& child, bool expand)
   row.pack_start(*frame, expand, true, 0);
 }
 
+// A missing icon falls back to the menu's word. Toolbar buttons share one
+// width, the widest's, so a word must not widen every icon on the bar.
+void fallback_label(Gtk::ToolButton& button, const char* word)
+{
+  button.set_label(word);
+  button.set_homogeneous(false);
+}
+
 }  // namespace
 
 MainWindow::MainWindow()
@@ -256,7 +264,7 @@ Gtk::ToolButton* MainWindow::add_tool(Gtk::Toolbar& bar, const char* icon, const
   if (Gtk::IconTheme::get_default()->has_icon(icon))
     button->set_icon_name(icon);
   else
-    button->set_label(tip);
+    fallback_label(*button, tip);
   button->set_tooltip_text(tip);
   button->set_sensitive(sensitive);
   bar.append(*button);
@@ -265,14 +273,16 @@ Gtk::ToolButton* MainWindow::add_tool(Gtk::Toolbar& bar, const char* icon, const
 
 void MainWindow::build_toolbars()
 {
+  // Both toolbars keep an overflow arrow, so a narrow window moves the last
+  // controls into the arrow's menu instead of growing past the screen.
   standard_bar_.set_toolbar_style(Gtk::TOOLBAR_ICONS);
   standard_bar_.set_icon_size(Gtk::ICON_SIZE_SMALL_TOOLBAR);
   standard_bar_.set_hexpand(false);
-  standard_bar_.set_show_arrow(false);
+  standard_bar_.set_show_arrow(true);
   format_bar_.set_toolbar_style(Gtk::TOOLBAR_ICONS);
   format_bar_.set_icon_size(Gtk::ICON_SIZE_SMALL_TOOLBAR);
   format_bar_.set_hexpand(false);
-  format_bar_.set_show_arrow(false);
+  format_bar_.set_show_arrow(true);
   toolbars_.pack_start(standard_bar_, Gtk::PACK_SHRINK);
   toolbars_.pack_start(format_bar_, Gtk::PACK_SHRINK);
 
@@ -316,7 +326,7 @@ void MainWindow::build_toolbars()
     if (Gtk::IconTheme::get_default()->has_icon(icon))
       button->set_icon_name(icon);
     else
-      button->set_label(tip);
+      fallback_label(*button, tip);
     button->set_tooltip_text(tip);
     button->set_active(active);
     button->set_sensitive(sensitive);

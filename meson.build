@@ -40,6 +40,7 @@ executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,
@@ -150,6 +151,7 @@ write_it_window_width_tests = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
