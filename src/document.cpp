@@ -218,6 +218,30 @@ std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
   return numbers;
 }
 
+std::vector<int> list_ids(const std::vector<Paragraph>& paragraphs)
+{
+  return std::vector<int>(paragraphs.size(), 0);
+}
+
+void canonical_lists(std::vector<Paragraph>& paragraphs)
+{
+  (void)paragraphs;
+}
+
+bool restart_numbering(std::vector<Paragraph>& paragraphs, size_t index)
+{
+  (void)paragraphs;
+  (void)index;
+  return false;
+}
+
+bool continue_numbering(std::vector<Paragraph>& paragraphs, size_t index)
+{
+  (void)paragraphs;
+  (void)index;
+  return false;
+}
+
 std::string list_label(const ListFormat& raw, int number)
 {
   const ListFormat list = clamp_list(raw);
