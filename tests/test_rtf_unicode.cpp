@@ -385,12 +385,16 @@ void fuzz()
 // Two meson tests share this file. With no argument it runs the
 // deterministic checks, which are quick under any sanitiser; with "fuzz" it
 // runs the 200,000-round fuzz, which takes about 20 s under ASan and UBSan
-// and has its own timeout (meson.build). Each names its exact check count.
+// and has its own timeout (meson.build). Each names its exact check count,
+// loops included; update them with the tests.
+constexpr int kChecks = 243;
+constexpr int kFuzzChecks = 3;
+
 int main(int argc, char** argv)
 {
   if (argc > 1 && std::string(argv[1]) == "fuzz") {
     fuzz();
-    return suite_test::done("rtf-unicode-fuzz", 3);
+    return suite_test::done("rtf-unicode-fuzz", kFuzzChecks);
   }
   scalar_values();
   surrogates();
@@ -400,5 +404,5 @@ int main(int argc, char** argv)
   font_table();
   control_characters();
   writer_controls();
-  return suite_test::done("rtf-unicode", 243);
+  return suite_test::done("rtf-unicode", kChecks);
 }
