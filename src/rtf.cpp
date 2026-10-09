@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <sstream>
@@ -252,6 +253,17 @@ void add_run(Paragraph& paragraph, Run run)
     paragraph.runs.push_back(std::move(run));
 }
 
+// The list words this reader takes from a paragraph, resolved against the
+// list tables once the whole file is read.
+struct ListMarks {
+  int ls = 0;     // \ls: an index into the list override table, 1 and up.
+  int ilvl = 0;   // \ilvl
+  ListFormat pn;  // Word 97's {\*\pn ...}
+};
+
+// Which list table a group is inside.
+enum class ListTable { None, Lists, Overrides };
+
 struct State {
   int font = 0;
   int half_points = 22;
@@ -262,7 +274,14 @@ struct State {
   // Paragraph properties. They belong to the paragraph that the next \par ends.
   Indents indents;
   Align align = Align::Left;
+  ListMarks marks;
   bool ignore = false;
+  // Inside {\*\pn ...}, {\*\listtable ...} or {\*\listoverridetable ...}:
+  // the text is ignored, but these words are still read.
+  bool in_pn = false;
+  ListTable table = ListTable::None;
+  bool in_list = false;
+  bool in_override = false;
   bool in_fonttbl = false;
   // Inside a font entry, a group that is not the name: \*\panose, \falt.
   bool font_skip = false;
@@ -299,11 +318,14 @@ class Reader {
         if (stack_.size() == 1) {
           final_indents_ = state_.indents;
           final_align_ = state_.align;
+          final_marks_ = state_.marks;
           closed_ = true;
         }
         if (!stack_.empty()) {
+          const State closing = state_;
           state_ = stack_.back();
           stack_.pop_back();
+          close_group(closing);
         }
         ++i_;
         continue;
@@ -378,10 +400,12 @@ class Reader {
     if (!std::isalpha(static_cast<unsigned char>(text_[i_]))) {
       const char symbol = text_[i_];
       ++i_;
+      // After {\* the next word still names the destination.
       if (state_.pending_dest && symbol == '*') {
         state_.ignore = true;
         if (state_.in_fonttbl)
           state_.font_skip = true;
+        return;
       }
       state_.pending_dest = false;
       return;
@@ -427,6 +451,8 @@ class Reader {
         state_.font_skip = true;
         return;
       }
+      if (list_destination(word))
+        return;
       if (skip_destination(word)) {
         state_.ignore = true;
         return;
@@ -448,6 +474,14 @@ class Reader {
       skip_fallback(state_.uc);
       return;
     }
+    if (state_.in_pn) {
+      pn_word(word, has_param, param);
+      return;
+    }
+    if (state_.table != ListTable::None) {
+      table_word(word, has_param, param);
+      return;
+    }
     if (state_.ignore || state_.in_fonttbl)
       return;
     if (word == "par" || word == "line") {
@@ -467,6 +501,7 @@ class Reader {
       state_.heading = 0;
       state_.indents = Indents{};
       state_.align = Align::Left;
+      state_.marks = ListMarks{};
       return;
     }
     // There is no justified: \qj (and \qd, distributed) read as left.
@@ -480,6 +515,16 @@ class Reader {
     }
     if (word == "qr") {
       state_.align = Align::Right;
+      return;
+    }
+    // The paragraph's list: an override index and a level. The reader caps a
+    // long digit run, so these stay small enough to compare and clamp.
+    if (word == "ls" && has_param) {
+      state_.marks.ls = param;
+      return;
+    }
+    if (word == "ilvl" && has_param) {
+      state_.marks.ilvl = std::max(0, std::min(kListLevels - 1, param));
       return;
     }
     // \lin and \rin are the leading and trailing indents Word 2000 and later
@@ -670,6 +715,122 @@ class Reader {
       ++i_;
   }
 
+  // The list destinations. True when `word` opened one.
+  bool list_destination(const std::string& word)
+  {
+    if (word == "pn") {
+      state_.in_pn = true;
+      state_.ignore = true;
+      state_.marks.pn = ListFormat{};
+      return true;
+    }
+    if (word == "listtable") {
+      state_.table = ListTable::Lists;
+      state_.ignore = true;
+      return true;
+    }
+    if (word == "listoverridetable") {
+      state_.table = ListTable::Overrides;
+      state_.ignore = true;
+      return true;
+    }
+    if (state_.table == ListTable::Lists && word == "list") {
+      state_.in_list = true;
+      building_ = ListDef{};
+      return true;
+    }
+    if (state_.in_list && word == "listlevel") {
+      // Levels past the ninth are read and dropped.
+      if (building_.levels < kListLevels + 1)
+        ++building_.levels;
+      return true;
+    }
+    if (state_.table == ListTable::Overrides && word == "listoverride") {
+      state_.in_override = true;
+      override_ = Override{};
+      return true;
+    }
+    return false;
+  }
+
+  // Word 97's paragraph numbering, {\*\pn ...}.
+  void pn_word(const std::string& word, bool has_param, int param)
+  {
+    ListFormat& pn = state_.marks.pn;
+    if (word == "pnlvlblt") {
+      pn = ListFormat{ListKind::Bullet, 0};
+    } else if (word == "pnlvlbody") {
+      pn = ListFormat{ListKind::Number, 0};
+    } else if (word == "pnlvlcont") {
+      // A continuation paragraph: no label of its own.
+      pn = ListFormat{};
+    } else if (word == "pnlvl" && has_param) {
+      pn = clamp_list(ListFormat{ListKind::Number, param - 1});
+    }
+  }
+
+  void table_word(const std::string& word, bool has_param, int param)
+  {
+    if (state_.in_list) {
+      if (word == "listid" && has_param) {
+        building_.id = param;
+        building_.has_id = true;
+      } else if (word == "listsimple") {
+        building_.simple = !has_param || param != 0;
+      } else if ((word == "levelnfc" || word == "levelnfcn") && has_param &&
+                 building_.levels >= 1 && building_.levels <= kListLevels) {
+        // 23 is a bullet and 255 no number at all; the rest are numbers.
+        building_.kinds[static_cast<size_t>(building_.levels - 1)] =
+            param == 23 || param == 255 ? ListKind::Bullet : ListKind::Number;
+      }
+      return;
+    }
+    if (state_.in_override) {
+      if (word == "listid" && has_param) {
+        override_.list_id = param;
+        override_.has_id = true;
+      } else if (word == "ls" && has_param) {
+        override_.ls = param;
+      }
+    }
+  }
+
+  // A group closed. `closing` is the state that was in force inside it.
+  void close_group(const State& closing)
+  {
+    // A {\*\pn ...} group describes the paragraph around it.
+    if (closing.in_pn && !state_.in_pn)
+      state_.marks.pn = closing.marks.pn;
+    if (closing.in_list && !state_.in_list && building_.has_id &&
+        (lists_.size() < kMaxListDefs || lists_.count(building_.id) != 0))
+      lists_[building_.id] = building_;
+    if (closing.in_override && !state_.in_override && override_.has_id && override_.ls > 0 &&
+        (overrides_.size() < kMaxListDefs || overrides_.count(override_.ls) != 0))
+      overrides_[override_.ls] = override_.list_id;
+  }
+
+  // \ls through the override and list tables, then Word 97's \pn. An \ls
+  // that names nothing is still a list item: it becomes a bullet.
+  ListFormat resolve(const ListMarks& marks) const
+  {
+    const int level = std::max(0, std::min(kListLevels - 1, marks.ilvl));
+    if (marks.ls > 0) {
+      const auto over = overrides_.find(marks.ls);
+      if (over != overrides_.end()) {
+        const auto list = lists_.find(over->second);
+        if (list != lists_.end()) {
+          const ListDef& def = list->second;
+          const size_t at = def.simple ? 0 : static_cast<size_t>(level);
+          return ListFormat{def.kinds[at], level};
+        }
+      }
+      if (marks.pn.kind != ListKind::None)
+        return clamp_list(marks.pn);
+      return ListFormat{ListKind::Bullet, level};
+    }
+    return clamp_list(marks.pn);
+  }
+
   void add_text(const std::string& utf8)
   {
     flush_lead();
@@ -697,6 +858,7 @@ class Reader {
     paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
     paragraph_.align = live ? state_.align : final_align_;
     paragraphs_.push_back(paragraph_);
+    marks_.push_back(live ? state_.marks : final_marks_);
     paragraph_ = Paragraph{};
     paragraph_.heading = state_.heading;
     if (from_par)
@@ -725,11 +887,21 @@ class Reader {
   void merge(Document& doc)
   {
     doc.paragraphs.clear();
-    for (Paragraph& paragraph : paragraphs_) {
+    for (size_t i = 0; i < paragraphs_.size(); ++i) {
+      Paragraph& paragraph = paragraphs_[i];
       Paragraph merged;
       merged.heading = paragraph.heading;
       merged.align = paragraph.align;
       merged.indents = paragraph.indents;
+      merged.list = resolve(marks_[i]);
+      // A list item with no indents of its own, as hand-written RTF often
+      // has, takes the list's indents for its level so the label can hang.
+      if (merged.list.kind != ListKind::None && merged.indents.left == 0 &&
+          merged.indents.first == 0) {
+        const int right = merged.indents.right;
+        merged.indents = list_indents(merged.list.level);
+        merged.indents.right = right;
+      }
       for (Run& run : paragraph.runs) {
         run.text = clean_text(run.text, true);
         run.font = clean_text(run.font, false);
@@ -738,6 +910,26 @@ class Reader {
       doc.paragraphs.push_back(std::move(merged));
     }
   }
+
+  // One \list from the list table: the kind of each of its nine levels.
+  struct ListDef {
+    std::array<ListKind, kListLevels> kinds = [] {
+      std::array<ListKind, kListLevels> all{};
+      all.fill(ListKind::Number);  // \levelnfc0, RTF's default
+      return all;
+    }();
+    int levels = 0;
+    bool simple = false;
+    int id = 0;
+    bool has_id = false;
+  };
+  struct Override {
+    int list_id = 0;
+    bool has_id = false;
+    int ls = 0;
+  };
+  // Enough for any real document; a hostile one cannot grow the maps further.
+  static constexpr size_t kMaxListDefs = 4096;
 
   const std::string& text_;
   size_t i_ = 0;
@@ -751,12 +943,63 @@ class Reader {
   bool saw_par_ = false;
   Indents final_indents_;
   Align final_align_ = Align::Left;
+  ListMarks final_marks_;
+  std::vector<ListMarks> marks_;
+  std::map<int, ListDef> lists_;
+  std::map<int, int> overrides_;
+  ListDef building_;
+  Override override_;
   bool closed_ = false;
   uint32_t lead_ = 0;
   // The last character was a CR line break, so an LF straight after it is
   // the same break.
   bool after_cr_ = false;
 };
+
+// RTF's \levelnfc for a list level: a bullet (23), or a number cycling
+// decimal (0), lower-case letters (4), and lower-case roman (2) by level,
+// matching list_label().
+int level_nfc(ListKind kind, int level)
+{
+  if (kind == ListKind::Bullet)
+    return 23;
+  static const int kCycle[] = {0, 4, 2};
+  return kCycle[level % 3];
+}
+
+// A label in RTF. The three bullets carry a fallback a reader without
+// Unicode can show; the cp1252 bullet for the first.
+std::string label_rtf(const std::string& label)
+{
+  if (label == "\xE2\x80\xA2")
+    return "\\u8226\\'95";
+  if (label == "\xE2\x97\xA6")
+    return "\\u9702 o";
+  if (label == "\xE2\x96\xAA")
+    return "\\u9642 -";
+  return escape_rtf(label);
+}
+
+// One \list for the list table: nine levels of one kind of list, each
+// with Word's indents.
+void write_list(std::ostringstream& out, ListKind kind, int id)
+{
+  out << "{\\list\\listtemplateid" << id;
+  for (int level = 0; level < kListLevels; ++level) {
+    const int nfc = level_nfc(kind, level);
+    const Indents indents = list_indents(level);
+    out << "{\\listlevel\\levelnfc" << nfc << "\\levelnfcn" << nfc
+        << "\\leveljc0\\leveljcn0\\levelfollow0\\levelstartat1\\levelspace0\\levelindent0";
+    if (kind == ListKind::Bullet)
+      out << "{\\leveltext\\'01" << label_rtf(list_label(ListFormat{kind, level}, 0)) << ";}"
+          << "{\\levelnumbers;}";
+    else
+      out << "{\\leveltext\\'02\\'0" << level << ".;}{\\levelnumbers\\'01;}";
+    out << "\\fi" << indents.first << "\\li" << indents.left << "\\lin" << indents.left
+        << "\\jclisttab\\tx" << indents.left << "}";
+  }
+  out << "{\\listname ;}\\listid" << id << "}";
+}
 
 }  // namespace
 
@@ -785,6 +1028,38 @@ std::string rtf_export(const Document& doc)
   if (fonts.empty())
     fonts.push_back("Sans");
 
+  // Lists. \ls1 is every bullet. Each run of list paragraphs between plain
+  // ones that holds a number gets its own numbered list, \ls2 and up, so
+  // Word and LibreOffice restart the numbers where list_numbers() does.
+  std::vector<ListFormat> lists;
+  std::vector<int> overrides(doc.paragraphs.size(), 0);
+  int numbered = 0;
+  bool any_list = false;
+  {
+    // The numbered list of the current run of list paragraphs, 0 until the
+    // run has a number.
+    int block = 0;
+    for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+      const ListFormat list = clamp_list(doc.paragraphs[i].list);
+      lists.push_back(list);
+      if (list.kind == ListKind::None) {
+        block = 0;
+        continue;
+      }
+      any_list = true;
+      if (list.kind == ListKind::Bullet) {
+        overrides[i] = 1;
+        continue;
+      }
+      if (block == 0) {
+        ++numbered;
+        block = numbered + 1;
+      }
+      overrides[i] = block;
+    }
+  }
+  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+
   std::ostringstream out;
   out << "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n{\\fonttbl";
   for (size_t i = 0; i < fonts.size(); ++i) {
@@ -792,9 +1067,36 @@ std::string rtf_export(const Document& doc)
         << ";}";
   }
   out << "}\n";
+  if (any_list) {
+    out << "{\\*\\listtable";
+    write_list(out, ListKind::Bullet, 1);
+    for (int n = 0; n < numbered; ++n)
+      write_list(out, ListKind::Number, n + 2);
+    out << "}\n{\\*\\listoverridetable";
+    for (int n = 1; n <= numbered + 1; ++n)
+      out << "{\\listoverride\\listid" << n << "\\listoverridecount0\\ls" << n << "}";
+    out << "}\n";
+  }
   bool wrote = false;
-  for (const Paragraph& paragraph : doc.paragraphs) {
+  for (size_t index = 0; index < doc.paragraphs.size(); ++index) {
+    const Paragraph& paragraph = doc.paragraphs[index];
+    const ListFormat list = lists[index];
     wrote = true;
+    if (list.kind != ListKind::None) {
+      // The label as plain text for readers without lists. Readers with them
+      // skip {\pntext ...}.
+      int label_font = 0;
+      int label_size = 11;
+      for (const Run& run : paragraph.runs) {
+        if (run.text.empty())
+          continue;
+        label_font = index_of(run.font);
+        label_size = std::max(1, run.size);
+        break;
+      }
+      out << "{\\pntext\\f" << label_font << "\\fs" << label_size * 2 << " "
+          << label_rtf(list_label(list, numbers[index])) << "\\tab}";
+    }
     out << "\\pard";
     const Indents indents = clamp_indents(paragraph.indents);
     if (indents.left != 0)
@@ -808,6 +1110,11 @@ std::string rtf_export(const Document& doc)
       out << "\\qc";
     else if (paragraph.align == Align::Right)
       out << "\\qr";
+    if (list.kind != ListKind::None) {
+      // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
+      // \ls, and loses the levels and the restarts.
+      out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
+    }
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
       out << "\\outlinelevel" << (paragraph.heading - 1);
     bool first = true;
