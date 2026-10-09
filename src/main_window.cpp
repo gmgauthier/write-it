@@ -219,8 +219,8 @@ void MainWindow::build_menus()
   align_right_item_ = add_item(*format_menu, "Align _Right", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   add_item(*format_menu, "_Style…", false);
-  add_item(*format_menu, "B_ullets", false);
-  add_item(*format_menu, "_Numbering", false);
+  bullets_item_ = add_item(*format_menu, "Bull_ets", true);
+  numbering_item_ = add_item(*format_menu, "_Numbering", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   paragraph_item_ = add_item(*format_menu, "_Paragraph…", true);
   add_item(*format_menu, "C_olumns…", false);
@@ -337,8 +337,8 @@ void MainWindow::build_toolbars()
   align_right_toggle_ = toggle("format-justify-right", "Align Right", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   format_bar_.append(*hold(style_combo_, 110));
-  toggle("format-list-unordered", "Bullets", false, false);
-  toggle("format-list-ordered", "Numbering", false, false);
+  bullets_toggle_ = toggle("format-list-unordered", "Bullets", false, true);
+  numbering_toggle_ = toggle("format-list-ordered", "Numbering", false, true);
 }
 
 void MainWindow::build_page()
