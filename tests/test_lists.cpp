@@ -524,6 +524,27 @@ void rtf_round_trip()
   mixed.paragraphs.push_back(item("{braces} \\ and \u00e9", ListKind::Number, 3));
   CHECK(import(writeit::rtf_export(mixed)) == mixed);
 
+  // Alignment (M2's \qc and \qr) rides beside the list, and a list going
+  // on or off leaves it alone.
+  writeit::Document aligned;
+  aligned.paragraphs.push_back(item("centred", ListKind::Bullet));
+  aligned.paragraphs.back().align = writeit::Align::Center;
+  aligned.paragraphs.push_back(item("right", ListKind::Number, 1));
+  aligned.paragraphs.back().align = writeit::Align::Right;
+  aligned.paragraphs.push_back(item("left", ListKind::Number));
+  const std::string aligned_rtf = writeit::rtf_export(aligned);
+  CHECK(contains(aligned_rtf, "\\qc\\ls1\\ilvl0"));
+  CHECK(contains(aligned_rtf, "\\qr\\ls2\\ilvl1"));
+  CHECK(import(aligned_rtf) == aligned);
+  CHECK(import("{\\rtf1" + std::string(kTables) + "\\pard\\qc\\ls1 a\\par}").paragraphs[0].align ==
+        writeit::Align::Center);
+  std::vector<writeit::Paragraph> one{item("x", ListKind::None)};
+  one[0].align = writeit::Align::Right;
+  writeit::toggle_list(one, ListKind::Bullet);
+  CHECK(one[0].align == writeit::Align::Right);
+  writeit::toggle_list(one, ListKind::Bullet);
+  CHECK(one[0].align == writeit::Align::Right && one[0].list.kind == ListKind::None);
+
   // The last paragraph of the file may be a list item.
   writeit::Document last;
   last.paragraphs.push_back(item("only", ListKind::Number));
