@@ -177,8 +177,8 @@ has_title "Write-It - Untitled" && fail "second: the empty Untitled was not reus
   "$BIN" notes.md) >"$WORK/second/remote2.log" 2>&1
 status=$?
 [ "$status" = 0 ] || fail "second: the third launch exited $status"
-# An import is an unsaved document, as from File > Open: hence the " *".
-wait_title "Write-It - notes.md *" || fail "second: notes.md did not open"
+# An import opens unmodified, as from File > Open (#23): no " *".
+wait_title "Write-It - notes.md" || fail "second: notes.md did not open"
 has_title "Write-It - c.rtf" || fail "second: c.rtf's window was replaced"
 # Asking again for a file already open brings it forward: no second window.
 (cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/second/config" GTK_A11Y=none timeout 20 \
@@ -190,13 +190,18 @@ stop
 
 # 4. Plain text imports, as File > Open does.
 start plain plain.txt
-wait_title "Write-It - plain.txt *" || fail "plain: plain.txt did not open"
+wait_title "Write-It - plain.txt" || fail "plain: plain.txt did not open"
 # An import has no save path, but asking for it again must find its window,
 # not import a second copy.
 (cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/plain/config" GTK_A11Y=none timeout 20 \
   "$BIN" plain.txt) >"$WORK/plain/remote.log" 2>&1
 sleep 1
-[ "$(count_title "Write-It - plain.txt *")" = 1 ] || fail "plain: plain.txt opened twice"
+[ "$(count_title "Write-It - plain.txt")" = 1 ] || fail "plain: plain.txt opened twice"
+# An unedited import is not an empty window: another file opens beside it.
+(cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/plain/config" GTK_A11Y=none timeout 20 \
+  "$BIN" notes.md) >"$WORK/plain/remote2.log" 2>&1
+wait_title "Write-It - notes.md" || fail "plain: notes.md did not open"
+has_title "Write-It - plain.txt" || fail "plain: plain.txt's window was replaced"
 alive || fail "plain: the program exited"
 stop
 

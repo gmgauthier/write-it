@@ -42,6 +42,7 @@ write_it_exe = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
@@ -87,6 +88,29 @@ write_it_settings_tests = executable(
   dependencies: [glibmm],
 )
 test('settings', write_it_settings_tests)
+
+# Opening a .txt or .md in the real window, under a display: unmodified until
+# edited, and Save still goes through Save As.
+write_it_import_clean_tests = executable(
+  'write-it-import-clean-tests',
+  'tests/test_import_clean.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/open_plan.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('import-clean', write_it_import_clean_tests, timeout: 60)
 
 # check.hpp's guard. A suite that runs one check too few or too many, or
 # names no count, fails; done() without a count does not compile.
@@ -170,6 +194,29 @@ write_it_alignment_tests = executable(
 )
 test('alignment', write_it_alignment_tests)
 
+# Justify in the real window, under a display: the toolbar button, the menu
+# item and GTK's JUSTIFY_FILL.
+write_it_justify_ui_tests = executable(
+  'write-it-justify-ui-tests',
+  'tests/test_justify_ui.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/open_plan.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('justify-ui', write_it_justify_ui_tests, timeout: 60)
+
 write_it_lists_tests = executable(
   'write-it-lists-tests',
   'tests/test_lists.cpp',
@@ -229,6 +276,7 @@ write_it_status_bar_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/open_plan.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
   include_directories: inc,
@@ -251,6 +299,7 @@ write_it_page_width_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/open_plan.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
   include_directories: inc,
@@ -274,12 +323,59 @@ write_it_caret_scroll_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/open_plan.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
 test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)
+
+# The real window under a display: it fits a 1024 px screen.
+write_it_window_width_tests = executable(
+  'write-it-window-width-tests',
+  'tests/test_window_width.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/open_plan.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('window-width', write_it_window_width_tests, timeout: 60)
+
+# The real window under a display: what overflows the toolbars at 960 px and
+# at the narrowest reaches the overflow menus with its label, and does there
+# what its button or box does.
+write_it_toolbar_overflow_tests = executable(
+  'write-it-toolbar-overflow-tests',
+  'tests/test_toolbar_overflow.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/open_plan.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120)
 
 # The real application under a display: a file already open, asked for by a
 # symlink, a hard link or a ".." path, from Application::open or File > Open.
@@ -296,9 +392,10 @@ write_it_open_identity_tests = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
-  'src/font_sizes.cpp',
   'src/open_plan.cpp',
   'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
