@@ -148,6 +148,25 @@ write_it_alignment_tests = executable(
 )
 test('alignment', write_it_alignment_tests)
 
+# Justify in the real window, under a display: the toolbar button, the menu
+# item and GTK's JUSTIFY_FILL.
+write_it_justify_ui_tests = executable(
+  'write-it-justify-ui-tests',
+  'tests/test_justify_ui.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('justify-ui', write_it_justify_ui_tests, timeout: 60)
+
 write_it_lists_tests = executable(
   'write-it-lists-tests',
   'tests/test_lists.cpp',
