@@ -383,6 +383,44 @@ writeit::ParaFields fields(writeit::Indents current, writeit::Units units, const
   return f;
 }
 
+// Every total of two-decimal indents near the limit, split evenly and all on
+// Left, in both units: accepted exactly up to the text width less a quarter
+// inch as shown, and whatever is accepted wraps at least a pixel wide at
+// every zoom the window offers, 50% included.
+void room_at_every_zoom()
+{
+  using writeit::ParaField;
+  using writeit::Units;
+  auto text = [](int hundredths) {
+    return std::to_string(hundredths / 100) + "." + std::to_string(hundredths / 10 % 10) +
+           std::to_string(hundredths % 10);
+  };
+  struct Case {
+    Units units;
+    int from;
+    int to;
+    int most;
+  };
+  for (const Case& unit : {Case{Units::Inches, 640, 700, 673}, Case{Units::Centimetres, 1660, 1775, 1709}}) {
+    for (int total = unit.from; total <= unit.to; ++total) {
+      for (int left : {total / 2, total}) {
+        const int right = total - left;
+        const auto c = writeit::check_paragraph(
+            fields(writeit::Indents{}, unit.units, text(left).c_str(), text(right).c_str(), "0", 0));
+        CHECK((c.field == ParaField::None) == (total <= unit.most));
+        if (c.field != ParaField::None)
+          continue;
+        for (double zoom : {0.5, 0.75, 1.0, 1.5, 2.0}) {
+          const int wrap = writeit::page_widths(writeit::ViewMode::Page, zoom).wrap -
+                           writeit::twips_to_px(c.indents.left, zoom) -
+                           writeit::twips_to_px(c.indents.right, zoom);
+          CHECK(wrap >= 1);
+        }
+      }
+    }
+  }
+}
+
 // Bug Basher's live pass: Left 22" and Right 22" was accepted, and the
 // paragraph left the page. Word 97 refuses indents that leave too little
 // text width; check_paragraph refuses them when they leave none.
@@ -395,14 +433,14 @@ void paragraph_ok()
   const Units in = Units::Inches;
   const Units cm = Units::Centimetres;
   const std::string sides_in =
-      "The left and right indents are too large for the 6.98\" text area. The text cannot fit "
-      "between them.";
+      "The left and right indents leave too little room for text. They must leave at least "
+      "0.25\" of the 6.98\" text area.";
   const std::string first_in =
-      "The left, first-line and right indents are too large for the 6.98\" text area. The first "
-      "line cannot fit between them.";
+      "The left, first-line and right indents leave too little room for text. They must leave "
+      "at least 0.25\" of the 6.98\" text area.";
   const std::string sides_cm =
-      "The left and right indents are too large for the 17.73 cm text area. The text cannot fit "
-      "between them.";
+      "The left and right indents leave too little room for text. They must leave at least "
+      "0.64 cm of the 17.73 cm text area.";
   const std::string hang =
       "The hanging indent is larger than the left indent. The first line cannot start to the "
       "left of the margin.";
@@ -432,13 +470,13 @@ void paragraph_ok()
     CHECK(c.indents == (Indents{1440, 720, 1440}));
   }
 
-  // Bug Basher's defect 3: Left 22" and Right 22".
+  // Bug Basher's defect 3: Left 22" and Right 22". Left alone leaves no
+  // room, so Left is the field to fix.
   {
     const auto c = check_paragraph(fields(Indents{}, in, "22", "22", "0\"", 0));
-    CHECK(c.field == ParaField::Right);
+    CHECK(c.field == ParaField::Left);
     CHECK(c.message == sides_in);
   }
-  // Right is at fault unless only Left changed.
   {
     const auto c = check_paragraph(fields(Indents{}, in, "22", "0\"", "0\"", 0));
     CHECK(c.field == ParaField::Left && c.message == sides_in);
@@ -447,53 +485,110 @@ void paragraph_ok()
     const auto c = check_paragraph(fields(Indents{}, in, "0\"", "7", "0\"", 0));
     CHECK(c.field == ParaField::Right && c.message == sides_in);
   }
+  // Neither alone too wide: Right is at fault unless only Left changed.
   {
     const auto c = check_paragraph(fields(Indents{}, cm, "10", "10", "0 cm", 0));
     CHECK(c.field == ParaField::Right && c.message == sides_cm);
   }
-  // A file that already says \li31680\ri31680 cannot be OKed unchanged.
+  {
+    const auto c = check_paragraph(fields(Indents{0, 4320, 0}, in, "4", "3\"", "0\"", 0));
+    CHECK(c.field == ParaField::Left && c.message == sides_in);
+  }
+  // Bug Basher, second pass: in cm, Left 55.88 with Right 8.87 selected
+  // Right, though Left alone is too wide.
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "55.88", "8.87", "0 cm", 0));
+    CHECK(c.field == ParaField::Left && c.message == sides_cm);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "1", "55.88", "0 cm", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_cm);
+  }
+  // A file that already says \li31680\ri31680 cannot be OKed unchanged;
+  // Left, too wide on its own, comes first. So does a Left of exactly the
+  // text width.
   {
     const Indents wide{writeit::kMaxIndent, writeit::kMaxIndent, 0};
     const auto c = check_paragraph(fields(wide, in, "22\"", "22\"", "0\"", 0));
-    CHECK(c.field == ParaField::Right && c.message == sides_in);
+    CHECK(c.field == ParaField::Left && c.message == sides_in);
   }
-  // Just inside and just at the text area: 3.49" + 3.49" is 10052 twips,
-  // 3.5" + 3.49" is 10066.
+  {
+    const Indents wide{writeit::kTextWidthTwips, 0, 0};
+    const auto c = check_paragraph(fields(wide, in, "6.98\"", "0\"", "0\"", 0));
+    CHECK(c.field == ParaField::Left && c.message == sides_in);
+  }
+  // Bug Basher, second pass: 3.49" + 3.49" (10052 twips) and 6.98" + 0 were
+  // accepted, leaving under a pixel, and the line stopped wrapping. The
+  // indents must leave a quarter inch: 6.73" in all is the most.
   {
     const auto c = check_paragraph(fields(Indents{}, in, "3.49", "3.49", "0\"", 0));
-    CHECK(c.field == ParaField::None && c.indents == (Indents{5026, 5026, 0}));
-  }
-  {
-    const auto c = check_paragraph(fields(Indents{}, in, "3.5", "3.49", "0\"", 0));
     CHECK(c.field == ParaField::Right && c.message == sides_in);
   }
-  // At a twip: indents adding up to the width are refused, one twip less is not.
   {
-    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "0\"", 0), 2880);
-    CHECK(c.field == ParaField::Right);
+    const auto c = check_paragraph(fields(Indents{}, in, "6.98", "0\"", "0\"", 0));
+    CHECK(c.field == ParaField::Left && c.message == sides_in);
   }
   {
-    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "0\"", 0), 2881);
+    const auto c = check_paragraph(fields(Indents{}, in, "3.48", "3.49", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3.37", "3.36", "0\"", 0));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{4853, 4838, 0}));
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3.37", "3.37", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
+  }
+  // In cm, 17.09 cm in all is the most: 17.73 cm less 0.64 cm, as shown.
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "17.09", "0 cm", "0 cm", 0));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{9689, 0, 0}));
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "17.1", "0 cm", "0 cm", 0));
+    CHECK(c.field == ParaField::Left && c.message == sides_cm);
+  }
+  // At a twip, with a text width of 3240: 1" + 1" leaves exactly a quarter
+  // inch and is fine; one twip narrower and it is not.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "0\"", 0), 3240);
     CHECK(c.field == ParaField::None && c.indents == (Indents{1440, 1440, 0}));
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "0\"", 0), 3239);
+    CHECK(c.field == ParaField::Right);
   }
   // A first-line indent counts: its line starts that much further right.
   {
-    const auto c = check_paragraph(fields(Indents{}, in, "3", "3", "1", 1));
+    const auto c = check_paragraph(fields(Indents{}, in, "3", "3", "0.74", 1));
     CHECK(c.field == ParaField::By && c.message == first_in);
   }
   {
-    const auto c = check_paragraph(fields(Indents{}, in, "3", "3", "0.98", 1));
-    CHECK(c.field == ParaField::None && c.indents == (Indents{4320, 4320, 1411}));
+    const auto c = check_paragraph(fields(Indents{}, in, "3", "3", "0.73", 1));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{4320, 4320, 1051}));
   }
-  // ...but when Left and Right alone leave no room, they are the fault.
+  // ...but By is at fault only when it (or Special) changed. Bug Basher:
+  // Left edited to 4.5" under a 1" first line selected By.
+  {
+    const auto c =
+        check_paragraph(fields(Indents{0, 2880, 1440}, in, "4.5", "2\"", "1\"", 1));
+    CHECK(c.field == ParaField::Left && c.message == first_in);
+  }
+  {
+    const auto c =
+        check_paragraph(fields(Indents{2880, 0, 1440}, in, "2\"", "4.5", "1\"", 1));
+    CHECK(c.field == ParaField::Right && c.message == first_in);
+  }
+  // ...and when Left and Right alone leave too little, they are the fault.
   {
     const auto c = check_paragraph(fields(Indents{}, in, "4", "4", "1", 1));
-    CHECK(c.field == ParaField::Right && c.message == sides_in);
+    CHECK(c.field == ParaField::Left && c.message == sides_in);
   }
   // A hanging indent gives the first line more room, not less.
   {
-    const auto c = check_paragraph(fields(Indents{}, in, "3.4", "3.4", "1", 2));
-    CHECK(c.field == ParaField::None && c.indents == (Indents{4896, 4896, -1440}));
+    const auto c = check_paragraph(fields(Indents{}, in, "3.3", "3.3", "1", 2));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{4752, 4752, -1440}));
   }
   // The hanging-indent warning is unchanged, and comes first.
   {
@@ -550,5 +645,6 @@ int main()
   dialog_validation();
   field_ranges();
   paragraph_ok();
+  room_at_every_zoom();
   return suite_test::done("indents", kChecks);
 }

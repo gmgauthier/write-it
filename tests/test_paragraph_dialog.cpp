@@ -42,6 +42,10 @@ struct MainWindowProbe {
   {
     w.settings_.units = units;
   }
+  static void zoom(MainWindow& w, int percent)
+  {
+    w.set_zoom(percent);
+  }
 };
 
 }  // namespace writeit
@@ -186,11 +190,11 @@ const char* kRangeIn = "The measurement must be between 0\" and 22\".";
 const char* kInvalidIn =
     "This is not a valid measurement. The measurement must be between 0\" and 22\".";
 const char* kSidesIn =
-    "The left and right indents are too large for the 6.98\" text area. The text cannot fit "
-    "between them.";
+    "The left and right indents leave too little room for text. They must leave at least "
+    "0.25\" of the 6.98\" text area.";
 const char* kFirstIn =
-    "The left, first-line and right indents are too large for the 6.98\" text area. The first "
-    "line cannot fit between them.";
+    "The left, first-line and right indents leave too little room for text. They must leave "
+    "at least 0.25\" of the 6.98\" text area.";
 const char* kRangeCm = "The measurement must be between 0 cm and 55.88 cm.";
 
 }  // namespace
@@ -285,7 +289,8 @@ int main(int argc, char* argv[])
                  dialog->response(Gtk::RESPONSE_OK);
                }),
           expect(kSidesIn),
-          back(&f.right, "22",
+          // Left alone leaves no room, so Left is the one to fix.
+          back(&f.left, "22",
                [&] {
                  // 3" + 3" fits, but not with a 1" first line on top.
                  f.left->set_text("3");
@@ -345,6 +350,78 @@ int main(int argc, char* argv[])
               return false;
             CHECK(f.right->get_text() == "99");
             CHECK(selected(*dialog, f.right));
+            dialog->response(Gtk::RESPONSE_CANCEL);
+            return true;
+          },
+      };
+      script.start();
+      MainWindowProbe::paragraph(window);
+      CHECK(script.next == script.steps.size() && !script.stuck);
+    }
+    settle();
+    CHECK(paragraph_dialog(window) == nullptr);
+    CHECK(MainWindowProbe::indents(window) == (writeit::Indents{4320, 4320, 720}));
+
+    // Bug Basher, second pass: at 50%, 3.48" + 3.49" and 6.98" + 0 were
+    // accepted and the line ran off the page. Both now leave too little room
+    // for text: Right is selected for the first, Left (too wide alone) for
+    // the second. Cancel leaves the paragraph as it was.
+    MainWindowProbe::units(window, writeit::Units::Inches);
+    MainWindowProbe::zoom(window, 50);
+    settle();
+    {
+      Script script(window);
+      Gtk::Dialog* dialog = nullptr;
+      Fields f;
+      script.steps = {
+          [&] {
+            dialog = paragraph_dialog(window);
+            if (!dialog)
+              return false;
+            f = fields_of(*dialog);
+            CHECK(f.left && f.right && f.special);
+            if (!f.left || !f.right || !f.special) {
+              dialog->response(Gtk::RESPONSE_CANCEL);
+              return true;
+            }
+            // No first line, so only Left and Right take the room.
+            f.special->set_active(0);
+            f.left->set_text("3.48");
+            f.right->set_text("3.49");
+            dialog->response(Gtk::RESPONSE_OK);
+            return true;
+          },
+          [&] {
+            Gtk::MessageDialog* message = message_over(*dialog);
+            if (!message)
+              return false;
+            CHECK(message->property_text().get_value() == kSidesIn);
+            message->response(Gtk::RESPONSE_OK);
+            return true;
+          },
+          [&] {
+            if (message_over(*dialog))
+              return false;
+            CHECK(f.right->get_text() == "3.49");
+            CHECK(selected(*dialog, f.right));
+            f.left->set_text("6.98");
+            f.right->set_text("0");
+            dialog->response(Gtk::RESPONSE_OK);
+            return true;
+          },
+          [&] {
+            Gtk::MessageDialog* message = message_over(*dialog);
+            if (!message)
+              return false;
+            CHECK(message->property_text().get_value() == kSidesIn);
+            message->response(Gtk::RESPONSE_OK);
+            return true;
+          },
+          [&] {
+            if (message_over(*dialog))
+              return false;
+            CHECK(f.left->get_text() == "6.98");
+            CHECK(selected(*dialog, f.left));
             dialog->response(Gtk::RESPONSE_CANCEL);
             return true;
           },
