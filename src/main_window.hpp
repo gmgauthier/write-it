@@ -184,6 +184,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  // Word 97 moves a left-aligned or justified list item's text to the next
+  // default tab stop when its label and a space run past the hang. On screen
+  // only, through "list-tab" tags the document never sees; brought up to
+  // date in an idle after edits, formatting, zoom, and the view.
+  void queue_list_tabs();
+  Glib::RefPtr<Gtk::TextTag> list_tab_tag(int indent);
+  void update_list_tabs();
   void sync_list_controls();
 
   void build_find();
@@ -293,6 +300,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection caret_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // The list-tab idle, likewise; tabbing_ while it retags.
+  sigc::connection list_tabs_idle_;
+  bool tabbing_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

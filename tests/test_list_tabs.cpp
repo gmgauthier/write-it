@@ -3,7 +3,7 @@
 // The real window, under a display. A list label wider than its hang, such
 // as "32767.", must not run into the item's text: as in Word 97, a left-
 // aligned or justified item's text then starts at the next default tab
-// stop (every half inch from the left margin) past the label and a space.
+// stop (every half inch from the left margin) clear of the label.
 // The move is on screen only: never in the document, the file, or dirty.
 
 #include "check.hpp"
@@ -144,7 +144,8 @@ void expect_tab(writeit::MainWindow& w, int line, int percent)
 {
   const writeit::Indents in = writeit::list_indents(0);
   const int label_x = MainWindowProbe::px(w, in.left + in.first);
-  const int end = label_x + MainWindowProbe::width(w, "32767.") + MainWindowProbe::width(w, " ");
+  // The label's end and a pixel clear of it.
+  const int end = label_x + MainWindowProbe::width(w, "32767.") + 1;
   const int x = MainWindowProbe::text_x(w, line);
   std::cout << "  " << percent << "% line " << line << ": label " << label_x << ".." << end
             << " text " << x << " stop " << next_stop(w, end) << "\n";

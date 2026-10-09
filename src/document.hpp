@@ -73,6 +73,8 @@ constexpr int kMaxListStart = 32767;
 // Word's list indents: half an inch per level, the label hanging a quarter inch.
 constexpr int kListStep = 720;
 constexpr int kListHang = 360;
+// Word 97's default tab stops: every half inch from the left margin.
+constexpr int kDefaultTab = 720;
 
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.

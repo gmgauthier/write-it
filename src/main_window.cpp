@@ -172,6 +172,7 @@ MainWindow::~MainWindow()
 {
   caret_idle_.disconnect();
   page_status_idle_.disconnect();
+  list_tabs_idle_.disconnect();
 }
 
 MainWindow::MainWindow()
