@@ -44,6 +44,7 @@ writeit_core_sources = files(
   'src/narrow_combo.cpp',
   'src/open_plan.cpp',
   'src/page_text.cpp',
+  'src/para_check.cpp',
   'src/rtf.cpp',
   'src/settings.cpp',
   'src/units.cpp',
@@ -316,6 +317,16 @@ write_it_list_tabs_tests = executable(
   dependencies: [writeit_dep],
 )
 test('list-tabs', write_it_list_tabs_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: Format > Paragraph's warnings for an
+# indent out of range, not a number, or leaving no room for text, and the
+# field each one selects.
+write_it_paragraph_dialog_tests = executable(
+  'write-it-paragraph-dialog-tests',
+  'tests/test_paragraph_dialog.cpp',
+  dependencies: [writeit_dep],
+)
+test('paragraph-dialog', write_it_paragraph_dialog_tests, timeout: 60, is_parallel: false)
 
 # The real application under a display: a file already open, asked for by a
 # symlink, a hard link or a ".." path, from Application::open or File > Open.

@@ -5,7 +5,9 @@
 
 #include "check.hpp"
 #include "document.hpp"
+#include "para_check.hpp"
 #include "units.hpp"
+#include "view.hpp"
 
 #include <string>
 
@@ -290,6 +292,249 @@ void dialog_validation()
   CHECK(writeit::clamp_indents(indents(720, 0, -1440)) == indents(720, 0, -720));
 }
 
+// Bug Basher's live pass: typing 99, 30 or 1e3 into an indent field snapped
+// back to the old value with no word. Word 97 says what the range is and
+// keeps the field to fix; check_measure is that check.
+void field_ranges()
+{
+  using writeit::check_measure;
+  using writeit::MeasureCheck;
+  using writeit::measure_message;
+  using writeit::Units;
+  const Units in = Units::Inches;
+  const Units cm = Units::Centimetres;
+  CHECK(writeit::max_measure(in) == 22.0);
+  CHECK(writeit::max_measure(cm) == 55.88);
+  double value = -1;
+  CHECK(check_measure("0", in, value) == MeasureCheck::Ok && value == 0.0);
+  CHECK(check_measure("22", in, value) == MeasureCheck::Ok && value == 22.0);
+  CHECK(check_measure("22\"", in, value) == MeasureCheck::Ok && value == 22.0);
+  CHECK(check_measure("21.99 in", in, value) == MeasureCheck::Ok && value == 21.99);
+  CHECK(check_measure("55.88 cm", in, value) == MeasureCheck::Ok && value == 22.0);
+  CHECK(check_measure("55.88", cm, value) == MeasureCheck::Ok && value == 55.88);
+  CHECK(check_measure("22\"", cm, value) == MeasureCheck::Ok && value > 55.879 && value <= 55.88);
+  CHECK(check_measure("1.27 cm", cm, value) == MeasureCheck::Ok && value == 1.27);
+  // Rounded to the field's two decimals, 22.004 is 22": in range, and it
+  // stores 22", never past the ceiling.
+  CHECK(check_measure("22.004", in, value) == MeasureCheck::Ok && value == 22.0);
+  CHECK(check_measure("-0", in, value) == MeasureCheck::Ok && value == 0.0);
+  CHECK(check_measure("-0.004", in, value) == MeasureCheck::Ok && value == 0.0);
+
+  // Out of range, either side, in either unit. The value is left alone.
+  for (const char* text : {"99", "30", "22.01", "23", "-1", "-0.01", "22.01\"", "56 cm",
+                           "1000000000000000000000000000000000000000"}) {
+    value = -1;
+    CHECK(check_measure(text, in, value) == MeasureCheck::OutOfRange && value == -1);
+  }
+  for (const char* text : {"99", "30 in", "55.89", "56", "141", "-0.01", "22.01\"", "-1 cm"}) {
+    value = -1;
+    CHECK(check_measure(text, cm, value) == MeasureCheck::OutOfRange && value == -1);
+  }
+  // Not a measure at all: 1e3 included, since the field takes no exponents.
+  for (const char* text : {"1e3", "abc", "", "   ", "1,5", "0x10", "1 mm", "--1", ".", "\""}) {
+    value = -1;
+    CHECK(check_measure(text, in, value) == MeasureCheck::NotMeasure && value == -1);
+    CHECK(check_measure(text, cm, value) == MeasureCheck::NotMeasure && value == -1);
+  }
+  // Every hundredth from 0 to 23" and 0 to 60 cm: in range exactly up to the
+  // ceiling.
+  for (int hundredths = 0; hundredths <= 2300; ++hundredths) {
+    const std::string text = std::to_string(hundredths / 100) + "." +
+                             std::to_string(hundredths / 10 % 10) + std::to_string(hundredths % 10);
+    CHECK((check_measure(text, in, value) == MeasureCheck::Ok) == (hundredths <= 2200));
+  }
+  for (int hundredths = 0; hundredths <= 6000; ++hundredths) {
+    const std::string text = std::to_string(hundredths / 100) + "." +
+                             std::to_string(hundredths / 10 % 10) + std::to_string(hundredths % 10);
+    CHECK((check_measure(text, cm, value) == MeasureCheck::Ok) == (hundredths <= 5588));
+  }
+
+  // The messages name the range in the unit Tools > Options... chose.
+  CHECK(measure_message(MeasureCheck::OutOfRange, in) ==
+        "The measurement must be between 0\" and 22\".");
+  CHECK(measure_message(MeasureCheck::OutOfRange, cm) ==
+        "The measurement must be between 0 cm and 55.88 cm.");
+  CHECK(measure_message(MeasureCheck::NotMeasure, in) ==
+        "This is not a valid measurement. The measurement must be between 0\" and 22\".");
+  CHECK(measure_message(MeasureCheck::NotMeasure, cm) ==
+        "This is not a valid measurement. The measurement must be between 0 cm and 55.88 cm.");
+  CHECK(measure_message(MeasureCheck::Ok, in).empty());
+}
+
+// The dialog's fields as OK finds them, opened on `current` and showing what
+// the dialog shows for it, then edited to `left`, `right`, `by` and `special`.
+writeit::ParaFields fields(writeit::Indents current, writeit::Units units, const char* left,
+                           const char* right, const char* by, int special)
+{
+  auto shown = [units](int twips) {
+    return writeit::units_round(writeit::twips_to_units(twips, units), units);
+  };
+  writeit::ParaFields f;
+  f.units = units;
+  f.current = current;
+  f.left = left;
+  f.right = right;
+  f.by = by;
+  f.left_shown = shown(current.left);
+  f.right_shown = shown(current.right);
+  f.by_shown = shown(current.first < 0 ? -current.first : current.first);
+  f.special = special;
+  f.special_was = current.first > 0 ? 1 : current.first < 0 ? 2 : 0;
+  return f;
+}
+
+// Bug Basher's live pass: Left 22" and Right 22" was accepted, and the
+// paragraph left the page. Word 97 refuses indents that leave too little
+// text width; check_paragraph refuses them when they leave none.
+void paragraph_ok()
+{
+  using writeit::check_paragraph;
+  using writeit::Indents;
+  using writeit::ParaField;
+  using writeit::Units;
+  const Units in = Units::Inches;
+  const Units cm = Units::Centimetres;
+  const std::string sides_in =
+      "The left and right indents are too large for the 6.98\" text area. The text cannot fit "
+      "between them.";
+  const std::string first_in =
+      "The left, first-line and right indents are too large for the 6.98\" text area. The first "
+      "line cannot fit between them.";
+  const std::string sides_cm =
+      "The left and right indents are too large for the 17.73 cm text area. The text cannot fit "
+      "between them.";
+  const std::string hang =
+      "The hanging indent is larger than the left indent. The first line cannot start to the "
+      "left of the margin.";
+  const std::string range_in = "The measurement must be between 0\" and 22\".";
+  const std::string range_cm = "The measurement must be between 0 cm and 55.88 cm.";
+  const std::string invalid_in =
+      "This is not a valid measurement. The measurement must be between 0\" and 22\".";
+
+  // The text area is A4 less the page view's margins, as the screen lays it out.
+  CHECK(writeit::kTextWidthTwips == 10054);
+  CHECK(writeit::twips_to_px(writeit::kTextWidthTwips, 1.0) ==
+        writeit::page_widths(writeit::ViewMode::Page, 1.0).wrap);
+  CHECK(writeit::twips_to_px(writeit::kTextWidthTwips, 2.0) ==
+        writeit::page_widths(writeit::ViewMode::Draft, 2.0).wrap);
+
+  // OK on an unchanged dialog applies what the paragraph had, twip for twip.
+  {
+    const auto c = check_paragraph(fields(Indents{1410, 567, -360}, in, "0.98\"", "0.39\"",
+                                          "0.25\"", 2));
+    CHECK(c.field == ParaField::None && c.message.empty());
+    CHECK(c.indents == (Indents{1410, 567, -360}));
+  }
+  // Edits apply in the unit.
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "2.54", "1.27 cm", "1\"", 1));
+    CHECK(c.field == ParaField::None);
+    CHECK(c.indents == (Indents{1440, 720, 1440}));
+  }
+
+  // Bug Basher's defect 3: Left 22" and Right 22".
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "22", "22", "0\"", 0));
+    CHECK(c.field == ParaField::Right);
+    CHECK(c.message == sides_in);
+  }
+  // Right is at fault unless only Left changed.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "22", "0\"", "0\"", 0));
+    CHECK(c.field == ParaField::Left && c.message == sides_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "0\"", "7", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "10", "10", "0 cm", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_cm);
+  }
+  // A file that already says \li31680\ri31680 cannot be OKed unchanged.
+  {
+    const Indents wide{writeit::kMaxIndent, writeit::kMaxIndent, 0};
+    const auto c = check_paragraph(fields(wide, in, "22\"", "22\"", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
+  }
+  // Just inside and just at the text area: 3.49" + 3.49" is 10052 twips,
+  // 3.5" + 3.49" is 10066.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3.49", "3.49", "0\"", 0));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{5026, 5026, 0}));
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3.5", "3.49", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
+  }
+  // At a twip: indents adding up to the width are refused, one twip less is not.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "0\"", 0), 2880);
+    CHECK(c.field == ParaField::Right);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "0\"", 0), 2881);
+    CHECK(c.field == ParaField::None && c.indents == (Indents{1440, 1440, 0}));
+  }
+  // A first-line indent counts: its line starts that much further right.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3", "3", "1", 1));
+    CHECK(c.field == ParaField::By && c.message == first_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3", "3", "0.98", 1));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{4320, 4320, 1411}));
+  }
+  // ...but when Left and Right alone leave no room, they are the fault.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "4", "4", "1", 1));
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
+  }
+  // A hanging indent gives the first line more room, not less.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "3.4", "3.4", "1", 2));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{4896, 4896, -1440}));
+  }
+  // The hanging-indent warning is unchanged, and comes first.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "0.5", "0\"", "1", 2));
+    CHECK(c.field == ParaField::By && c.message == hang);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{1440, 0, -1440}, in, "0.5", "7", "1\"", 2));
+    CHECK(c.field == ParaField::Left && c.message == hang);
+  }
+
+  // Bug Basher's defect 4: 99, 30 and 1e3, each with its message, Left first.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "99", "0\"", "0\"", 0));
+    CHECK(c.field == ParaField::Left && c.message == range_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "30", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == range_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "1", "1e3", 1));
+    CHECK(c.field == ParaField::By && c.message == invalid_in);
+  }
+  {
+    const auto c = check_paragraph(fields(Indents{}, cm, "99", "abc", "0 cm", 0));
+    CHECK(c.field == ParaField::Left && c.message == range_cm);
+  }
+  // A field is checked before the indents it makes: 99" is out of range,
+  // not too wide.
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "5", "99", "0\"", 0));
+    CHECK(c.field == ParaField::Right && c.message == range_in);
+  }
+  // By is not read while Special is (none).
+  {
+    const auto c = check_paragraph(fields(Indents{}, in, "1", "0\"", "1e3", 0));
+    CHECK(c.field == ParaField::None && c.indents == (Indents{1440, 0, 0}));
+  }
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
@@ -303,5 +548,7 @@ int main()
   rtf_read();
   markdown();
   dialog_validation();
+  field_ranges();
+  paragraph_ok();
   return suite_test::done("indents", kChecks);
 }
