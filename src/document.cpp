@@ -179,6 +179,7 @@ ListFormat clamp_list(ListFormat list)
   if (list.kind != ListKind::Bullet && list.kind != ListKind::Number)
     return ListFormat{};
   list.level = std::max(0, std::min(kListLevels - 1, list.level));
+  list.own = list.has_own ? clamp_indents(list.own) : Indents{};
   return list;
 }
 
@@ -273,6 +274,8 @@ void join_list(Paragraph& paragraph, ListKind kind)
   }
   paragraph.list.kind = kind;
   paragraph.list.level = 0;
+  paragraph.list.has_own = true;
+  paragraph.list.own = clamp_indents(paragraph.indents);
   Indents indents = paragraph.indents;
   if (indents.left == 0 && indents.first == 0) {
     indents.left = list_indents(0).left;
@@ -289,12 +292,18 @@ void leave_list(Paragraph& paragraph)
 {
   if (paragraph.list.kind == ListKind::None)
     return;
-  if (at_list_indents(paragraph.indents, clamp_list(paragraph.list).level))
+  const ListFormat list = clamp_list(paragraph.list);
+  paragraph.list = ListFormat{};
+  if (list.has_own) {
+    paragraph.indents = list.own;
+    return;
+  }
+  // No memory of the paragraph's own indents, as for an item read from a
+  // file: take off the list's indents and the label's hang.
+  if (at_list_indents(paragraph.indents, list.level))
     paragraph.indents.left = 0;
-  // The label's hang goes with the label.
   paragraph.indents.first = 0;
   paragraph.indents = clamp_indents(paragraph.indents);
-  paragraph.list = ListFormat{};
 }
 
 }  // namespace

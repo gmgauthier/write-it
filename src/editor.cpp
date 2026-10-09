@@ -142,16 +142,22 @@ bool parse_fmt(const std::string& name, Run& run)
   return true;
 }
 
-// Paragraph tags hold the indents in twips, the alignment, and the list.
-// Every character of a paragraph, its newline included, carries exactly one.
+// Paragraph tags hold the indents in twips, the alignment, and the list,
+// with the indents the paragraph had before it joined the list so that undo
+// and redo keep them. Every character of a paragraph, its newline included,
+// carries exactly one.
 std::string para_name(const ParaFormat& format)
 {
   const Indents& indents = format.indents;
-  return std::string("para") + '\x1f' + std::to_string(indents.left) + '\x1f' +
-         std::to_string(indents.right) + '\x1f' + std::to_string(indents.first) + '\x1f' +
-         std::to_string(static_cast<int>(format.align)) + '\x1f' +
-         std::to_string(static_cast<int>(format.list.kind)) + '\x1f' +
-         std::to_string(format.list.level);
+  const ListFormat& list = format.list;
+  std::string name = "para";
+  for (const int value : {indents.left, indents.right, indents.first,
+                          static_cast<int>(format.align), static_cast<int>(list.kind), list.level,
+                          list.has_own ? 1 : 0, list.own.left, list.own.right, list.own.first}) {
+    name += '\x1f';
+    name += std::to_string(value);
+  }
+  return name;
 }
 
 bool parse_para(const std::string& name, ParaFormat& format)
@@ -173,7 +179,7 @@ bool parse_para(const std::string& name, ParaFormat& format)
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 6 || values[3] < 0 || values[3] > 2 || values[4] < 0 ||
+  if (values.size() != 10 || values[3] < 0 || values[3] > 2 || values[4] < 0 ||
       values[4] > static_cast<int>(ListKind::Number))
     return false;
   format.indents.left = values[0];
@@ -182,6 +188,8 @@ bool parse_para(const std::string& name, ParaFormat& format)
   format.align = static_cast<Align>(values[3]);
   format.list.kind = static_cast<ListKind>(values[4]);
   format.list.level = values[5];
+  format.list.has_own = values[6] != 0;
+  format.list.own = Indents{values[7], values[8], values[9]};
   return true;
 }
 

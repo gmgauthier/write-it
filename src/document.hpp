@@ -37,9 +37,22 @@ enum class Align { Left, Center, Right };
 enum class ListKind { None, Bullet, Number };
 
 struct ListFormat {
+  ListFormat() = default;
+  ListFormat(ListKind kind_in, int level_in)
+      : kind(kind_in),
+        level(level_in)
+  {
+  }
+
   ListKind kind = ListKind::None;
   // 0 through kListLevels - 1, as RTF's \ilvl.
   int level = 0;
+  // The paragraph's own indents from before it joined the list, which
+  // leaving the list gives back. Editing memory, not document content: it is
+  // not written to the file and not part of equality. A list item read from
+  // a file has none, and leaving takes off the list's indents instead.
+  bool has_own = false;
+  Indents own;
 };
 
 constexpr int kListLevels = 9;

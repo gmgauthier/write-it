@@ -894,6 +894,14 @@ class Reader {
       merged.align = paragraph.align;
       merged.indents = paragraph.indents;
       merged.list = resolve(marks_[i]);
+      // A list item with no indents of its own, as hand-written RTF often
+      // has, takes the list's indents for its level so the label can hang.
+      if (merged.list.kind != ListKind::None && merged.indents.left == 0 &&
+          merged.indents.first == 0) {
+        const int right = merged.indents.right;
+        merged.indents = list_indents(merged.list.level);
+        merged.indents.right = right;
+      }
       for (Run& run : paragraph.runs) {
         run.text = clean_text(run.text, true);
         run.font = clean_text(run.font, false);
