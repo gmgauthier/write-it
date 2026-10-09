@@ -204,6 +204,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Toolbar format_bar_;
   NarrowCombo font_combo_{128};
   NarrowCombo size_combo_{52};
+  // What size_combo_ lists now (size_choices()).
+  std::vector<int> size_choices_shown_;
   NarrowCombo style_combo_{110};
   Gtk::DrawingArea ruler_;
   Gtk::ScrolledWindow paste_;

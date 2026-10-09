@@ -3,6 +3,7 @@
 #include "main_window.hpp"
 
 #include "filename.hpp"
+#include "font_sizes.hpp"
 
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
@@ -84,21 +85,7 @@ std::optional<std::string> run_save_chooser(Gtk::FileChooserDialog& dialog, cons
 
 bool known_size(int size)
 {
-  switch (size) {
-    case 8:
-    case 9:
-    case 10:
-    case 11:
-    case 12:
-    case 14:
-    case 16:
-    case 18:
-    case 24:
-    case 36:
-      return true;
-    default:
-      return false;
-  }
+  return preset_size(size);
 }
 
 template <class Tag>
@@ -1501,8 +1488,16 @@ void MainWindow::show_format(const Run& run)
       font_combo_.set_active_text(font);
     }
   }
+  // The caret's own size, listed among the presets when it is not one.
+  const std::vector<int> choices = size_choices(run.size);
+  if (choices != size_choices_shown_) {
+    size_combo_.remove_all();
+    for (int choice : choices)
+      size_combo_.append(std::to_string(choice));
+    size_choices_shown_ = choices;
+  }
   const Glib::ustring size = std::to_string(run.size);
-  if (size_combo_.get_active_text() != size && known_size(run.size))
+  if (size_combo_.get_active_text() != size)
     size_combo_.set_active_text(size);
   if (bold_toggle_ && bold_toggle_->get_active() != run.bold)
     bold_toggle_->set_active(run.bold);
@@ -1570,13 +1565,8 @@ void MainWindow::on_size_changed()
 {
   if (suppress_format_)
     return;
-  int size = 11;
-  try {
-    size = std::stoi(size_combo_.get_active_text().raw());
-  } catch (const std::exception&) {
-    return;
-  }
-  if (!known_size(size))
+  const int size = parse_size(size_combo_.get_active_text().raw());
+  if (size == 0)
     return;
   apply_run_edit([size](Run& run) { run.size = size; });
 }
