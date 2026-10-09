@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <climits>
 #include <cstdint>
 #include <map>
 #include <iterator>
@@ -923,6 +924,15 @@ void adopt_heading_styles(Document& doc, const std::string& font, int size)
       continue;
     apply_style(doc, i, i, "Heading " + std::to_string(paragraph.heading));
   }
+}
+
+int list_centre_from(Align align, int hang_x, int label_width, int space, int gap)
+{
+  if (align != Align::Center)
+    return -1;
+  const long long before = std::max<long long>(
+      std::max(0, space), static_cast<long long>(std::max(0, label_width)) + std::max(0, gap));
+  return static_cast<int>(std::min<long long>(std::max(0, hang_x) + before, INT_MAX));
 }
 
 int list_text_start(const Indents& raw)

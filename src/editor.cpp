@@ -101,6 +101,15 @@ bool known_size(int size)
   }
 }
 
+// The screen-only tags that move a centred list item's text past a wide
+// label: see MainWindow::update_list_shifts().
+const std::string kListShiftPrefix = std::string("list-shift") + '\x1f';
+
+bool is_list_shift(const std::string& name)
+{
+  return name.compare(0, kListShiftPrefix.size(), kListShiftPrefix) == 0;
+}
+
 template <class Tag>
 std::string tag_name(const Glib::RefPtr<Tag>& tag)
 {
@@ -320,6 +329,15 @@ void MainWindow::build_editor()
   text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
   // The status bar's page cell follows the text and the caret.
   buffer_->signal_changed().connect([this] { queue_page_status(); });
+  // Centred list items follow their label's width: see update_list_shifts().
+  buffer_->signal_changed().connect([this] { queue_list_shifts(); });
+  auto shift_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
+                             const Gtk::TextIter&) {
+    if (!shifting_ && !is_list_shift(tag_name(tag)))
+      queue_list_shifts();
+  };
+  buffer_->signal_apply_tag().connect(shift_on_tag);
+  buffer_->signal_remove_tag().connect(shift_on_tag);
   buffer_->signal_mark_set().connect(
       [this](const Gtk::TextBuffer::iterator&, const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
         if (mark == buffer_->get_insert())
@@ -1175,6 +1193,8 @@ void MainWindow::restyle_tags()
     if (parse_para(tag_name(tag), format))
       style_para_tag(tag, format);
   });
+  // Zoom, the view, and the margins all move list labels and their room.
+  queue_list_shifts();
   caret_key_.clear();
   update_caret_font();
 }
@@ -2094,34 +2114,163 @@ bool MainWindow::on_text_key(GdkEventKey* event)
   }
 }
 
-bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int number,
-                                  Glib::RefPtr<Pango::Layout>& layout, int& x,
-                                  Gdk::Rectangle& where)
+Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& paragraph, int offset,
+                                                          int number, int& width, int& gap)
 {
   const ListFormat list = clamp_list(paragraph.list);
-  if (list.kind == ListKind::None || !buffer_)
-    return false;
   const auto iter = buffer_->get_iter_at_offset(offset);
-  text_.get_iter_location(iter, where);
   const Run format = paragraph.runs.empty() ? format_of(iter) : paragraph.runs.front();
-  layout = text_.create_pango_layout(list_label(list, number));
+  auto layout = text_.create_pango_layout(list_label(list, number));
   Pango::FontDescription desc;
   desc.set_family(format.font.empty() ? "Sans" : format.font);
   desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
   layout->set_font_description(desc);
-  int width = 0;
   int height = 0;
   layout->get_pixel_size(width, height);
   auto space = text_.create_pango_layout(" ");
   space->set_font_description(desc);
+  space->get_pixel_size(gap, height);
+  return layout;
+}
+
+bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int number,
+                                  Glib::RefPtr<Pango::Layout>& layout, int& x,
+                                  Gdk::Rectangle& where)
+{
+  if (clamp_list(paragraph.list).kind == ListKind::None || !buffer_)
+    return false;
+  text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
+  int width = 0;
   int gap = 0;
-  int space_height = 0;
-  space->get_pixel_size(gap, space_height);
+  layout = list_label_layout(paragraph, offset, number, width, gap);
   // Buffer x 0 is the page's left edge, as for the tag margins.
   const Indents indents = clamp_indents(paragraph.indents);
   x = list_label_x(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
                    where.get_x(), width, indent_px(list_label_space(indents)), gap);
   return true;
+}
+
+void MainWindow::queue_list_shifts()
+{
+  if (list_shifts_queued_ || !buffer_)
+    return;
+  list_shifts_queued_ = true;
+  // Before GTK lays the text out again and redraws it, so a centred item
+  // never shows off centre in between.
+  list_shifts_idle_ = Glib::signal_idle().connect(
+      [this] {
+        update_list_shifts();
+        return false;
+      },
+      Glib::PRIORITY_HIGH_IDLE + 10);
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::list_shift_tag(int left_margin)
+{
+  const Glib::ustring name = kListShiftPrefix + std::to_string(left_margin);
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    tag->property_left_margin() = left_margin;
+    table->add(tag);
+  }
+  return tag;
+}
+
+void MainWindow::update_list_shifts()
+{
+  list_shifts_queued_ = false;
+  if (!buffer_)
+    return;
+  auto table = buffer_->get_tag_table();
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old;
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_list_shift(tag_name(tag)))
+      old.push_back(tag);
+  });
+  const Document doc = capture();
+  const bool centred =
+      std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(), [](const Paragraph& p) {
+        return p.align == Align::Center && clamp_list(p.list).kind != ListKind::None;
+      });
+  if (!centred && old.empty())
+    return;
+  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  const int total = buffer_->get_char_count();
+  // Does [s, e) hold `tag` anywhere, or all through?
+  auto touches = [](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& s,
+                    const Gtk::TextIter& e) {
+    if (s.has_tag(tag))
+      return true;
+    auto it = s;
+    return it.forward_to_tag_toggle(tag) && it.compare(e) < 0;
+  };
+  auto covers = [](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& s,
+                   const Gtk::TextIter& e) {
+    if (!s.has_tag(tag))
+      return false;
+    auto it = s;
+    return !(it.forward_to_tag_toggle(tag) && it.compare(e) < 0);
+  };
+  shifting_ = true;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> used;
+  int offset = 0;
+  for (size_t i = 0; i < doc.paragraphs.size() && offset < total; ++i) {
+    const Paragraph& paragraph = doc.paragraphs[i];
+    int length = 0;
+    for (const Run& run : paragraph.runs)
+      length += static_cast<int>(Glib::ustring(run.text).length());
+    const int end = std::min(total, offset + length + 1);
+    Glib::RefPtr<Gtk::TextTag> want;
+    if (paragraph.align == Align::Center && clamp_list(paragraph.list).kind != ListKind::None) {
+      const Indents indents = clamp_indents(paragraph.indents);
+      int width = 0;
+      int gap = 0;
+      list_label_layout(paragraph, offset, numbers[i], width, gap);
+      // As list_label_place() measures: the first-line indent and the room.
+      const int from =
+          list_centre_from(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
+                           width, indent_px(list_label_space(indents)), gap);
+      // The paragraph tag's own left margin already centres it when equal.
+      if (from >= 0 && from != std::max(0, margin_left() + indent_px(indents.left)))
+        want = list_shift_tag(from);
+    }
+    const auto s = buffer_->get_iter_at_offset(offset);
+    const auto e = buffer_->get_iter_at_offset(end);
+    for (const auto& tag : old)
+      if (tag != want && touches(tag, s, e))
+        buffer_->remove_tag(tag, s, e);
+    if (want) {
+      if (!covers(want, s, e))
+        buffer_->apply_tag(want, buffer_->get_iter_at_offset(offset),
+                           buffer_->get_iter_at_offset(end));
+      if (std::find(used.begin(), used.end(), want) == used.end())
+        used.push_back(want);
+    }
+    offset += length + 1;
+  }
+  // Tags no paragraph needs go, so the table holds one per offset in use.
+  for (const auto& tag : old)
+    if (std::find(used.begin(), used.end(), tag) == used.end())
+      table->remove(tag);
+  // A shift outranks every paragraph tag's indent. Raising a tag relays out
+  // the text, so only when a paragraph tag sits above a shift.
+  int top_para = -1;
+  ParaFormat ignored;
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (parse_para(tag_name(tag), ignored))
+      top_para = std::max(top_para, tag->get_priority());
+  });
+  const bool low = std::any_of(
+      used.begin(), used.end(),
+      [&](const Glib::RefPtr<Gtk::TextTag>& tag) { return tag->get_priority() < top_para; });
+  if (low) {
+    for (const auto& tag : used)
+      tag->set_priority(table->get_size() - 1);
+    raise_headings();
+  }
+  shifting_ = false;
 }
 
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)

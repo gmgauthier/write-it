@@ -8,6 +8,7 @@
 #include "check.hpp"
 #include "document.hpp"
 
+#include <climits>
 #include <string>
 #include <vector>
 
@@ -866,6 +867,31 @@ void label_position()
   CHECK(list_label_x(static_cast<Align>(3), 37, 400, 8, 24, 4) ==
         list_label_x(Align::Left, 37, 400, 8, 24, 4));
 
+  // A centred item's text is centred from its first-line indent plus the
+  // label's room, the paragraph's own hang or the label and a space when
+  // that is wider.
+  using writeit::list_centre_from;
+  CHECK(list_centre_from(Align::Center, 100, 8, 24, 4) == 124);
+  CHECK(list_centre_from(Align::Center, 100, 20, 24, 4) == 124);
+  CHECK(list_centre_from(Align::Center, 100, 28, 24, 4) == 132);
+  // Only centred items: right-aligned text ends at the right indent
+  // whatever the label, and Left and Justify keep the label in the hang.
+  CHECK(list_centre_from(Align::Right, 100, 40, 24, 4) == -1);
+  CHECK(list_centre_from(Align::Left, 100, 40, 24, 4) == -1);
+  CHECK(list_centre_from(static_cast<Align>(3), 100, 40, 24, 4) == -1);
+  // Hostile sizes neither go negative nor overflow.
+  CHECK(list_centre_from(Align::Center, -5, -5, -24, -4) == 0);
+  CHECK(list_centre_from(Align::Center, INT_MAX, INT_MAX, 24, INT_MAX) >= 0);
+  {
+    // Column 100..500, room 24, label 28 + gap 4, text 100 wide. GTK centres
+    // the text from list_centre_from() to the right indent; the unit's
+    // midpoint is the column's.
+    const int from = list_centre_from(Align::Center, 100, 28, 24, 4);
+    const int text_x = (from + 500 - 100) / 2;
+    const int label_x = list_label_x(Align::Center, 100, text_x, 28, 24, 4);
+    CHECK((label_x + text_x + 100) / 2 == 300);
+  }
+
   // The room the label gets before the text is the paragraph's own hang,
   // never less than the standard quarter inch: where the text starts.
   using writeit::list_label_space;
@@ -1085,7 +1111,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 319;
+constexpr int kChecks = 328;
 
 int main()
 {
