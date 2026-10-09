@@ -241,15 +241,16 @@ void applying()
   CHECK(block.paragraphs[0].align == Align::Center);
   CHECK(block.paragraphs[0].indents == Indents{});
 
-  // A list item keeps its list indents; the indents it gets back on leaving
-  // the list take the style instead.
+  // A list item keeps its list's left and first-line indents but takes the
+  // style's right one; the indents it gets back on leaving the list take
+  // the style.
   Document list;
   list.styles = writeit::builtin_styles("Sans", 11);
   list.paragraphs.push_back(para("item"));
   writeit::toggle_list(list.paragraphs, ListKind::Bullet);
   const Indents item = list.paragraphs[0].indents;
   CHECK(writeit::apply_style(list, 0, 0, "Block Text"));
-  CHECK(list.paragraphs[0].indents == item);
+  CHECK(list.paragraphs[0].indents == (Indents{item.left, 1440, item.first}));
   CHECK(list.paragraphs[0].list.kind == ListKind::Bullet);
   writeit::toggle_list(list.paragraphs, ListKind::Bullet);
   CHECK(list.paragraphs[0].indents == (Indents{1440, 1440, 0}));
@@ -747,7 +748,8 @@ void rtf_hostile()
   CHECK(writeit::find_style(names.styles, "Style 5") != nullptr);
   CHECK(writeit::find_style(names.styles, "Caf\xC3\xA9 \xE2\x82\xACx") != nullptr);
   CHECK(!names.paragraphs.empty() && names.paragraphs[0].style == "First");
-  CHECK(writeit::find_style(names.styles, "Second") == nullptr);
+  // A second entry with First's number is kept, under its own name.
+  CHECK(writeit::find_style(names.styles, "Second") != nullptr);
   // Names are unique ignoring case.
   for (size_t i = 0; i < names.styles.size(); ++i) {
     for (size_t j = i + 1; j < names.styles.size(); ++j)
@@ -998,7 +1000,64 @@ void direct_kept()
   CHECK(p0.runs[0].bold == own_bold && p1.runs[0].bold == !own_bold);
 }
 
-constexpr int kChecks = 580;
+// Bug Basher's four checks on d29b7f9.
+void review_checks()
+{
+  // Every heading is larger than body text, as M1 showed them and as Word
+  // 97's Heading 4 is 12 pt bold over 10 pt; none is larger than the one
+  // above it.
+  const std::vector<Style> sheet = writeit::builtin_styles("Sans", 11);
+  for (int level = 1; level <= 6; ++level) {
+    const Style* h = writeit::find_style(sheet, "Heading " + std::to_string(level));
+    const Style* up =
+        level > 1 ? writeit::find_style(sheet, "Heading " + std::to_string(level - 1)) : nullptr;
+    CHECK(h != nullptr && h->format.size > 11 && (!up || h->format.size <= up->format.size));
+  }
+  const Style* h4 = writeit::find_style(sheet, "Heading 4");
+  CHECK(h4 != nullptr && h4->format.size >= 12 && h4->format.bold);
+  // An M1 file's fourth-level heading opens above body size.
+  const Document m1 = import(
+      "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Sans;}}\\pard\\outlinelevel3\\f0\\fs22 Four\\par"
+      "\\pard\\f0\\fs22 Body\\par}");
+  CHECK(!m1.paragraphs.empty() && m1.paragraphs[0].style == "Heading 4" &&
+        !m1.paragraphs[0].runs.empty() && m1.paragraphs[0].runs[0].size > 11);
+
+  // A numbered item in Heading 1: its label is formatted as the item's
+  // text is, bold, as Word 97 formats it from the paragraph mark.
+  Document listed = writeit::blank_document("Sans", 11);
+  listed.paragraphs = {para("Point")};
+  writeit::toggle_list(listed.paragraphs, ListKind::Number);
+  CHECK(writeit::apply_style(listed, 0, 0, "Heading 1"));
+  CHECK(contains(writeit::rtf_export(listed), "{\\pntext\\f0\\fs32\\b "));
+
+  // Block Text on a numbered item: the list sets the left and first-line
+  // indents, the style still gives the right one.
+  Document block = writeit::blank_document("Sans", 11);
+  block.paragraphs = {para("Item")};
+  writeit::toggle_list(block.paragraphs, ListKind::Number);
+  const int left = block.paragraphs[0].indents.left;
+  CHECK(writeit::apply_style(block, 0, 0, "Block Text"));
+  CHECK(block.paragraphs[0].indents.right == 1440 && block.paragraphs[0].indents.left == left);
+  const std::string block_rtf = writeit::rtf_export(block);
+  CHECK(contains(block_rtf.substr(block_rtf.find("\\pard")), "\\ri1440"));
+  CHECK(import(writeit::rtf_export(block)) == block);
+
+  // Two entries with one number: the paragraphs that use it get the first,
+  // and the second stays in the sheet under its own name.
+  const Document twice = import(
+      "{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}{\\stylesheet{\\snext0\\f0\\fs22 Normal;}"
+      "{\\s1\\sbasedon0\\snext1\\b\\f0\\fs22 First;}{\\s1\\sbasedon0\\snext1\\i\\f0\\fs22 Second;}}"
+      "\\pard\\s1\\b\\f0\\fs22 One\\par}");
+  const Style* first = writeit::find_style(twice.styles, "First");
+  const Style* second = writeit::find_style(twice.styles, "Second");
+  CHECK(first != nullptr && first->format.bold && !first->format.italic);
+  CHECK(second != nullptr && second->format.italic && !second->format.bold &&
+        second->based_on == "Normal");
+  CHECK(!twice.paragraphs.empty() && twice.paragraphs[0].style == "First");
+  CHECK(import(writeit::rtf_export(twice)) == twice);
+}
+
+constexpr int kChecks = 621;
 
 int main()
 {
@@ -1014,5 +1073,6 @@ int main()
   m1_files();
   justified_styles();
   direct_kept();
+  review_checks();
   return suite_test::done("styles", kChecks);
 }

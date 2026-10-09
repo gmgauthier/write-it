@@ -1073,13 +1073,20 @@ class Reader {
     }
   }
 
-  // An entry closed. The first entry for a number wins, and the sheet stops
-  // growing at kMaxStyles.
+  // An entry closed. The sheet stops growing at kMaxStyles. The first entry
+  // for a number is the one \sN means; a later one with the same number is
+  // kept too, under its own name, so its definition is not lost. It goes
+  // under a key no \s can name (the reader caps parameters well inside).
   void commit_style()
   {
-    if (!entry_.paragraph || styles_read_.count(entry_.index) != 0 ||
-        styles_read_.size() >= kMaxStyles)
+    if (!entry_.paragraph || styles_read_.size() >= kMaxStyles)
       return;
+    if (styles_read_.count(entry_.index) != 0) {
+      const int key = kSpareStyle - static_cast<int>(spare_styles_.size());
+      spare_styles_.push_back(key);
+      styles_read_[key] = entry_;
+      return;
+    }
     styles_read_[entry_.index] = entry_;
   }
 
@@ -1160,9 +1167,11 @@ class Reader {
     if (styles_read_.count(0) != 0)
       order.push_back(0);
     for (const auto& item : styles_read_) {
-      if (item.first != 0)
+      if (item.first != 0 && item.first > kSpareStyle)
         order.push_back(item.first);
     }
+    // Second entries for a number, in file order, after the rest.
+    order.insert(order.end(), spare_styles_.begin(), spare_styles_.end());
     std::vector<Style> sheet;
     if (styles_read_.count(0) == 0) {
       Style normal = builtin_styles(font_name(0), 11).front();
@@ -1413,6 +1422,9 @@ class Reader {
   StyleEntry entry_;
   size_t entry_depth_ = 0;
   std::map<int, StyleEntry> styles_read_;
+  // The keys of later entries for a number already read, in file order.
+  static constexpr int kSpareStyle = -1100000000;
+  std::vector<int> spare_styles_;
   std::map<int, ReadStyle> resolved_;
   std::map<int, std::string> names_;
   std::vector<Style> sheet_;
@@ -1648,17 +1660,21 @@ std::string rtf_export(const Document& doc)
     wrote = true;
     if (list.kind != ListKind::None) {
       // The label as plain text for readers without lists. Readers with them
-      // skip {\pntext ...}.
-      int label_font = 0;
-      int label_size = 11;
+      // skip {\pntext ...}. It is formatted as the item's first character,
+      // as the label is drawn, or as its style for an empty item: Word 97
+      // formats it from the paragraph mark.
+      Run label;
+      label.size = 11;
+      if (const Style* own = any_style ? find_style(sheet, paragraph.style) : nullptr)
+        label = own->format;
       for (const Run& run : paragraph.runs) {
         if (run.text.empty())
           continue;
-        label_font = index_of(run.font);
-        label_size = std::max(1, run.size);
+        label = run;
         break;
       }
-      out << "{\\pntext\\f" << label_font << "\\fs" << label_size * 2 << " "
+      out << "{\\pntext\\f" << index_of(label.font) << "\\fs" << std::max(1, label.size) * 2
+          << (label.bold ? "\\b" : "") << (label.italic ? "\\i" : "") << " "
           << label_rtf(list_label(list, numbers[index])) << "\\tab}";
     }
     out << "\\pard";

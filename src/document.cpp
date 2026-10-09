@@ -254,9 +254,17 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
   if (paragraph.list.kind == ListKind::None) {
     restyle_indents(paragraph.indents, paragraph.direct, from.indents, to.indents);
     paragraph.indents = clamp_indents(paragraph.indents);
-  } else if (paragraph.list.has_own) {
-    restyle_indents(paragraph.list.own, paragraph.direct, from.indents, to.indents);
-    paragraph.list.own = clamp_indents(paragraph.list.own);
+  } else {
+    // The list sets the left and first-line indents; the style still gives
+    // the right one, as in Word 97.
+    if (!own(paragraph.direct, kDirectRight, paragraph.indents.right != from.indents.right))
+      paragraph.indents.right = to.indents.right;
+    paragraph.indents = clamp_indents(paragraph.indents);
+    if (paragraph.list.has_own) {
+      unsigned own_direct = paragraph.direct;
+      restyle_indents(paragraph.list.own, own_direct, from.indents, to.indents);
+      paragraph.list.own = clamp_indents(paragraph.list.own);
+    }
   }
   if (!own(paragraph.direct, kDirectAlign, paragraph.align != from.align))
     paragraph.align = to.align;
@@ -764,10 +772,12 @@ std::vector<Style> builtin_styles(const std::string& font, int size)
   };
   std::vector<Style> sheet;
   sheet.push_back(style(kNormalStyle, base, false, false));
-  // Five points up for the first level, then three, then one, then body
-  // size: bold, bold italic, and italic, as AbiWord's and LibreOffice's sets
+  // Five points up for the first level, then three, two, and one for the
+  // rest, so no heading shrinks to body text (M1 showed every level larger,
+  // and Word 97's Heading 4 is 12 pt bold over 10 pt Normal): bold, then bold
+  // italic and italic for the last two, as AbiWord's and LibreOffice's sets
   // step down.
-  const int sizes[] = {base + 5, base + 3, base + 1, base, base, base};
+  const int sizes[] = {base + 5, base + 3, base + 2, base + 1, base + 1, base + 1};
   const bool bolds[] = {true, true, true, true, true, false};
   const bool italics[] = {false, false, false, false, true, true};
   for (int level = 1; level <= 6; ++level) {

@@ -306,6 +306,16 @@ write_it_style_direct_tests = executable(
 )
 test('style-direct', write_it_style_direct_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: long style names keep the style boxes
+# and Format > Style... narrow, the Style box is blank over mixed styles,
+# and a heading's list label is bold.
+write_it_style_ui_tests = executable(
+  'write-it-style-ui-tests',
+  'tests/test_style_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('style-ui', write_it_style_ui_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: a closed window leaves nothing on the
 # clipboard, which outlives it (run under ASan to see a use after free).
 write_it_window_lifetime_tests = executable(

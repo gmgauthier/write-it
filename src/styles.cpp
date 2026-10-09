@@ -103,6 +103,33 @@ Style merge_edit(Style current, const Style& shown, const Style& edited)
   return current;
 }
 
+// A box of style names shows at most this many characters of one, the rest
+// ellipsized, so a long name (up to kMaxStyleName bytes, as Word 97 allows)
+// widens neither the box, its list, nor the dialog it sits in. The full name
+// is the box's tooltip.
+constexpr int kStyleNameChars = 32;
+
+void narrow_name_box(Gtk::ComboBox& box)
+{
+  for (Gtk::CellRenderer* cell : box.get_cells()) {
+    if (auto* text = dynamic_cast<Gtk::CellRendererText*>(cell)) {
+      text->property_ellipsize() = Pango::ELLIPSIZE_END;
+      text->property_max_width_chars() = kStyleNameChars;
+    }
+  }
+}
+
+void name_tooltip(Gtk::ComboBoxText& box)
+{
+  box.signal_changed().connect([&box] {
+    const Glib::ustring name = box.get_active_text();
+    if (name.length() > static_cast<Glib::ustring::size_type>(kStyleNameChars))
+      box.set_tooltip_text(name);
+    else
+      box.set_has_tooltip(false);
+  });
+}
+
 }  // namespace
 
 std::vector<Style> MainWindow::sheet() const
@@ -125,6 +152,7 @@ void MainWindow::fill_style_combo()
 {
   const bool guard = suppress_format_;
   suppress_format_ = true;
+  narrow_name_box(style_combo_);
   style_combo_.remove_all();
   for (const Style& style : sheet())
     style_combo_.append(style.name);
@@ -137,12 +165,35 @@ void MainWindow::show_style()
   if (!buffer_)
     return;
   const std::vector<Style> styles = sheet();
-  const Style* style = find_style(styles, para_at(cursor_offset()).style);
-  const Glib::ustring name = style ? style->name : styles.front().name;
+  auto style_at = [&](int offset) {
+    const Style* style = find_style(styles, para_at(offset).style);
+    return style ? style : &styles.front();
+  };
+  const Style* style = style_at(cursor_offset());
+  // Blank over paragraphs in more than one style, as in Word 97.
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  if (buffer_->get_selection_bounds(start_iter, end_iter)) {
+    const int start = start_iter.get_offset();
+    const int end = end_iter.get_offset();
+    const int last = paragraph_start(end > start ? end - 1 : end);
+    for (int at = paragraph_start(start); style; at = paragraph_end(at)) {
+      if (style_at(at) != style_at(start))
+        style = nullptr;
+      if (at >= last)
+        break;
+    }
+    if (style)
+      style = style_at(start);
+  }
   const bool guard = suppress_format_;
   suppress_format_ = true;
-  if (style_combo_.get_active_text() != name)
-    style_combo_.set_active_text(name);
+  if (!style) {
+    if (style_combo_.get_active_row_number() != -1)
+      style_combo_.set_active(-1);
+  } else if (style_combo_.get_active_text() != style->name) {
+    style_combo_.set_active_text(style->name);
+  }
   suppress_format_ = guard;
 }
 
@@ -289,6 +340,10 @@ void MainWindow::on_style_dialog()
   auto* make = Gtk::manage(new Gtk::Button("_New…", true));
   auto* based = Gtk::manage(new Gtk::ComboBoxText());
   auto* follow = Gtk::manage(new Gtk::ComboBoxText());
+  for (Gtk::ComboBoxText* names : {chooser, based, follow}) {
+    narrow_name_box(*names);
+    name_tooltip(*names);
+  }
   auto* font = Gtk::manage(new Gtk::ComboBoxText());
   fill_font_combo(*font, work[current].format.font);
   auto* size =

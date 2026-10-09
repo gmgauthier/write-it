@@ -2205,6 +2205,9 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   Pango::FontDescription desc;
   desc.set_family(format.font.empty() ? "Sans" : format.font);
   desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
+  // Bold and italic too, as Word 97 formats a label from the paragraph mark.
+  desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
+  desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
   layout->set_font_description(desc);
   int height = 0;
   layout->get_pixel_size(width, height);
