@@ -249,6 +249,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
+  Gtk::MenuItem* justify_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
@@ -272,6 +273,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
+  Gtk::ToggleToolButton* justify_toggle_ = nullptr;
   Gtk::ToggleToolButton* bullets_toggle_ = nullptr;
   Gtk::ToggleToolButton* numbering_toggle_ = nullptr;
 

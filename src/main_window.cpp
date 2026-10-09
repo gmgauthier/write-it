@@ -219,6 +219,7 @@ void MainWindow::build_menus()
   align_left_item_ = add_item(*format_menu, "Align _Left", true);
   align_center_item_ = add_item(*format_menu, "_Center", true);
   align_right_item_ = add_item(*format_menu, "Align _Right", true);
+  justify_item_ = add_item(*format_menu, "_Justify", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   add_item(*format_menu, "_Style…", false);
   bullets_item_ = add_item(*format_menu, "Bull_ets", true);
@@ -351,6 +352,7 @@ void MainWindow::build_toolbars()
   align_left_toggle_ = toggle("format-justify-left", "Align Left", true, true);
   align_center_toggle_ = toggle("format-justify-center", "Center", false, true);
   align_right_toggle_ = toggle("format-justify-right", "Align Right", false, true);
+  justify_toggle_ = toggle("format-justify-fill", "Justify", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   format_bar_.append(*hold(style_combo_, 110));
   bullets_toggle_ = toggle("format-list-unordered", "Bullets", false, true);
