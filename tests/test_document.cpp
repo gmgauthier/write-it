@@ -2,6 +2,7 @@
 
 #include "check.hpp"
 #include "document.hpp"
+#include "font_sizes.hpp"
 
 namespace {
 
@@ -20,7 +21,7 @@ writeit::Run run(const char* text, const char* font, int size, bool bold, bool i
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 43;
+constexpr int kChecks = 52;
 
 int main()
 {
@@ -55,6 +56,18 @@ int main()
   CHECK(accent.paragraphs.size() == 1);
   CHECK(accent.paragraphs[0].runs.size() == 1);
   CHECK(accent.paragraphs[0].runs[0].text == "caf\u00e9");
+
+  // A size past Word's 1638 pt (\fs3276) reads as 1638 pt, the largest the
+  // toolbar's size box can show, rather than \fs4000's 2000 pt.
+  for (const char* fs : {"\\fs4000", "\\fs3277", "\\fs3276", "\\fs999999999"}) {
+    writeit::Document huge;
+    CHECK(writeit::rtf_import(std::string("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0") + fs +
+                                  " Huge\\par}",
+                              huge));
+    CHECK(huge.paragraphs.size() == 1 && huge.paragraphs[0].runs.size() == 1 &&
+          huge.paragraphs[0].runs[0].size == writeit::kMaxFontSize);
+  }
+  CHECK(writeit::kMaxFontSize == 1638);
 
   writeit::Document rejected;
   CHECK(!writeit::rtf_import("not rtf", rejected));
