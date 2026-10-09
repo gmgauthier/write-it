@@ -4,6 +4,8 @@
 
 #include <string>
 
+#include "document.hpp"
+
 namespace writeit {
 
 // Tools > Options... measurement units. Only the Paragraph dialog uses them.
@@ -16,7 +18,7 @@ const char* units_text(Units units);
 
 // The largest measure the dialog can produce, either side of zero: 22 inches,
 // the model's indent ceiling.
-constexpr int kMaxMeasureTwips = 31680;
+constexpr int kMaxMeasureTwips = kMaxIndent;
 
 double twips_to_units(int twips, Units units);
 // Clamped to -kMaxMeasureTwips..kMaxMeasureTwips before it is converted, so
