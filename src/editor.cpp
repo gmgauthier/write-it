@@ -2353,7 +2353,8 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
   for (const auto& tag : old) {
     auto it = s;
     if (tag != want && (s.has_tag(tag) || (it.forward_to_tag_toggle(tag) && it.compare(e) < 0)))
-      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start), buffer_->get_iter_at_offset(end));
+      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start),
+                          buffer_->get_iter_at_offset(end));
   }
   if (want) {
     auto it = s;

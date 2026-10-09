@@ -19,7 +19,9 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <string>
+#include <utility>
 
 namespace writeit {
 
@@ -179,9 +181,15 @@ void expect(writeit::MainWindow& w, int percent)
 // `label`, must start: at the hang, or at the next stop clear of the label.
 int want_x(writeit::MainWindow& w, const std::string& label)
 {
+  // Widths by zoom and label: measuring 2000 labels each time is slow
+  // under ASan.
+  static std::map<std::pair<int, std::string>, int> widths;
+  const auto key = std::make_pair(MainWindowProbe::px(w, 1440), label);
+  auto known = widths.find(key);
+  if (known == widths.end())
+    known = widths.emplace(key, MainWindowProbe::width(w, label.c_str())).first;
   const writeit::Indents in = writeit::list_indents(0);
-  const int end = MainWindowProbe::px(w, in.left + in.first) +
-                  MainWindowProbe::width(w, label.c_str()) + 1;
+  const int end = MainWindowProbe::px(w, in.left + in.first) + known->second + 1;
   const int hang = MainWindowProbe::px(w, in.left);
   return end <= hang ? hang : next_stop(w, end);
 }
