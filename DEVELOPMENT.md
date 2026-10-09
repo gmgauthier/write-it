@@ -8,27 +8,27 @@ APP_ID: `org.gmgauthier.WriteIt`
 License: The Unlicense (`UNLICENSE`)  
 Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs, reviews, and CI run. https://gitea.scriptorium/gmgauthier/write-it and the working copy on plato are downstream mirrors: SysAdmin pushes `master`, milestone branches, and tags from GitHub to them, never the other way.
 
-## Status (2026-10-09)
+## Status
 
-**M1 is done. M2 (Paragraph) is under way.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands. "Merged" means on `master`; "In `m2`" means merged into the milestone branch and waiting for the milestone merge.
+**M2 (Paragraph) is done and tagged `m2`. M3 (Page) is next.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
 
 | M2 item | State |
 |---|---|
 | Paragraph indents, and inches or centimetres in Tools → Options… | Merged |
 | Align left, center, and right | Merged |
-| Justify | In `m2` |
+| Justify | Merged |
 | Draft view | Merged |
 | Bulleted and numbered lists, numbering that keeps counting as in Word 97 | Merged |
-| List labels on centred and right-aligned items | In `m2` |
-| List start values (`\levelstartat`) | In `m2` |
-| Named styles | Open, #19 |
+| List labels on centred and right-aligned items | Merged |
+| List start values (`\levelstartat`) | Merged |
+| Named styles | Merged |
 | Size box shows the real size | Merged |
 | Status bar: `Page n of m` and the zoom cell | Merged |
 | The caret stays in view | Merged |
-| Toolbars overflow, so the window fits a 1024 px screen | In `m2` |
-| Open files from the command line and the desktop file | In `m2` |
-| An imported `.txt` or `.md` opens unmodified | In `m2` |
-| Window size, maximised state, and zoom remembered | In `m2` |
+| Toolbars overflow, so the window fits a 1024 px screen | Merged |
+| Open files from the command line and the desktop file | Merged |
+| An imported `.txt` or `.md` opens unmodified | Merged |
+| Window size, maximised state, and zoom remembered | Merged |
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
