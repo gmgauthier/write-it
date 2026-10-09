@@ -8,6 +8,7 @@
 #include <glibmm/miscutils.h>
 
 #include <algorithm>
+#include <functional>
 
 namespace writeit {
 namespace {
@@ -39,6 +40,106 @@ void fallback_label(Gtk::ToolButton& button, const char* word)
 {
   button.set_label(word);
   button.set_homogeneous(false);
+}
+
+// What a toolbar control is called in its toolbar's overflow menu.
+constexpr const char* kOverflowId = "write-it-overflow";
+
+// Gives a toolbar item its entry in the overflow menu, the arrow at the end
+// of a toolbar too narrow to show it. GTK asks for the entry each time it
+// builds that menu; `refresh` brings it up to date with the control first.
+void attach_proxy(Gtk::ToolItem& tool, Gtk::MenuItem& item, const std::function<void()>& refresh)
+{
+  item.show();
+  tool.set_proxy_menu_item(kOverflowId, item);
+  refresh();
+  // Before GTK's own handler, which would make an unlabelled one.
+  tool.signal_create_menu_proxy().connect(
+      [&tool, &item, refresh] {
+        refresh();
+        tool.set_proxy_menu_item(kOverflowId, item);
+        return true;
+      },
+      false);
+}
+
+// A command button: an item with the menus' word that clicks the button.
+void proxy_button(Gtk::ToolButton& button, const char* label)
+{
+  auto* item = Gtk::manage(new Gtk::MenuItem(label, true));
+  item->signal_activate().connect([&button] { g_signal_emit_by_name(button.gobj(), "clicked"); });
+  button.property_sensitive().signal_changed().connect(
+      [&button, item] { item->set_sensitive(button.get_sensitive()); });
+  attach_proxy(button, *item, [&button, item] { item->set_sensitive(button.get_sensitive()); });
+}
+
+// A toggle button (Bold, Italic, Underline, Bullets, Numbering): a check
+// item that shows the button's state and sets it.
+void proxy_toggle(Gtk::ToggleToolButton& button, const char* label)
+{
+  auto* item = Gtk::manage(new Gtk::CheckMenuItem(label, true));
+  auto sync = [&button, item] {
+    item->set_sensitive(button.get_sensitive());
+    if (item->get_active() != button.get_active())
+      item->set_active(button.get_active());
+  };
+  sync();
+  item->signal_toggled().connect([&button, item] {
+    if (button.get_active() != item->get_active())
+      button.set_active(item->get_active());
+  });
+  button.signal_toggled().connect(sync);
+  attach_proxy(button, *item, sync);
+}
+
+// One of the alignment buttons, which act as one group: a radio item. The
+// button that goes down ticks its item, and the group drops the others.
+void proxy_align(Gtk::ToggleToolButton& button, const char* label, Gtk::RadioMenuItem::Group& group)
+{
+  auto* item = Gtk::manage(new Gtk::RadioMenuItem(group, label, true));
+  auto sync = [&button, item] {
+    item->set_sensitive(button.get_sensitive());
+    if (button.get_active() && !item->get_active())
+      item->set_active(true);
+  };
+  item->set_active(button.get_active());
+  item->signal_toggled().connect([&button, item] {
+    if (item->get_active() && !button.get_active())
+      button.set_active(true);
+  });
+  button.signal_toggled().connect(sync);
+  attach_proxy(button, *item, sync);
+}
+
+// A box (font, size, style): its name, opening a submenu of its entries with
+// the current one ticked, as Word 97's boxes drop down their lists.
+void proxy_combo(Gtk::ToolItem& tool, Gtk::ComboBoxText& combo, const char* label)
+{
+  auto* item = Gtk::manage(new Gtk::MenuItem(label, true));
+  auto* menu = Gtk::manage(new Gtk::Menu());
+  item->set_submenu(*menu);
+  // The font list grows when a document names a font it lacks, so the
+  // submenu is made afresh from the box each time.
+  auto fill = [&combo, item, menu] {
+    item->set_sensitive(combo.get_sensitive());
+    for (Gtk::Widget* child : menu->get_children())
+      delete child;
+    const Glib::ustring active = combo.get_active_text();
+    for (const Gtk::TreeRow& row : combo.get_model()->children()) {
+      Glib::ustring text;
+      row.get_value(0, text);
+      auto* entry = Gtk::manage(new Gtk::CheckMenuItem(text));
+      entry->set_draw_as_radio(true);
+      entry->set_active(text == active);
+      entry->signal_toggled().connect([&combo, entry, text] {
+        if (entry->get_active() && combo.get_active_text() != text)
+          combo.set_active_text(text);
+      });
+      menu->append(*entry);
+    }
+    menu->show_all();
+  };
+  attach_proxy(tool, *item, fill);
 }
 
 }  // namespace
@@ -309,7 +410,7 @@ void MainWindow::build_toolbars()
   open_tool_ = add_tool(standard_bar_, "document-open", "Open", true);
   save_tool_ = add_tool(standard_bar_, "document-save", "Save", true);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  add_tool(standard_bar_, "document-print", "Print", false);
+  auto* print_tool = add_tool(standard_bar_, "document-print", "Print", false);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   cut_tool_ = add_tool(standard_bar_, "edit-cut", "Cut", false);
   copy_tool_ = add_tool(standard_bar_, "edit-copy", "Copy", false);
@@ -337,8 +438,10 @@ void MainWindow::build_toolbars()
     item->add(child);
     return item;
   };
-  format_bar_.append(*hold(font_combo_, 128));
-  format_bar_.append(*hold(size_combo_, 52));
+  auto* font_item = hold(font_combo_, 128);
+  auto* size_item = hold(size_combo_, 52);
+  format_bar_.append(*font_item);
+  format_bar_.append(*size_item);
 
   auto toggle = [this](const char* icon, const char* tip, bool active, bool sensitive) {
     auto* button = Gtk::manage(new Gtk::ToggleToolButton());
@@ -360,9 +463,34 @@ void MainWindow::build_toolbars()
   align_center_toggle_ = toggle("format-justify-center", "Center", false, true);
   align_right_toggle_ = toggle("format-justify-right", "Align Right", false, true);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  format_bar_.append(*hold(style_combo_, 110));
+  auto* style_item = hold(style_combo_, 110);
+  format_bar_.append(*style_item);
   bullets_toggle_ = toggle("format-list-unordered", "Bullets", false, true);
   numbering_toggle_ = toggle("format-list-ordered", "Numbering", false, true);
+
+  // A control that does not fit goes to its toolbar's overflow menu under
+  // the word the menus use for it. Separators bring their own.
+  proxy_button(*new_tool_, "_New");
+  proxy_button(*open_tool_, "_Open…");
+  proxy_button(*save_tool_, "_Save");
+  proxy_button(*print_tool, "_Print…");
+  proxy_button(*cut_tool_, "Cu_t");
+  proxy_button(*copy_tool_, "_Copy");
+  proxy_button(*paste_tool_, "_Paste");
+  proxy_button(*undo_tool_, "_Undo");
+  proxy_button(*redo_tool_, "_Redo");
+  proxy_combo(*font_item, font_combo_, "_Font");
+  proxy_combo(*size_item, size_combo_, "Font Si_ze");
+  proxy_toggle(*bold_toggle_, "_Bold");
+  proxy_toggle(*italic_toggle_, "_Italic");
+  proxy_toggle(*underline_toggle_, "_Underline");
+  Gtk::RadioMenuItem::Group align_group;
+  proxy_align(*align_left_toggle_, "Align _Left", align_group);
+  proxy_align(*align_center_toggle_, "_Center", align_group);
+  proxy_align(*align_right_toggle_, "Align _Right", align_group);
+  proxy_combo(*style_item, style_combo_, "_Style");
+  proxy_toggle(*bullets_toggle_, "Bull_ets");
+  proxy_toggle(*numbering_toggle_, "_Numbering");
 }
 
 void MainWindow::build_page()
