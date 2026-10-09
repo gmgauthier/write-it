@@ -349,10 +349,13 @@ bool operator==(const Document& a, const Document& b)
   return a.paragraphs == b.paragraphs;
 }
 
-int list_label_x(Align /*align*/, int hang_x, int /*text_x*/, int /*label_width*/,
-                 int /*hang_width*/, int /*gap*/)
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap)
 {
-  return hang_x;
+  if (align == Align::Left)
+    return hang_x;
+  const int width = std::max(0, label_width);
+  const int before = std::max(std::max(0, hang_width), width + std::max(0, gap));
+  return std::max(0, text_x - before);
 }
 
 Document blank_document(const std::string& font, int size)

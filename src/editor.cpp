@@ -2011,7 +2011,16 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
         // empty last item has no character to carry its tag, so the label
         // is placed from the indents rather than from the text.
         const Indents indents = clamp_indents(paragraph.indents);
-        const int x = margin_left() + indent_px(indents.left + indents.first);
+        // Centred and right-aligned text moves, and its label with it: it
+        // sits just before the first character, as in Word.
+        auto space = text_.create_pango_layout(" ");
+        space->set_font_description(desc);
+        int gap = 0;
+        int space_height = 0;
+        space->get_pixel_size(gap, space_height);
+        const int x =
+            list_label_x(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
+                         where.get_x(), width, indent_px(kListHang), gap);
         int wx = 0;
         int wy = 0;
         text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
