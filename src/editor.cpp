@@ -117,9 +117,8 @@ std::string fmt_name(const Run& run)
 {
   // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag.
   return std::string("fmt") + '\x1f' + run.font + '\x1f' +
-         std::to_string(half_points_of(run.size)) + '\x1f' +
-         (run.bold ? "1" : "0") + '\x1f' + (run.italic ? "1" : "0") + '\x1f' +
-         (run.underline ? "1" : "0");
+         std::to_string(half_points_of(run.size)) + '\x1f' + (run.bold ? "1" : "0") + '\x1f' +
+         (run.italic ? "1" : "0") + '\x1f' + (run.underline ? "1" : "0");
 }
 
 bool parse_fmt(const std::string& name, Run& run)
