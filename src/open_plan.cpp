@@ -27,8 +27,8 @@ bool same_file(const std::string& a, const std::string& b)
     return false;
   if (a == b)
     return true;
-  struct stat sa{};
-  struct stat sb{};
+  struct stat sa = {};
+  struct stat sb = {};
   const bool stat_a = stat(a.c_str(), &sa) == 0;
   const bool stat_b = stat(b.c_str(), &sb) == 0;
   if (stat_a && stat_b)
