@@ -41,6 +41,7 @@ executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
@@ -258,6 +259,7 @@ write_it_status_bar_tests = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
   include_directories: inc,
@@ -279,6 +281,7 @@ write_it_page_width_tests = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
   include_directories: inc,
@@ -301,9 +304,54 @@ write_it_caret_scroll_tests = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/narrow_combo.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
 test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)
+
+# The real window under a display: it fits a 1024 px screen.
+write_it_window_width_tests = executable(
+  'write-it-window-width-tests',
+  'tests/test_window_width.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('window-width', write_it_window_width_tests, timeout: 60)
+
+# The real window under a display: what overflows the toolbars at 960 px and
+# at the narrowest reaches the overflow menus with its label, and does there
+# what its button or box does.
+write_it_toolbar_overflow_tests = executable(
+  'write-it-toolbar-overflow-tests',
+  'tests/test_toolbar_overflow.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120)
