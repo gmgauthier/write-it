@@ -30,8 +30,7 @@ ViewGeometry view_geometry(ViewMode mode, double zoom)
     return page;
   // Draft keeps Page's text width, so lines break where they will print.
   // The left margin becomes a small gutter; the right takes the difference.
-  // The white area keeps Page's width, because a GtkTextView will not shrink
-  // below the lines it has already laid out.
+  // The white area keeps Page's width; the text moves left into it.
   ViewGeometry draft;
   draft.page_width = page.page_width;
   draft.margin_left = std::max(4, scaled(8, zoom));
