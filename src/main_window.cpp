@@ -388,6 +388,7 @@ void MainWindow::build_page()
       });
   buffer_->signal_changed().connect([this] { follow_caret(); });
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { scroll_to_caret(); });
+  g_signal_connect(text_.gobj(), "move-cursor", G_CALLBACK(&MainWindow::on_move_cursor), this);
   paste_.get_vadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
   paste_.get_hadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
   paste_.signal_scroll_event().connect(
@@ -407,6 +408,48 @@ void MainWindow::build_page()
         },
         false);
   }
+}
+
+void MainWindow::on_move_cursor(GtkTextView* view, GtkMovementStep step, gint count,
+                                gboolean extend, gpointer self)
+{
+  if (step != GTK_MOVEMENT_PAGES)
+    return;
+  if (static_cast<MainWindow*>(self)->page_caret(count, extend != FALSE))
+    g_signal_stop_emission_by_name(view, "move-cursor");
+}
+
+bool MainWindow::page_caret(int count, bool extend)
+{
+  auto adj = paste_.get_vadjustment();
+  const double page = adj->get_page_size();
+  if (!buffer_ || page <= 0 || count == 0)
+    return false;
+  Gdk::Rectangle caret;
+  Gdk::Rectangle first;
+  Gdk::Rectangle last;
+  text_.get_iter_location(buffer_->get_insert()->get_iter(), caret);
+  text_.get_iter_location(buffer_->begin(), first);
+  text_.get_iter_location(buffer_->end(), last);
+  // A screen on, aimed at the middle of the line there, and no further
+  // than the first or the last line.
+  const double step = page * count;
+  const int y = static_cast<int>(
+      std::max<double>(first.get_y(), std::min<double>(last.get_y(), caret.get_y() + step)));
+  Gtk::TextIter target;
+  int trailing = 0;
+  text_.get_iter_at_position(target, trailing, caret.get_x(), y + caret.get_height() / 2);
+  // The character boundary nearest the caret's x.
+  if (trailing > 0 && !target.ends_line())
+    target.forward_chars(trailing);
+  // The pasteboard goes the same screen, so the caret keeps its place on it.
+  adj->set_value(
+      std::max(adj->get_lower(), std::min(adj->get_value() + step, adj->get_upper() - page)));
+  if (extend)
+    buffer_->move_mark(buffer_->get_insert(), target);
+  else
+    buffer_->place_cursor(target);
+  return true;
 }
 
 void MainWindow::follow_caret()

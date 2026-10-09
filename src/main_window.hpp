@@ -68,6 +68,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   // wheel or a scrollbar takes the view somewhere else.
   void follow_caret();
   void scroll_to_caret();
+  // Page Down and Page Up, with or without Shift. For the same reason GTK
+  // would take the whole buffer as one page; these move the caret, and the
+  // pasteboard, by the pasteboard's visible height and keep the caret's x.
+  static void on_move_cursor(GtkTextView* view, GtkMovementStep step, gint count, gboolean extend,
+                             gpointer self);
+  bool page_caret(int count, bool extend);
   void sync_zoom_checks();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
