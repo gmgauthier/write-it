@@ -1076,26 +1076,66 @@ void MainWindow::restyle_tags()
   update_caret_font();
 }
 
-int MainWindow::margin_x() const
+ViewGeometry MainWindow::geometry() const
 {
-  return std::max(8, static_cast<int>(42 * zoom_factor() + 0.5));
+  return view_geometry(view_, zoom_factor());
+}
+
+void MainWindow::set_view(ViewMode mode)
+{
+  if (mode == view_)
+    return;
+  view_ = mode;
+  // Draft drops the sheet, its shadow and the gray pasteboard; the CSS
+  // keys off one class on each of them.
+  const ViewGeometry g = geometry();
+  for (Gtk::Widget* widget :
+       {static_cast<Gtk::Widget*>(&paste_), static_cast<Gtk::Widget*>(&board_),
+        static_cast<Gtk::Widget*>(&page_)}) {
+    if (g.chrome)
+      widget->get_style_context()->remove_class("draft");
+    else
+      widget->get_style_context()->add_class("draft");
+  }
+  page_.set_halign(g.centred ? Gtk::ALIGN_CENTER : Gtk::ALIGN_START);
+  // Draft's white area runs the full height, the text from the top.
+  page_.set_valign(g.chrome ? Gtk::ALIGN_START : Gtk::ALIGN_FILL);
+  if (g.chrome)
+    page_.property_vexpand_set() = false;  // back to the default Page layout
+  else
+    page_.set_vexpand(true);
+  page_.set_margin_top(g.gap);
+  page_.set_margin_bottom(g.gap);
+  apply_page_size();
+  ruler_.queue_draw();
+  text_.grab_focus();
+}
+
+int MainWindow::margin_left() const
+{
+  return geometry().margin_left;
+}
+
+int MainWindow::margin_right() const
+{
+  return geometry().margin_right;
 }
 
 int MainWindow::indent_px(int twips) const
 {
-  const double px = static_cast<double>(twips) * kPageW * zoom_factor() / kPageTwips;
-  return static_cast<int>(px >= 0 ? px + 0.5 : px - 0.5);
+  return twips_to_px(twips, zoom_factor());
 }
 
 void MainWindow::apply_margins()
 {
-  const double z = zoom_factor();
-  const int x = margin_x();
-  const int y = std::max(8, static_cast<int>(36 * z + 0.5));
-  if (text_.get_left_margin() != x)
-    text_.set_left_margin(x);
-  if (text_.get_right_margin() != x)
-    text_.set_right_margin(x);
+  const ViewGeometry g = geometry();
+  const int left = g.margin_left;
+  const int right = g.margin_right;
+  const int y = g.margin_y;
+  if (text_.get_left_margin() != left)
+    text_.set_left_margin(left);
+  if (text_.get_right_margin() != right)
+    text_.set_right_margin(right);
   if (text_.get_top_margin() != y)
     text_.set_top_margin(y);
   if (text_.get_bottom_margin() != y)
@@ -1488,8 +1528,8 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
   // GTK hangs a negative indent from the first line; Word hangs the first
   // line out from the rest. Moving the margin left by the hang lines them up.
   const int hang = std::min(0, indents.first);
-  tag->property_left_margin() = std::max(0, margin_x() + indent_px(indents.left + hang));
-  tag->property_right_margin() = margin_x() + indent_px(indents.right);
+  tag->property_left_margin() = std::max(0, margin_left() + indent_px(indents.left + hang));
+  tag->property_right_margin() = margin_right() + indent_px(indents.right);
   tag->property_indent() = indent_px(indents.first);
 }
 

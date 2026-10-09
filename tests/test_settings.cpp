@@ -26,7 +26,17 @@ int main()
   const std::string path = temp_ini();
   CHECK(!path.empty());
   if (path.empty())
-    return suite_test::done("settings");
+    // View > Page / Draft is not a setting: the Config key list has no view
+  // key, so every launch opens in Page, the default. Saving writes none.
+  {
+    writeit::Settings plain;
+    plain.save_to(path);
+    const std::string saved = Glib::file_get_contents(path);
+    CHECK(saved.find("view") == std::string::npos);
+    CHECK(saved.find("draft") == std::string::npos);
+  }
+
+  return suite_test::done("settings");
 
   writeit::Settings fresh;
   fresh.load_from(path);
@@ -100,6 +110,16 @@ int main()
     inches.load_from(path);
     inches.save_to(path);
     CHECK(Glib::file_get_contents(path).find("units=in") != std::string::npos);
+  }
+
+  // View > Page / Draft is not a setting: the Config key list has no view
+  // key, so every launch opens in Page, the default. Saving writes none.
+  {
+    writeit::Settings plain;
+    plain.save_to(path);
+    const std::string saved = Glib::file_get_contents(path);
+    CHECK(saved.find("view") == std::string::npos);
+    CHECK(saved.find("draft") == std::string::npos);
   }
 
   return suite_test::done("settings");

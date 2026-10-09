@@ -182,12 +182,20 @@ void MainWindow::build_menus()
   }
   view->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   Gtk::RadioMenuItem::Group page_group;
-  auto* page = Gtk::manage(new Gtk::RadioMenuItem(page_group, "_Page", true));
-  auto* draft = Gtk::manage(new Gtk::RadioMenuItem(page_group, "_Draft", true));
-  page->set_active(true);
-  draft->set_sensitive(false);
-  view->append(*page);
-  view->append(*draft);
+  page_item_ = Gtk::manage(new Gtk::RadioMenuItem(page_group, "_Page", true));
+  draft_item_ = Gtk::manage(new Gtk::RadioMenuItem(page_group, "_Draft", true));
+  page_item_->set_active(view_ == ViewMode::Page);
+  draft_item_->set_active(view_ == ViewMode::Draft);
+  page_item_->signal_toggled().connect([this] {
+    if (page_item_->get_active())
+      set_view(ViewMode::Page);
+  });
+  draft_item_->signal_toggled().connect([this] {
+    if (draft_item_->get_active())
+      set_view(ViewMode::Draft);
+  });
+  view->append(*page_item_);
+  view->append(*draft_item_);
 
   auto* insert = add_menu("_Insert");
   add_item(*insert, "_Picture…", false);
@@ -334,7 +342,7 @@ void MainWindow::build_page()
   ruler_.get_style_context()->add_class("ruler");
   ruler_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_ruler_draw));
 
-  page_.set_size_request(kPageW, kPageH);
+  page_.set_size_request(kScreenPageWidth, kScreenPageHeight);
   page_.get_style_context()->add_class("page");
   page_.add_events(Gdk::BUTTON_PRESS_MASK);
   page_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
@@ -364,7 +372,7 @@ void MainWindow::build_page()
   paste_.add_events(Gdk::BUTTON_PRESS_MASK);
   paste_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   paste_.signal_size_allocate().connect([this](Gtk::Allocation&) {
-    if (settings_.zoom == 0)
+    if (settings_.zoom == 0 || view_ == ViewMode::Draft)
       apply_page_size();
     ruler_.queue_draw();
   });
@@ -435,16 +443,22 @@ void MainWindow::apply_page_size()
     return;
   sizing_ = true;
   const double z = zoom_factor();
-  const int width = std::max(1, static_cast<int>(kPageW * z + 0.5));
-  const int base_h = std::max(1, static_cast<int>(kPageH * z + 0.5));
+  const ViewGeometry g = geometry();
+  const int width = g.page_width;
+  // Draft's white area is at least as tall as the visible pasteboard, so
+  // the text starts at the top and there is no gray below it.
+  const int base_h = g.chrome ? g.page_height : std::max(1, paste_.get_allocated_height() - 4);
   apply_margins();
-  if (z != styled_zoom_) {
+  // Paragraph tags carry the text inset in their margins, so they are
+  // restyled when the zoom or the view changes it.
+  if (z != styled_zoom_ || view_ != styled_view_) {
     styled_zoom_ = z;
+    styled_view_ = view_;
     restyle_tags();
   }
   int min_h = 0;
   int nat_h = 0;
-  text_.get_preferred_height_for_width(std::max(1, width - 2), min_h, nat_h);
+  text_.get_preferred_height_for_width(std::max(1, width - (g.chrome ? 2 : 0)), min_h, nat_h);
   const int height = std::max(base_h, nat_h);
   int current_w = 0;
   int current_h = 0;
@@ -511,8 +525,8 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   if (!buffer_)
     return true;
   const Indents indents = indents_at(cursor_offset());
-  const int left = origin_x + margin_x();
-  const int right = origin_x + page_w - margin_x();
+  const int left = origin_x + margin_left();
+  const int right = origin_x + page_w - margin_right();
   const double h = self.get_height();
   auto down = [&](double x) {
     cr->move_to(x - 4, 1);

@@ -10,6 +10,18 @@ scrolledwindow.pasteboard > viewport,
   box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.35);
 }
 
+/* View > Draft: continuous text on white, no sheet and no pasteboard. */
+scrolledwindow.pasteboard.draft,
+scrolledwindow.pasteboard.draft > viewport,
+.pasteboard.draft {
+  background-color: #ffffff;
+}
+
+.page.draft {
+  border: none;
+  box-shadow: none;
+}
+
 textview.page-text,
 textview.page-text text {
   background-color: #ffffff;

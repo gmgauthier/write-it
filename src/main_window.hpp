@@ -4,6 +4,7 @@
 
 #include "document.hpp"
 #include "settings.hpp"
+#include "view.hpp"
 
 #include <gtkmm.h>
 
@@ -41,10 +42,7 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   enum class OpenKind { Rtf, Markdown, Plain };
 
-  static constexpr int kPageW = 540;
-  // The screen page stands for A4, 21 cm across, until Page Setup arrives in M3.
-  static constexpr int kPageTwips = 11906;
-  static constexpr int kPageH = 470;
+  static constexpr int kPageW = kScreenPageWidth;
   static constexpr int kUndoCap = 200;
 
   void build_menus();
@@ -105,7 +103,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void raise_headings();
   void restyle_tags();
   void apply_margins();
-  int margin_x() const;
+  ViewGeometry geometry() const;
+  void set_view(ViewMode mode);
+  int margin_left() const;
+  int margin_right() const;
   int indent_px(int twips) const;
   double zoom_factor() const;
   Run format_of(const Gtk::TextIter& iter) const;
@@ -236,6 +237,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool pending_insert_ = false;
   bool sizing_ = false;
   double styled_zoom_ = -1;
+  // View > Page / Draft. Not saved: every launch opens in Page.
+  ViewMode view_ = kDefaultView;
+  ViewMode styled_view_ = kDefaultView;
+  Gtk::RadioMenuItem* page_item_ = nullptr;
+  Gtk::RadioMenuItem* draft_item_ = nullptr;
   Run typing_;
   // The format of a last paragraph with no characters, which no tag can hold.
   ParaFormat pending_para_;
