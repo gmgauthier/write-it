@@ -41,6 +41,7 @@ executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/page_text.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,
@@ -184,3 +185,23 @@ write_it_rtf_unicode_tests = executable(
   dependencies: dependency('glib-2.0'),
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
+
+# The real window under a display: View > Zoom and View > Page / Draft, and
+# the width GTK allocates and wraps at after each change.
+write_it_page_width_tests = executable(
+  'write-it-page-width-tests',
+  'tests/test_page_width.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('page-width', write_it_page_width_tests, timeout: 120)
