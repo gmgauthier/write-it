@@ -270,6 +270,9 @@ void folder_named_like_the_file()
 
 }  // namespace
 
+// The CHECK lines in this file; loops run several of them many times.
+constexpr int kMinChecks = 56;
+
 int main()
 {
   save_as_names();
@@ -280,5 +283,5 @@ int main()
   overwrite_order();
   no_local_path();
   folder_named_like_the_file();
-  return suite_test::done("filename");
+  return suite_test::done("filename", kMinChecks);
 }

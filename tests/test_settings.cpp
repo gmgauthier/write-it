@@ -30,7 +30,7 @@ int main()
   const std::string path = temp_ini();
   CHECK(!path.empty());
   if (path.empty())
-    return suite_test::done("settings");
+    return suite_test::done("settings", kChecks);
 
   writeit::Settings fresh;
   fresh.load_from(path);

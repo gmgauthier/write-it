@@ -19,6 +19,9 @@ writeit::Run run(const char* text, const char* font, int size, bool bold, bool i
 
 }  // namespace
 
+// Every check here runs once.
+constexpr int kMinChecks = 43;
+
 int main()
 {
   writeit::Document doc;
@@ -110,5 +113,5 @@ int main()
   CHECK(heading_rtf.paragraphs[0].heading == 2);
   CHECK(heading_rtf.paragraphs[0].runs[0].text == "Section");
 
-  return suite_test::done("document");
+  return suite_test::done("document", kMinChecks);
 }

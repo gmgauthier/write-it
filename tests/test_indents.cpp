@@ -292,6 +292,9 @@ void dialog_validation()
 
 }  // namespace
 
+// The CHECK lines in this file; loops run several of them many times.
+constexpr int kMinChecks = 82;
+
 int main()
 {
   model();
@@ -300,5 +303,5 @@ int main()
   rtf_read();
   markdown();
   dialog_validation();
-  return suite_test::done("indents");
+  return suite_test::done("indents", kMinChecks);
 }

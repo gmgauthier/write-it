@@ -375,6 +375,9 @@ void fuzz()
 
 }  // namespace
 
+// The CHECK lines in this file; loops run several of them many times.
+constexpr int kMinChecks = 97;
+
 int main()
 {
   scalar_values();
@@ -386,5 +389,5 @@ int main()
   control_characters();
   writer_controls();
   fuzz();
-  return suite_test::done("rtf-unicode");
+  return suite_test::done("rtf-unicode", kMinChecks);
 }
