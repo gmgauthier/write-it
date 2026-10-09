@@ -65,5 +65,5 @@ int main()
   presets();
   choices();
   parsing();
-  return suite_test::done("font-sizes", 30);
+  return suite_test::done("font-sizes", 36);
 }

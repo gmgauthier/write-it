@@ -4,6 +4,7 @@
 
 #include "about_dialog.hpp"
 #include "config.hpp"
+#include "font_sizes.hpp"
 
 #include <glibmm/miscutils.h>
 
@@ -293,8 +294,9 @@ void MainWindow::build_toolbars()
   font_combo_.set_tooltip_text("Font");
   size_combo_.set_size_request(52, -1);
   size_combo_.set_tooltip_text("Size");
-  for (const char* size : {"8", "9", "10", "11", "12", "14", "16", "18", "24", "36"})
-    size_combo_.append(size);
+  for (int size : preset_sizes())
+    size_combo_.append(std::to_string(size));
+  size_choices_shown_ = preset_sizes();
   size_combo_.set_active_text("11");
   style_combo_.append("Body text");
   style_combo_.set_active(0);
