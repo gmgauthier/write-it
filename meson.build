@@ -253,6 +253,15 @@ write_it_page_width_tests = executable(
 )
 test('page-width', write_it_page_width_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: the Page view sheet is A4 at every zoom,
+# and its size does not depend on the zooms before.
+write_it_page_sheet_tests = executable(
+  'write-it-page-sheet-tests',
+  'tests/test_page_sheet.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-sheet', write_it_page_sheet_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: where list labels land beside centred,
 # right-aligned and left-aligned text, with a non-standard hang.
 write_it_list_labels_tests = executable(
