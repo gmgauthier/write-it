@@ -7,6 +7,7 @@
 #include "units.hpp"
 
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace {
@@ -134,6 +135,52 @@ void no_drift(Units units)
 
 }  // namespace
 
+// Bug Basher: units_to_twips(1e12) overflowed int. Whatever comes in, the
+// result stays within the model's 22-inch range either side of zero (a
+// first-line indent is negative when it hangs), and NaN is zero.
+void conversion_is_clamped()
+{
+  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK(writeit::kMaxMeasureTwips == 31680);
+  CHECK(writeit::units_to_twips(1e12, Units::Inches) == 31680);
+  CHECK(writeit::units_to_twips(-1e12, Units::Inches) == -31680);
+  CHECK(writeit::units_to_twips(1e12, Units::Centimetres) == 31680);
+  CHECK(writeit::units_to_twips(-1e12, Units::Centimetres) == -31680);
+  CHECK(writeit::units_to_twips(nan, Units::Inches) == 0);
+  CHECK(writeit::units_to_twips(nan, Units::Centimetres) == 0);
+  CHECK(writeit::units_to_twips(inf, Units::Inches) == 31680);
+  CHECK(writeit::units_to_twips(-inf, Units::Inches) == -31680);
+  CHECK(writeit::units_to_twips(inf, Units::Centimetres) == 31680);
+  CHECK(writeit::units_to_twips(std::numeric_limits<double>::max(), Units::Inches) == 31680);
+  CHECK(writeit::units_to_twips(2147483648.0, Units::Inches) == 31680);
+  // The edges themselves.
+  CHECK(writeit::units_to_twips(22.0, Units::Inches) == 31680);
+  CHECK(writeit::units_to_twips(22.01, Units::Inches) == 31680);
+  CHECK(writeit::units_to_twips(55.88, Units::Centimetres) == 31680);
+  CHECK(writeit::units_to_twips(56.0, Units::Centimetres) == 31680);
+  CHECK(writeit::units_to_twips(21.99, Units::Inches) == 31666);
+  // keep_twips goes through the same clamp.
+  CHECK(writeit::keep_twips(720, 0.5, 1e12, Units::Inches) == 31680);
+  CHECK(writeit::keep_twips(720, 0.5, nan, Units::Inches) == 0);
+}
+
+// A hanging indent typed equal to Left, to the precision on screen, takes
+// Left's twips exactly, so a Left of 1410 twips shown as 0.98" can hang by
+// 0.98" without being one twip past the margin.
+void hang_matches_left()
+{
+  // hang_twips(now, twips worked out for now, Left twips, Left on screen)
+  CHECK(writeit::hang_twips(0.98, 1411, 1410, 0.98, Units::Inches) == 1410);
+  CHECK(writeit::hang_twips(0.984, 1417, 1410, 0.98, Units::Inches) == 1410);
+  CHECK(writeit::hang_twips(0.99, 1426, 1410, 0.98, Units::Inches) == 1426);
+  CHECK(writeit::hang_twips(0.5, 720, 1410, 0.98, Units::Inches) == 720);
+  CHECK(writeit::hang_twips(2.49, 1412, 1411, 2.49, Units::Centimetres) == 1411);
+  CHECK(writeit::hang_twips(2.5, 1417, 1411, 2.49, Units::Centimetres) == 1417);
+  // An untouched By keeps its own twips when it is not equal to Left.
+  CHECK(writeit::hang_twips(0.5, 719, 1440, 1.0, Units::Inches) == 719);
+}
+
 int main()
 {
   parsing_the_setting();
@@ -141,5 +188,7 @@ int main()
   formatting();
   no_drift(Units::Inches);
   no_drift(Units::Centimetres);
+  conversion_is_clamped();
+  hang_matches_left();
   return suite_test::done("units");
 }

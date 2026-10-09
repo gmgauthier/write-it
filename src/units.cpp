@@ -151,4 +151,13 @@ int keep_twips(int original, double shown, double now, Units units)
   return units_to_twips(now, units);
 }
 
+int hang_twips(double now, int twips, int left_twips, double left_now, Units units)
+{
+  (void)now;
+  (void)left_twips;
+  (void)left_now;
+  (void)units;
+  return twips;
+}
+
 }  // namespace writeit
