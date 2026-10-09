@@ -548,6 +548,7 @@ class Reader {
       return;
     }
     if (word == "plain") {
+      char_seen_ = true;
       state_.bold = false;
       state_.italic = false;
       state_.underline = false;
@@ -563,27 +564,35 @@ class Reader {
       return;
     }
     if (word == "f" && has_param) {
+      char_seen_ = true;
       state_.font = param;
       return;
     }
     if (word == "fs" && has_param) {
-      // Word's largest size, 1638 pt (\fs3276), which the size box can show.
-      state_.half_points = std::max(2, std::min(2 * kMaxFontSize, param));
+      // Half points, kept as they are: \fs21 is 10.5 pt. From \fs2, 1 pt,
+      // Word's smallest, to Word's largest, 1638 pt (\fs3276), which the
+      // size box can show.
+      char_seen_ = true;
+      state_.half_points = std::max(2 * kMinFontSize, std::min(2 * kMaxFontSize, param));
       return;
     }
     if (word == "b") {
+      char_seen_ = true;
       state_.bold = !has_param || param != 0;
       return;
     }
     if (word == "i") {
+      char_seen_ = true;
       state_.italic = !has_param || param != 0;
       return;
     }
     if (word == "ul") {
+      char_seen_ = true;
       state_.underline = !has_param || param != 0;
       return;
     }
     if (word == "ulnone") {
+      char_seen_ = true;
       state_.underline = false;
       return;
     }
@@ -890,17 +899,24 @@ class Reader {
     return label;
   }
 
+  // The character format in force.
+  Run char_run() const
+  {
+    Run run;
+    run.font = font_name(state_.font);
+    run.size = size_from_half_points(state_.half_points);
+    run.bold = state_.bold;
+    run.italic = state_.italic;
+    run.underline = state_.underline;
+    return run;
+  }
+
   void add_text(const std::string& utf8)
   {
     flush_lead();
     after_cr_ = false;
-    Run run;
+    Run run = char_run();
     run.text = utf8;
-    run.font = font_name(state_.font);
-    run.size = std::max(1, state_.half_points / 2);
-    run.bold = state_.bold;
-    run.italic = state_.italic;
-    run.underline = state_.underline;
     paragraph_.heading = state_.heading;
     add_run(paragraph_, std::move(run));
   }
@@ -914,6 +930,12 @@ class Reader {
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
       return;
     const bool live = from_par || !closed_;
+    // An empty paragraph that gives a character format of its own, as Word
+    // and Write-It write one (\pard\f0\fs40\par), keeps it: an empty 20 pt
+    // line stays 20 pt. One that gives none (\pard\par) has none.
+    if (paragraph_.runs.empty() && char_seen_ && live)
+      paragraph_.mark = char_run();
+    char_seen_ = false;
     paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
     paragraph_.align = live ? state_.align : final_align_;
     paragraphs_.push_back(paragraph_);
@@ -965,6 +987,10 @@ class Reader {
         run.text = clean_text(run.text, true);
         run.font = clean_text(run.font, false);
         add_run(merged, std::move(run));
+      }
+      if (merged.runs.empty() && paragraph.mark) {
+        merged.mark = paragraph.mark;
+        merged.mark->font = clean_text(merged.mark->font, false);
       }
       doc.paragraphs.push_back(std::move(merged));
     }
@@ -1018,6 +1044,9 @@ class Reader {
   Paragraph paragraph_;
   std::vector<Paragraph> paragraphs_;
   bool saw_par_ = false;
+  // A character control word since the last paragraph ended: an empty
+  // paragraph with one has a format of its own (Paragraph::mark).
+  bool char_seen_ = false;
   Indents final_indents_;
   Align final_align_ = Align::Left;
   ListMarks final_marks_;
@@ -1101,9 +1130,20 @@ std::string rtf_export(const Document& doc)
     fonts.push_back(key);
     return static_cast<int>(fonts.size() - 1);
   };
+  // An empty paragraph's own format (Paragraph::mark), when it has one. A
+  // paragraph with text takes its format from its runs.
+  auto mark_of = [](const Paragraph& paragraph) -> const Run* {
+    for (const Run& run : paragraph.runs) {
+      if (!run.text.empty())
+        return nullptr;
+    }
+    return paragraph.mark ? &*paragraph.mark : nullptr;
+  };
   for (const Paragraph& paragraph : doc.paragraphs) {
     for (const Run& run : paragraph.runs)
       index_of(run.font);
+    if (const Run* mark = mark_of(paragraph))
+      index_of(mark->font);
   }
   if (fonts.empty())
     fonts.push_back("Sans");
@@ -1173,15 +1213,19 @@ std::string rtf_export(const Document& doc)
       // The label as plain text for readers without lists. Readers with them
       // skip {\pntext ...}.
       int label_font = 0;
-      int label_size = 11;
+      double label_size = 11;
+      if (const Run* mark = mark_of(paragraph)) {
+        label_font = index_of(mark->font);
+        label_size = mark->size;
+      }
       for (const Run& run : paragraph.runs) {
         if (run.text.empty())
           continue;
         label_font = index_of(run.font);
-        label_size = std::max(1, run.size);
+        label_size = run.size;
         break;
       }
-      out << "{\\pntext\\f" << label_font << "\\fs" << label_size * 2 << " "
+      out << "{\\pntext\\f" << label_font << "\\fs" << half_points_of(label_size) << " "
           << label_rtf(list_label(list, numbers[index])) << "\\tab}";
     }
     out << "\\pard";
@@ -1212,17 +1256,17 @@ std::string rtf_export(const Document& doc)
     bool bold = false;
     bool italic = false;
     bool underline = false;
-    for (const Run& run : paragraph.runs) {
-      if (run.text.empty())
-        continue;
+    // Only what changes from the run before, all of it for the first.
+    auto format = [&](const Run& run) {
       const int fi = index_of(run.font);
       if (first || fi != font) {
         out << "\\f" << fi;
         font = fi;
       }
-      if (first || run.size != size) {
-        out << "\\fs" << std::max(1, run.size) * 2;
-        size = run.size;
+      const int half = half_points_of(run.size);
+      if (first || half != size) {
+        out << "\\fs" << half;
+        size = half;
       }
       if (first || run.bold != bold) {
         out << (run.bold ? "\\b" : "\\b0");
@@ -1236,9 +1280,18 @@ std::string rtf_export(const Document& doc)
         out << (run.underline ? "\\ul" : "\\ulnone");
         underline = run.underline;
       }
-      out << " " << escape_rtf(run.text);
       first = false;
+    };
+    for (const Run& run : paragraph.runs) {
+      if (run.text.empty())
+        continue;
+      format(run);
+      out << " " << escape_rtf(run.text);
     }
+    // An empty paragraph's own format goes before its \par, as Word writes
+    // it, so an empty 20 pt line reopens at 20 pt.
+    if (const Run* mark = mark_of(paragraph))
+      format(*mark);
     out << "\\par\n";
   }
   if (!wrote)

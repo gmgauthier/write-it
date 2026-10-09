@@ -65,7 +65,7 @@ bool heading_marks(const std::string& line, int& level, std::string& body)
   return true;
 }
 
-Paragraph parse_inlines(const std::string& text, const std::string& font, int size, int heading)
+Paragraph parse_inlines(const std::string& text, const std::string& font, double size, int heading)
 {
   Paragraph paragraph;
   paragraph.heading = heading;
@@ -127,6 +127,16 @@ std::string inline_export(const Paragraph& paragraph)
 
 }  // namespace
 
+bool same_mark(const Paragraph& a, const Paragraph& b)
+{
+  // Only an empty paragraph has a format of its own; text has its runs'.
+  if (!a.runs.empty() || !b.runs.empty())
+    return true;
+  if (a.mark.has_value() != b.mark.has_value())
+    return false;
+  return !a.mark || same_format(*a.mark, *b.mark);
+}
+
 bool same_format(const Run& a, const Run& b)
 {
   return a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
@@ -162,7 +172,7 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.indents == b.indents && a.align == b.align &&
-         a.list == b.list && a.runs == b.runs;
+         a.list == b.list && a.runs == b.runs && same_mark(a, b);
 }
 
 bool indents_fit(const Indents& indents)
@@ -501,7 +511,8 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& x = a.paragraphs[i];
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.indents != y.indents || x.align != y.align ||
-        x.list.kind != y.list.kind || x.list.level != y.list.level || !(x.runs == y.runs))
+        x.list.kind != y.list.kind || x.list.level != y.list.level || !(x.runs == y.runs) ||
+        !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -542,7 +553,7 @@ int list_label_space(const Indents& raw)
   return list_text_start(indents) - (indents.left + indents.first);
 }
 
-Document blank_document(const std::string& font, int size)
+Document blank_document(const std::string& font, double size)
 {
   (void)font;
   (void)size;
@@ -551,7 +562,7 @@ Document blank_document(const std::string& font, int size)
   return doc;
 }
 
-Document plain_import(const std::string& text, const std::string& font, int size)
+Document plain_import(const std::string& text, const std::string& font, double size)
 {
   Document doc;
   const std::string clean = strip_cr(text);
@@ -585,7 +596,7 @@ Document plain_import(const std::string& text, const std::string& font, int size
   return doc;
 }
 
-Document markdown_import(const std::string& text, const std::string& font, int size)
+Document markdown_import(const std::string& text, const std::string& font, double size)
 {
   Document doc;
   const std::vector<std::string> lines = lines_of(text);

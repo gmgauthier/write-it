@@ -308,6 +308,15 @@ write_it_toolbar_overflow_tests = executable(
 )
 test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: a file with half-point sizes and an empty
+# 20 pt line, opened, shown in the size box, typed in and saved back.
+write_it_font_size_ui_tests = executable(
+  'write-it-font-size-ui-tests',
+  'tests/test_font_size_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('font-size-ui', write_it_font_size_ui_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: a list label wider than its hang moves a
 # left-aligned or justified item's text to the next default tab stop.
 write_it_list_tabs_tests = executable(

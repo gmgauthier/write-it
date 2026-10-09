@@ -180,6 +180,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void sync_format_controls();
   void on_font_changed();
   void on_size_changed();
+  // Enter in the size box: the typed size, or back to the text's size.
+  void on_size_entered();
 
   Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
   void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
@@ -261,9 +263,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Toolbar standard_bar_;
   Gtk::Toolbar format_bar_;
   NarrowCombo font_combo_{128};
-  NarrowCombo size_combo_{52};
+  // Editable, as Word 97's: 10.5 can be typed (parse_size()).
+  NarrowCombo size_combo_{52, true};
   // What size_combo_ lists now (size_choices()).
-  std::vector<int> size_choices_shown_;
+  std::vector<double> size_choices_shown_;
   NarrowCombo style_combo_{110};
   Gtk::DrawingArea ruler_;
   Gtk::ScrolledWindow paste_;
@@ -370,6 +373,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool tabbing_ = false;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
+  // The buffer's mark-set. A window closed with text selected gives up the
+  // selection as its text view unrealizes, which moves the marks after the
+  // menus are gone: the destructor cuts it first.
+  sigc::connection mark_set_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
@@ -380,6 +387,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The format of a last paragraph with no characters, which no tag can hold.
   ParaFormat pending_para_;
   bool pending_para_set_ = false;
+  // Its character format (Paragraph::mark), when it has one of its own.
+  Run pending_mark_;
+  bool pending_mark_set_ = false;
   std::string caret_key_;
   std::vector<Snapshot> undo_;
   std::vector<Snapshot> redo_;

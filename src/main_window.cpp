@@ -176,6 +176,7 @@ MainWindow::~MainWindow()
   list_shifts_idle_.disconnect();
   list_tabs_idle_.disconnect();
   clipboard_owner_.disconnect();
+  mark_set_.disconnect();
 }
 
 MainWindow::MainWindow()
@@ -489,7 +490,7 @@ void MainWindow::build_toolbars()
   size_combo_.set_tooltip_text("Size");
   for (int size : preset_sizes())
     size_combo_.append(std::to_string(size));
-  size_choices_shown_ = preset_sizes();
+  size_choices_shown_.assign(preset_sizes().begin(), preset_sizes().end());
   size_combo_.set_active_text("11");
   style_combo_.append("Body text");
   style_combo_.set_active(0);

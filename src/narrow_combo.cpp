@@ -3,14 +3,18 @@
 #include "narrow_combo.hpp"
 
 #include <gtkmm/cellrenderertext.h>
+#include <gtkmm/entry.h>
 
 #include <algorithm>
 
 namespace writeit {
 
-NarrowCombo::NarrowCombo(int width)
-    : width_(width)
+NarrowCombo::NarrowCombo(int width, bool has_entry)
+    : Gtk::ComboBoxText(has_entry),
+      width_(width)
 {
+  if (Gtk::Entry* entry = has_entry ? get_entry() : nullptr)
+    entry->set_width_chars(4);
   set_popup_fixed_width(false);
   for (auto* cell : get_cells()) {
     if (auto* text = dynamic_cast<Gtk::CellRendererText*>(cell))
