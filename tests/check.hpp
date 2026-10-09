@@ -8,7 +8,7 @@
 namespace suite_test {
 
 inline int failures = 0;
-// Checks run, so a suite can tell when it stopped early.
+// Checks run, so a suite can tell when it ran more or fewer than it should.
 inline int checks = 0;
 
 inline void check(bool ok, const char* expr, const char* file, int line)
@@ -20,13 +20,18 @@ inline void check(bool ok, const char* expr, const char* file, int line)
   }
 }
 
-// `at_least` is how many checks the suite must have run; fewer means part
-// of it was skipped, and that is a failure too.
-inline int done(const char* name, int at_least = 0)
+// Ends a suite. `expected` is exactly how many checks it runs. Every suite
+// is deterministic, so any other number is a failure: fewer means part of it
+// was skipped (an early return, a loop that ran short), more means a loop
+// ran long or checks were added without updating the count. A count of 0 or
+// less fails, and done() without one does not compile.
+inline int done(const char* name, int expected)
 {
-  if (checks < at_least) {
-    std::cerr << name << ": only " << checks << " checks ran, expected at least " << at_least
-              << "\n";
+  if (expected <= 0) {
+    std::cerr << name << ": no check count given\n";
+    ++failures;
+  } else if (checks != expected) {
+    std::cerr << name << ": " << checks << " checks ran, expected exactly " << expected << "\n";
     ++failures;
   }
   if (failures) {
@@ -36,6 +41,9 @@ inline int done(const char* name, int at_least = 0)
   std::cout << name << ": ok, " << checks << " checks\n";
   return EXIT_SUCCESS;
 }
+
+// A suite must say how many checks it runs.
+int done(const char* name) = delete;
 
 }  // namespace suite_test
 
