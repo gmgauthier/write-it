@@ -126,9 +126,9 @@ void expect(writeit::MainWindow& window, int percent)
   // Right-aligned: the text ends at the right indent, the label a hang
   // before it.
   const auto right_item = MainWindowProbe::item(window, 1);
-  const bool ok_right = near(right_item.text_end, right, 1) &&
-                        near(right_item.text_start - right_item.label_x,
-                             MainWindowProbe::px(window, 1080), 1);
+  const bool ok_right =
+      near(right_item.text_end, right, 1) &&
+      near(right_item.text_start - right_item.label_x, MainWindowProbe::px(window, 1080), 1);
   // Left-aligned: the label at the first-line indent, the text at the left
   // indent.
   const auto left_item = MainWindowProbe::item(window, 2);
@@ -143,10 +143,10 @@ void expect(writeit::MainWindow& window, int percent)
     std::cout << "zoom " << percent << ": centred label " << centred.label_x << " text "
               << centred.text_start << ".." << centred.text_end << " unit mid " << unit_mid
               << " column " << column_left << ".." << right << " mid " << column_mid
-              << "; right label " << right_item.label_x << " text " << right_item.text_start
-              << ".." << right_item.text_end << "; left label " << left_item.label_x
-              << " text " << left_item.text_start << "; standard label " << standard.label_x
-              << " text " << standard.text_start << ".." << standard.text_end << "\n";
+              << "; right label " << right_item.label_x << " text " << right_item.text_start << ".."
+              << right_item.text_end << "; left label " << left_item.label_x << " text "
+              << left_item.text_start << "; standard label " << standard.label_x << " text "
+              << standard.text_start << ".." << standard.text_end << "\n";
   CHECK(ok_centred);
   CHECK(ok_centred_hang);
   CHECK(ok_right);

@@ -349,14 +349,14 @@ bool operator==(const Document& a, const Document& b)
   return a.paragraphs == b.paragraphs;
 }
 
-int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap)
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap)
 {
   // Only centred and right-aligned text moves; anything else, Justify when
   // it lands included, starts at the indent like Left.
   if (align != Align::Center && align != Align::Right)
     return hang_x;
   const int width = std::max(0, label_width);
-  const int before = std::max(std::max(0, hang_width), width + std::max(0, gap));
+  const int before = std::max(std::max(0, space), width + std::max(0, gap));
   return std::max(0, text_x - before);
 }
 
@@ -368,8 +368,8 @@ int list_text_start(const Indents& raw)
 
 int list_label_space(const Indents& raw)
 {
-  (void)raw;
-  return kListHang;
+  const Indents indents = clamp_indents(raw);
+  return list_text_start(indents) - (indents.left + indents.first);
 }
 
 Document blank_document(const std::string& font, int size)

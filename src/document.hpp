@@ -106,11 +106,18 @@ std::string list_label(const ListFormat& list, int number);
 // arguments. Left-aligned items, and any alignment but Center and Right
 // (justified text starts at the indent too), keep it at the first-line
 // indent (`hang_x`, left + first) as before. Centred and right-aligned text
-// moves away from the
-// indent, so, as in Word, the label sits just before the first line's text
-// (`text_x`): a hang's width before it, or the label's width and `gap` when
-// the label is wider than the hang. Never left of 0.
-int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap);
+// moves away from the indent, so the label sits just before the first
+// line's text (`text_x`): `space` before it, the paragraph's own room for
+// the label (list_label_space() in pixels), or the label's width and `gap`
+// when the label is wider than that. Never left of 0.
+//
+// GTK centres a list item's first line between where its text starts
+// (list_text_start()) and the right indent. With the label `space` before
+// the text, label and text are centred together, as one unit, between the
+// first-line indent and the right indent, as in Word 97, and a
+// right-aligned item's label and text end at the right indent. A label
+// wider than `space` pushes the unit left of centre by half the excess.
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap);
 // Where a list item's first line of text starts, in twips from the page
 // margin: the left indent when the label hangs in front of it, else a
 // standard hang past the label (left + first + kListHang), as when the
