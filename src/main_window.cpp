@@ -252,7 +252,20 @@ void MainWindow::build_menus()
   context_.append(*context_cut_);
   context_.append(*context_copy_);
   context_.append(*context_paste_);
+  // This app's own items, after a separator: Word's numbering commands,
+  // shown on a numbered item.
+  context_numbering_rule_ = Gtk::manage(new Gtk::SeparatorMenuItem());
+  context_restart_ = Gtk::manage(new Gtk::MenuItem("_Restart Numbering", true));
+  context_continue_ = Gtk::manage(new Gtk::MenuItem("C_ontinue Previous List", true));
+  context_restart_->signal_activate().connect([this] { renumber_list(true); });
+  context_continue_->signal_activate().connect([this] { renumber_list(false); });
+  context_.append(*context_numbering_rule_);
+  context_.append(*context_restart_);
+  context_.append(*context_continue_);
   context_.show_all();
+  context_numbering_rule_->hide();
+  context_restart_->hide();
+  context_continue_->hide();
 }
 
 Gtk::ToolButton* MainWindow::add_tool(Gtk::Toolbar& bar, const char* icon, const char* tip,
@@ -755,6 +768,7 @@ bool MainWindow::on_context(GdkEventButton* event)
       buffer_->place_cursor(where);
     update_actions();
   }
+  sync_context_numbering();
   context_.popup_at_pointer(reinterpret_cast<GdkEvent*>(event));
   return true;
 }
