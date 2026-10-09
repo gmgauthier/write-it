@@ -33,6 +33,7 @@ executable(
   'src/application.cpp',
   'src/main_window.cpp',
   'src/editor.cpp',
+  'src/font_sizes.cpp',
   'src/about_dialog.cpp',
   'src/settings.cpp',
   'src/filename.cpp',
@@ -112,6 +113,14 @@ write_it_view_tests = executable(
 )
 test('view', write_it_view_tests)
 
+write_it_font_sizes_tests = executable(
+  'write-it-font-sizes-tests',
+  'tests/test_font_sizes.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+)
+test('font-sizes', write_it_font_sizes_tests)
+
 write_it_document_tests = executable(
   'write-it-document-tests',
   'tests/test_document.cpp',
@@ -164,6 +173,7 @@ write_it_justify_ui_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/page_text.cpp',
+  'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
@@ -228,6 +238,7 @@ write_it_status_bar_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/page_text.cpp',
+  'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
@@ -248,6 +259,7 @@ write_it_page_width_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/page_text.cpp',
+  'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
@@ -269,6 +281,7 @@ write_it_caret_scroll_tests = executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/page_text.cpp',
+  'src/font_sizes.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )

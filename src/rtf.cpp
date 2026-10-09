@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Unlicense */
 
 #include "document.hpp"
+#include "font_sizes.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -566,7 +567,8 @@ class Reader {
       return;
     }
     if (word == "fs" && has_param) {
-      state_.half_points = std::max(2, param);
+      // Word's largest size, 1638 pt (\fs3276), which the size box can show.
+      state_.half_points = std::max(2, std::min(2 * kMaxFontSize, param));
       return;
     }
     if (word == "b") {
