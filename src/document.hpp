@@ -105,7 +105,8 @@ std::string list_label(const ListFormat& list, int number);
 // Format > Bullets and Format > Numbering on the selected paragraphs. When
 // every one already has `kind` the list comes off; otherwise every one takes
 // it. A paragraph joining a list hangs its label in front of its text; one
-// leaving gives back the list indents. Returns the kind the paragraphs have.
+// leaving gets back the indents it had before it joined (ListFormat::own).
+// Returns the kind the paragraphs have.
 ListKind toggle_list(std::vector<Paragraph>& paragraphs, ListKind kind);
 // Moves a list item to another level, and its indents with it.
 void set_list_level(Paragraph& paragraph, int level);
