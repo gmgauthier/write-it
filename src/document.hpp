@@ -138,8 +138,10 @@ std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs);
 // level for a number. Empty for no list.
 std::string list_label(const ListFormat& list, int number);
 // Where a list item's label starts, in pixels, in the coordinates of the
-// arguments. Left-aligned items keep it at the first-line indent (`hang_x`,
-// left + first) as before. Centred and right-aligned text moves away from the
+// arguments. Left-aligned items, and any alignment but Center and Right
+// (justified text starts at the indent too), keep it at the first-line
+// indent (`hang_x`, left + first) as before. Centred and right-aligned text
+// moves away from the
 // indent, so, as in Word, the label sits just before the first line's text
 // (`text_x`): a hang's width before it, or the label's width and `gap` when
 // the label is wider than the hang. Never left of 0.

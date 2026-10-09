@@ -833,6 +833,14 @@ void label_position()
   CHECK(list_label_x(Align::Center, 0, 10, 8, 24, 4) == 0);
   // Hostile sizes: negative widths count as nothing.
   CHECK(list_label_x(Align::Right, 100, 400, -50, -24, -4) == 400);
+  // Only centred and right-aligned text moves the label. Every other
+  // alignment, Justify included when it lands (Align has no value for it yet,
+  // so values past Right stand in for it), keeps the label in the hang like
+  // Left: here a non-standard hang at 37, where moving would give 376.
+  CHECK(list_label_x(static_cast<Align>(3), 37, 400, 8, 24, 4) == 37);
+  CHECK(list_label_x(static_cast<Align>(4), 37, 400, 40, 24, 4) == 37);
+  CHECK(list_label_x(static_cast<Align>(3), 37, 400, 8, 24, 4) ==
+        list_label_x(Align::Left, 37, 400, 8, 24, 4));
 }
 
 void markdown()
@@ -849,7 +857,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 251;
+constexpr int kChecks = 254;
 
 int main()
 {
