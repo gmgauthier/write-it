@@ -238,6 +238,44 @@ std::string highlighted(writeit::MainWindow& window)
   return text.raw();
 }
 
+// The row of the box's list that says `text`, or -1.
+int row_of(writeit::MainWindow& window, const char* text)
+{
+  auto model = MainWindowProbe::size_combo(window).get_model();
+  int row = 0;
+  for (const auto& child : model->children()) {
+    Glib::ustring label;
+    child->get_value(0, label);
+    if (label == text)
+      return row;
+    ++row;
+  }
+  return -1;
+}
+
+// Pops the box's list and says which item it highlights, by row, or -1 for
+// none; then closes it.
+int popup_highlight(writeit::MainWindow& window)
+{
+  auto& combo = MainWindowProbe::size_combo(window);
+  combo.popup();
+  settle();
+  int row = -1;
+  AtkObject* popup = gtk_combo_box_get_popup_accessible(GTK_COMBO_BOX(combo.gobj()));
+  GtkWidget* menu = popup ? gtk_accessible_get_widget(GTK_ACCESSIBLE(popup)) : nullptr;
+  if (menu && GTK_IS_MENU_SHELL(menu)) {
+    GtkWidget* selected = gtk_menu_shell_get_selected_item(GTK_MENU_SHELL(menu));
+    GList* items = gtk_container_get_children(GTK_CONTAINER(menu));
+    row = selected ? g_list_index(items, selected) : -1;
+    g_list_free(items);
+  } else {
+    row = -2;
+  }
+  combo.popdown();
+  settle();
+  return row;
+}
+
 int pixel_width(Gtk::Entry& entry, const char* text)
 {
   int width = 0;
@@ -312,7 +350,7 @@ struct Messages {
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 46;
+constexpr int kChecks = 48;
 
 int main(int argc, char* argv[])
 {
@@ -427,6 +465,14 @@ int main(int argc, char* argv[])
     CHECK(MainWindowProbe::format_at(window, kSmall).size == 10.5 && shown(window) == "10.5");
     // The list highlights the size applied, not its first item (8).
     CHECK(highlighted(window) == "10.5");
+    CHECK(popup_highlight(window) == row_of(window, "10.5"));
+    // A size typed that the list does not hold highlights nothing.
+    if (entry) {
+      entry->set_text("13");
+      settle();
+    }
+    CHECK(popup_highlight(window) == -1);
+    select(window, kSmall, kSmall + 5);
 
     // Saved as \fs21, the empty lines still \fs40.
     CHECK(MainWindowProbe::save(window));
