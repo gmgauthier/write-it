@@ -36,10 +36,20 @@ bool confirm_replace(Gtk::Window& parent, const std::string& path)
   return dialog.run() == Gtk::RESPONSE_ACCEPT;
 }
 
+// Says why the chooser's answer can't be saved; the chooser stays open.
+void refuse_save(Gtk::Window& parent, const Glib::ustring& primary, const Glib::ustring& secondary)
+{
+  Gtk::MessageDialog dialog(parent, primary, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+  dialog.set_secondary_text(secondary);
+  dialog.run();
+}
+
 // Runs a save chooser until a file is chosen or the chooser is cancelled.
 // GTK's own overwrite question is off: it asks about the name as typed, but
 // the file written is save_name's, so "zout" would replace zout.rtf without
-// a word. The question here is about the final path.
+// a word. The question here is about the final path. A non-local location
+// (no path) or a final name that is a folder is refused, and the chooser
+// comes back.
 std::optional<std::string> run_save_chooser(Gtk::FileChooserDialog& dialog, const FileType& type)
 {
   dialog.set_do_overwrite_confirmation(false);
@@ -47,12 +57,27 @@ std::optional<std::string> run_save_chooser(Gtk::FileChooserDialog& dialog, cons
     const auto decision = resolve_save(
         dialog.get_filename(), type,
         [](const std::string& candidate) {
+          if (Glib::file_test(candidate, Glib::FILE_TEST_IS_DIR))
+            return PathKind::Folder;
           return Glib::file_test(candidate, Glib::FILE_TEST_EXISTS) ? PathKind::File
                                                                     : PathKind::Missing;
         },
         [&dialog](const std::string& candidate) { return confirm_replace(dialog, candidate); });
-    if (decision.outcome == SaveOutcome::Write)
-      return decision.path;
+    switch (decision.outcome) {
+      case SaveOutcome::Write:
+        return decision.path;
+      case SaveOutcome::NoPath:
+        refuse_save(dialog, "Write-It can only save to a folder on this computer.",
+                    "Choose a folder on this computer, then save again.");
+        break;
+      case SaveOutcome::Folder:
+        refuse_save(dialog,
+                    "\u201c" + Glib::path_get_basename(decision.path) + "\u201d is a folder.",
+                    "You can\u2019t save over a folder. Type a different file name.");
+        break;
+      case SaveOutcome::Declined:
+        break;
+    }
   }
   return std::nullopt;
 }

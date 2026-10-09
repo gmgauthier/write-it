@@ -92,9 +92,21 @@ SaveDecision resolve_save(const std::string& chosen, const FileType& type,
                           const std::function<PathKind(const std::string&)>& kind_of,
                           const std::function<bool(const std::string&)>& confirm_replace)
 {
+  // A non-local location gives no path; a relative one would land in the
+  // app's current folder. Neither is the folder the user is looking at.
+  if (chosen.empty() || chosen.front() != '/')
+    return {SaveOutcome::NoPath, {}};
   const std::string path = save_name(chosen, type);
-  if (kind_of(path) != PathKind::Missing && !confirm_replace(path))
-    return {SaveOutcome::Declined, path};
+  switch (kind_of(path)) {
+    case PathKind::Folder:
+      return {SaveOutcome::Folder, path};
+    case PathKind::File:
+      if (!confirm_replace(path))
+        return {SaveOutcome::Declined, path};
+      break;
+    case PathKind::Missing:
+      break;
+  }
   return {SaveOutcome::Write, path};
 }
 

@@ -53,7 +53,8 @@ struct SaveDecision {
   std::string path;  // the final name; empty for NoPath
 };
 
-// Decides a save. `kind_of` and `confirm_replace` are asked about the final
+// Decides a save. A chosen path that is empty or not absolute is NoPath and
+// nothing is asked. `kind_of` and `confirm_replace` are asked about the final
 // name, after save_name, never about what was typed, and confirm_replace
 // only when that name is an existing file.
 SaveDecision resolve_save(const std::string& chosen, const FileType& type,
