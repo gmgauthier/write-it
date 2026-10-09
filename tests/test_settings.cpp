@@ -19,8 +19,7 @@ std::string temp_ini()
   return Glib::build_filename(dir, "write-it.ini");
 }
 
-// Every check in main runs on a working temp directory. Fewer means the
-// suite returned early.
+// Exactly the checks this suite runs on a working temp directory.
 constexpr int kChecks = 42;
 
 }  // namespace
@@ -30,7 +29,7 @@ int main()
   const std::string path = temp_ini();
   CHECK(!path.empty());
   if (path.empty())
-    return suite_test::done("settings");
+    return suite_test::done("settings", kChecks);
 
   writeit::Settings fresh;
   fresh.load_from(path);
