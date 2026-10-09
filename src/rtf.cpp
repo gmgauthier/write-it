@@ -12,8 +12,19 @@
 namespace writeit {
 namespace {
 
+const uint32_t kReplacement = 0xFFFD;
+
+bool is_scalar(uint32_t cp)
+{
+  return cp <= 0x10FFFF && (cp < 0xD800 || cp > 0xDFFF);
+}
+
+// Never writes anything but valid UTF-8: a value that is not a Unicode scalar
+// value becomes U+FFFD.
 void append_utf8(std::string& out, uint32_t cp)
 {
+  if (!is_scalar(cp))
+    cp = kReplacement;
   if (cp < 0x80) {
     out.push_back(static_cast<char>(cp));
   } else if (cp < 0x800) {
@@ -31,32 +42,76 @@ void append_utf8(std::string& out, uint32_t cp)
   }
 }
 
+// Decodes one well-formed UTF-8 sequence at i. On success advances i and
+// returns true; on anything malformed (truncated, bad continuation, overlong,
+// surrogate, past U+10FFFF) leaves i alone and returns false.
+bool decode_utf8_strict(const std::string& text, size_t& i, uint32_t& cp)
+{
+  const auto c = static_cast<unsigned char>(text[i]);
+  size_t len = 0;
+  uint32_t min = 0;
+  if (c < 0x80) {
+    cp = c;
+    ++i;
+    return true;
+  }
+  if ((c & 0xE0) == 0xC0) {
+    len = 2;
+    cp = c & 0x1F;
+    min = 0x80;
+  } else if ((c & 0xF0) == 0xE0) {
+    len = 3;
+    cp = c & 0x0F;
+    min = 0x800;
+  } else if ((c & 0xF8) == 0xF0) {
+    len = 4;
+    cp = c & 0x07;
+    min = 0x10000;
+  } else {
+    return false;
+  }
+  if (i + len > text.size())
+    return false;
+  for (size_t k = 1; k < len; ++k) {
+    const auto b = static_cast<unsigned char>(text[i + k]);
+    if ((b & 0xC0) != 0x80)
+      return false;
+    cp = (cp << 6) | (b & 0x3F);
+  }
+  if (cp < min || !is_scalar(cp))
+    return false;
+  i += len;
+  return true;
+}
+
+// Lenient: a malformed byte decodes as U+FFFD and is consumed on its own.
 uint32_t decode_utf8(const std::string& text, size_t& i)
 {
-  const auto byte = [&](size_t n) -> uint32_t { return static_cast<unsigned char>(text[n]); };
-  const uint32_t c = byte(i);
-  if (c < 0x80) {
-    ++i;
-    return c;
-  }
-  if ((c & 0xE0) == 0xC0 && i + 1 < text.size()) {
-    const uint32_t cp = ((c & 0x1F) << 6) | (byte(i + 1) & 0x3F);
-    i += 2;
+  uint32_t cp = 0;
+  if (decode_utf8_strict(text, i, cp))
     return cp;
-  }
-  if ((c & 0xF0) == 0xE0 && i + 2 < text.size()) {
-    const uint32_t cp = ((c & 0x0F) << 12) | ((byte(i + 1) & 0x3F) << 6) | (byte(i + 2) & 0x3F);
-    i += 3;
-    return cp;
-  }
-  if ((c & 0xF8) == 0xF0 && i + 3 < text.size()) {
-    const uint32_t cp = ((c & 0x07) << 18) | ((byte(i + 1) & 0x3F) << 12) |
-                        ((byte(i + 2) & 0x3F) << 6) | (byte(i + 3) & 0x3F);
-    i += 4;
-    return cp;
-  }
   ++i;
-  return c;
+  return kReplacement;
+}
+
+// The safety net: anything that is not valid UTF-8 is replaced, so nothing
+// the reader produces can upset GTK.
+std::string valid_utf8(const std::string& text)
+{
+  std::string out;
+  out.reserve(text.size());
+  size_t i = 0;
+  while (i < text.size()) {
+    const size_t begin = i;
+    uint32_t cp = 0;
+    if (decode_utf8_strict(text, i, cp)) {
+      out.append(text, begin, i - begin);
+    } else {
+      append_utf8(out, kReplacement);
+      ++i;
+    }
+  }
+  return out;
 }
 
 std::string escape_rtf(const std::string& text)
@@ -237,9 +292,16 @@ class Reader {
     if (static_cast<unsigned char>(c) < 0x80) {
       utf8.push_back(c);
     } else {
+      // Not valid RTF, which is 7-bit, but be kind: well-formed UTF-8 is
+      // taken as such, and any other byte as the declared code page.
       size_t at = i_;
-      append_utf8(utf8, decode_utf8(text_, at));
-      i_ = at - 1;
+      uint32_t cp = 0;
+      if (decode_utf8_strict(text_, at, cp)) {
+        append_utf8(utf8, cp);
+        i_ = at - 1;
+      } else {
+        append_utf8(utf8, cp1252(static_cast<unsigned char>(c)));
+      }
     }
     add_text(utf8);
   }
@@ -407,30 +469,114 @@ class Reader {
       return;
     }
     if (word == "u" && has_param) {
-      int n = param;
-      if (n < 0)
-        n += 65536;
-      std::string utf8;
-      if (n >= 0xD800 && n <= 0xDBFF) {
-        lead_ = n;
-      } else if (n >= 0xDC00 && n <= 0xDFFF && lead_ != 0) {
-        const uint32_t cp = 0x10000 + ((static_cast<uint32_t>(lead_ - 0xD800) << 10) |
-                                       static_cast<uint32_t>(n - 0xDC00));
-        append_utf8(utf8, cp);
-        lead_ = 0;
-      } else {
-        lead_ = 0;
-        append_utf8(utf8, static_cast<uint32_t>(n));
-      }
-      if (!utf8.empty())
-        add_text(utf8);
-      for (int skip = 0; skip < state_.uc && i_ < text_.size(); ++skip)
-        ++i_;
+      unicode(param);
+      skip_fallback(state_.uc);
     }
+  }
+
+  // \uN is a UTF-16 code unit written as a signed 16-bit number, though
+  // some writers use the unsigned spelling. Anything outside -32768..65535 is
+  // not a code unit at all and reads as U+FFFD.
+  void unicode(int param)
+  {
+    if (param < -32768 || param > 65535) {
+      emit(kReplacement);
+      return;
+    }
+    const auto unit = static_cast<uint32_t>(param < 0 ? param + 65536 : param);
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      flush_lead();
+      lead_ = unit;
+    } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+      if (lead_ != 0) {
+        const uint32_t cp = 0x10000 + (((lead_ - 0xD800) << 10) | (unit - 0xDC00));
+        lead_ = 0;
+        emit(cp);
+      } else {
+        emit(kReplacement);
+      }
+    } else {
+      emit(unit);
+    }
+  }
+
+  void emit(uint32_t cp)
+  {
+    if (state_.ignore || state_.in_fonttbl)
+      return;
+    if (cp == 0)
+      return;
+    std::string utf8;
+    append_utf8(utf8, cp);
+    add_text(utf8);
+  }
+
+  // A high surrogate waits for its low half; if anything else comes first
+  // it is a lone surrogate and reads as U+FFFD.
+  void flush_lead()
+  {
+    if (lead_ == 0)
+      return;
+    lead_ = 0;
+    std::string utf8;
+    append_utf8(utf8, kReplacement);
+    add_text(utf8);
+  }
+
+  // Skips the \ucN fallback after \uN. Per the RTF spec a control word, a
+  // control symbol or a \'hh escape counts as one character, line breaks do
+  // not count, and the skip never crosses a group boundary.
+  void skip_fallback(int count)
+  {
+    while (count > 0 && i_ < text_.size()) {
+      const char c = text_[i_];
+      if (c == '{' || c == '}')
+        return;
+      if (c == '\r' || c == '\n') {
+        ++i_;
+        continue;
+      }
+      if (c == '\\') {
+        skip_control();
+      } else {
+        size_t at = i_;
+        uint32_t cp = 0;
+        i_ = decode_utf8_strict(text_, at, cp) ? at : i_ + 1;
+      }
+      --count;
+    }
+  }
+
+  void skip_control()
+  {
+    ++i_;
+    if (i_ >= text_.size())
+      return;
+    const char c = text_[i_];
+    if (c == '\'') {
+      ++i_;
+      for (int n = 0;
+           n < 2 && i_ < text_.size() && std::isxdigit(static_cast<unsigned char>(text_[i_])); ++n)
+        ++i_;
+      return;
+    }
+    if (!std::isalpha(static_cast<unsigned char>(c))) {
+      ++i_;
+      return;
+    }
+    while (i_ < text_.size() && std::isalpha(static_cast<unsigned char>(text_[i_])))
+      ++i_;
+    if (i_ < text_.size() && text_[i_] == '-')
+      ++i_;
+    while (i_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[i_])))
+      ++i_;
+    if (i_ < text_.size() && text_[i_] == ' ')
+      ++i_;
   }
 
   void add_text(const std::string& utf8)
   {
+    flush_lead();
     Run run;
     run.text = utf8;
     run.font = font_name(state_.font);
@@ -444,6 +590,7 @@ class Reader {
 
   void finish_paragraph(bool from_par)
   {
+    flush_lead();
     if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty())
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
@@ -458,7 +605,7 @@ class Reader {
 
   void commit_font()
   {
-    const std::string name = trim(font_chars_);
+    const std::string name = valid_utf8(trim(font_chars_));
     font_chars_.clear();
     if (name.empty())
       return;
@@ -483,8 +630,11 @@ class Reader {
       Paragraph merged;
       merged.heading = paragraph.heading;
       merged.indents = paragraph.indents;
-      for (Run& run : paragraph.runs)
+      for (Run& run : paragraph.runs) {
+        run.text = valid_utf8(run.text);
+        run.font = valid_utf8(run.font);
         add_run(merged, std::move(run));
+      }
       doc.paragraphs.push_back(std::move(merged));
     }
   }
@@ -501,7 +651,7 @@ class Reader {
   bool saw_par_ = false;
   Indents final_indents_;
   bool closed_ = false;
-  int lead_ = 0;
+  uint32_t lead_ = 0;
 };
 
 }  // namespace
