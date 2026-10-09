@@ -142,6 +142,29 @@ void proxy_combo(Gtk::ToolItem& tool, Gtk::ComboBoxText& combo, const char* labe
   attach_proxy(tool, *item, fill);
 }
 
+// GTK shows a toolbar's overflow arrow partway through laying the toolbar
+// out and lays the arrow itself out only on a later pass, which narrowing
+// the window does not always bring: the arrow stayed 1 px at -1, with nothing
+// to click. Ask for that pass whenever the arrow comes or goes.
+void lay_out_arrow(Gtk::Toolbar& bar)
+{
+  GtkWidget* arrow = nullptr;
+  gtk_container_forall(
+      GTK_CONTAINER(bar.gobj()),
+      [](GtkWidget* child, gpointer data) {
+        if (GTK_IS_TOGGLE_BUTTON(child))
+          *static_cast<GtkWidget**>(data) = child;
+      },
+      &arrow);
+  if (!arrow)
+    return;
+  Glib::wrap(arrow)->property_visible().signal_changed().connect([&bar] {
+    // Not from inside the layout; the toolbar's own lifetime bounds the idle.
+    Glib::signal_idle().connect(
+        sigc::bind_return(sigc::mem_fun(bar, &Gtk::Widget::queue_resize), false));
+  });
+}
+
 }  // namespace
 
 MainWindow::~MainWindow()
@@ -403,6 +426,8 @@ void MainWindow::build_toolbars()
   format_bar_.set_icon_size(Gtk::ICON_SIZE_SMALL_TOOLBAR);
   format_bar_.set_hexpand(false);
   format_bar_.set_show_arrow(true);
+  lay_out_arrow(standard_bar_);
+  lay_out_arrow(format_bar_);
   toolbars_.pack_start(standard_bar_, Gtk::PACK_SHRINK);
   toolbars_.pack_start(format_bar_, Gtk::PACK_SHRINK);
 
