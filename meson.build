@@ -355,3 +355,25 @@ write_it_toolbar_overflow_tests = executable(
   dependencies: [gtkmm],
 )
 test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120)
+
+# The real window under a display: a list label wider than its hang moves a
+# left-aligned or justified item's text to the next default tab stop.
+write_it_list_tabs_tests = executable(
+  'write-it-list-tabs-tests',
+  'tests/test_list_tabs.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  'src/narrow_combo.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('list-tabs', write_it_list_tabs_tests, timeout: 120)
