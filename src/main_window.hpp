@@ -62,6 +62,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_page_size();
   void set_zoom(int zoom);
   void sync_zoom_checks();
+  void queue_page_status();
+  void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
   bool on_context(GdkEventButton* event);
@@ -267,6 +269,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  bool page_status_queued_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
