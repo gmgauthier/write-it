@@ -554,11 +554,13 @@ void rtf_round_trip()
     CHECK(contains(writeit::rtf_export(block_doc), "\\pard\\s7\\li1440\\ri1440"));
   }
 
-  // A file without a style sheet reads as before: no sheet, all Normal.
-  const Document old = import(std::string(kHead) + "\\pard\\outlinelevel1 Sec\\par\\pard x\\par}");
+  // A file without a style sheet or headings reads as before: no sheet, all
+  // Normal, written back without one.
+  const std::string plain_rtf = std::string(kHead) + "\\pard Sec\\par\\pard x\\par}";
+  const Document old = import(plain_rtf);
   CHECK(old.styles.empty());
   CHECK(old.paragraphs.size() == 2 && old.paragraphs[0].style == "Normal");
-  CHECK(old.paragraphs[0].heading == 2);
+  CHECK(!contains(writeit::rtf_export(old), "stylesheet"));
 }
 
 void rtf_read()
@@ -774,6 +776,57 @@ void rtf_hostile()
   CHECK(stray.styles.empty());
 }
 
+// An M1 file (exactly as M1's writer wrote it): headings were \\outlinelevel
+// on body-size text, shown scaled. They open as Heading 1-6, at heading
+// size, so they do not shrink to body text.
+void m1_files()
+{
+  const std::string m1 =
+      "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n"
+      "{\\fonttbl{\\f0\\fswiss Sans;}}\n"
+      "\\pard\\outlinelevel0\\f0\\fs22\\b0\\i0\\ulnone Title\\par\n"
+      "\\pard\\f0\\fs22\\b0\\i0\\ulnone Body \\i it\\par\n"
+      "\\pard\\outlinelevel1\\f0\\fs22\\b0\\i0\\ulnone Sub part\\par\n"
+      "\\pard\\outlinelevel2\\par\n"
+      "\\pard\\f0\\fs22\\b0\\i0\\ulnone More\\par\n"
+      "}";
+  const Document doc = import(m1);
+  CHECK(doc.styles == writeit::builtin_styles("Sans", 11));
+  CHECK(doc.paragraphs.size() == 5);
+  if (doc.paragraphs.size() == 5) {
+    const Paragraph& title = doc.paragraphs[0];
+    CHECK(title.style == "Heading 1" && title.heading == 1);
+    CHECK(title.runs.size() == 1 && title.runs[0].size == 16 && title.runs[0].bold);
+    const Paragraph& sub = doc.paragraphs[2];
+    CHECK(sub.style == "Heading 2" && sub.heading == 2);
+    CHECK(sub.runs.size() == 1 && sub.runs[0].size == 14 && sub.runs[0].bold);
+    CHECK(doc.paragraphs[3].style == "Heading 3" && doc.paragraphs[3].heading == 3);
+    const Paragraph& body = doc.paragraphs[1];
+    CHECK(body.style == "Normal" && body.heading == 0);
+    CHECK(body.runs.size() == 2 && body.runs[0].size == 11 && !body.runs[0].bold);
+    CHECK(body.runs.size() == 2 && body.runs[1].italic);
+    CHECK(doc.paragraphs[4].style == "Normal");
+  }
+  // Round trip: written with its sheet, read back the same, written the same.
+  const std::string out = writeit::rtf_export(doc);
+  CHECK(contains(out, "{\\stylesheet") && contains(out, "\\pard\\s1"));
+  const Document back = import(out);
+  CHECK(back == doc);
+  CHECK(writeit::rtf_export(back) == out);
+  // The sheet follows the body text: a Serif 12 M1 file gets Serif 12 headings.
+  const Document serif = import(
+      "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Serif;}}\\pard\\outlinelevel0\\f0\\fs24 T\\par"
+      "\\pard\\f0\\fs24 Body text\\par}");
+  CHECK(serif.styles == writeit::builtin_styles("Serif", 12));
+  CHECK(!serif.paragraphs.empty() && serif.paragraphs[0].style == "Heading 1" &&
+        !serif.paragraphs[0].runs.empty() && serif.paragraphs[0].runs[0].size == 17);
+  // A file with its own sheet is left as it says, headings and all.
+  const Document own =
+      import(std::string(kHead) + "{\\stylesheet{Normal;}}\\pard\\outlinelevel0 T\\par}");
+  CHECK(!own.paragraphs.empty() && own.paragraphs[0].style == "Normal" &&
+        own.paragraphs[0].heading == 1);
+}
+
 void markdown()
 {
   const Document doc = writeit::markdown_import("# Title\n\nBody *it*\n\n### Small", "Serif", 12);
@@ -813,5 +866,6 @@ int main()
   rtf_read();
   rtf_hostile();
   markdown();
+  m1_files();
   return suite_test::done("styles");
 }
