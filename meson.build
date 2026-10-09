@@ -27,23 +27,45 @@ configure_file(
 
 inc = include_directories('.', 'src')
 
+# Every app source except main.cpp, compiled once. The app and every test
+# link this library; no target lists src/*.cpp files of its own.
+#
+# A new file in src/ goes in this list and nowhere else. Do not add src/*.cpp
+# to a test target: link writeit_dep instead, so a source added by one PR can
+# never leave another target with an undefined reference.
+writeit_core_sources = files(
+  'src/about_dialog.cpp',
+  'src/application.cpp',
+  'src/document.cpp',
+  'src/editor.cpp',
+  'src/filename.cpp',
+  'src/font_sizes.cpp',
+  'src/main_window.cpp',
+  'src/narrow_combo.cpp',
+  'src/page_text.cpp',
+  'src/rtf.cpp',
+  'src/settings.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+)
+
+writeit_core = static_library(
+  'writeit_core',
+  writeit_core_sources,
+  include_directories: inc,
+  dependencies: [gtkmm, glibmm],
+)
+
+writeit_dep = declare_dependency(
+  link_with: writeit_core,
+  include_directories: inc,
+  dependencies: [gtkmm, glibmm],
+)
+
 executable(
   'write-it',
   'src/main.cpp',
-  'src/application.cpp',
-  'src/main_window.cpp',
-  'src/editor.cpp',
-  'src/about_dialog.cpp',
-  'src/settings.cpp',
-  'src/filename.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  'src/units.cpp',
-  'src/view.cpp',
-  'src/narrow_combo.cpp',
-  'src/page_text.cpp',
-  include_directories: inc,
-  dependencies: [gtkmm],
+  dependencies: [writeit_dep],
   install: true,
   install_dir: get_option('bindir'),
 )
@@ -61,20 +83,25 @@ install_data(
 write_it_filename_tests = executable(
   'write-it-filename-tests',
   'tests/test_filename.cpp',
-  'src/filename.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('filename', write_it_filename_tests)
 
 write_it_settings_tests = executable(
   'write-it-settings-tests',
   'tests/test_settings.cpp',
-  'src/settings.cpp',
-  'src/units.cpp',
-  include_directories: inc,
-  dependencies: [glibmm],
+  dependencies: [writeit_dep],
 )
 test('settings', write_it_settings_tests)
+
+# Opening a .txt or .md in the real window, under a display: unmodified until
+# edited, and Save still goes through Save As.
+write_it_import_clean_tests = executable(
+  'write-it-import-clean-tests',
+  'tests/test_import_clean.cpp',
+  dependencies: [writeit_dep],
+)
+test('import-clean', write_it_import_clean_tests, timeout: 60)
 
 # check.hpp's guard. A suite that runs one check too few or too many, or
 # names no count, fails; done() without a count does not compile.
@@ -108,72 +135,72 @@ test(
 write_it_view_tests = executable(
   'write-it-view-tests',
   'tests/test_view.cpp',
-  'src/view.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('view', write_it_view_tests)
+
+write_it_font_sizes_tests = executable(
+  'write-it-font-sizes-tests',
+  'tests/test_font_sizes.cpp',
+  dependencies: [writeit_dep],
+)
+test('font-sizes', write_it_font_sizes_tests)
 
 write_it_document_tests = executable(
   'write-it-document-tests',
   'tests/test_document.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('document', write_it_document_tests)
 
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',
   'tests/test_heading_paragraphs.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('heading-paragraphs', write_it_heading_paragraph_tests)
 
 write_it_indents_tests = executable(
   'write-it-indents-tests',
   'tests/test_indents.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  'src/units.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('indents', write_it_indents_tests)
 
 write_it_alignment_tests = executable(
   'write-it-alignment-tests',
   'tests/test_alignment.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('alignment', write_it_alignment_tests)
+
+# Justify in the real window, under a display: the toolbar button, the menu
+# item and GTK's JUSTIFY_FILL.
+write_it_justify_ui_tests = executable(
+  'write-it-justify-ui-tests',
+  'tests/test_justify_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('justify-ui', write_it_justify_ui_tests, timeout: 60)
 
 write_it_lists_tests = executable(
   'write-it-lists-tests',
   'tests/test_lists.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('lists', write_it_lists_tests)
 
 write_it_units_tests = executable(
   'write-it-units-tests',
   'tests/test_units.cpp',
-  'src/units.cpp',
-  include_directories: inc,
+  dependencies: [writeit_dep],
 )
 test('units', write_it_units_tests)
 
 write_it_rtf_unicode_tests = executable(
   'write-it-rtf-unicode-tests',
   'tests/test_rtf_unicode.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  include_directories: inc,
-  dependencies: dependency('glib-2.0'),
+  dependencies: [writeit_dep, dependency('glib-2.0')],
 )
 # The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 20 s
 # under ASan and UBSan, against meson's 30 s default, hence its own timeout.
@@ -187,23 +214,45 @@ test(
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
 
+write_it_page_count_tests = executable(
+  'write-it-page-count-tests',
+  'tests/test_page_count.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-count', write_it_page_count_tests)
+
+# The real window under a display: the status bar's page cell and zoom cell.
+write_it_status_bar_tests = executable(
+  'write-it-status-bar-tests',
+  'tests/test_status_bar.cpp',
+  dependencies: [writeit_dep],
+)
+test('status-bar', write_it_status_bar_tests, timeout: 120)
+
+# The real window under a display: View > Zoom and View > Page / Draft, and
+# the width GTK allocates and wraps at after each change.
+write_it_page_width_tests = executable(
+  'write-it-page-width-tests',
+  'tests/test_page_width.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-width', write_it_page_width_tests, timeout: 120)
+
+# The real window under a display: every way the caret moves (Ctrl+End,
+# arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
+# pasteboard scrolls to keep it in view.
+write_it_caret_scroll_tests = executable(
+  'write-it-caret-scroll-tests',
+  'tests/test_caret_scroll.cpp',
+  dependencies: [writeit_dep],
+)
+test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)
+
 # The real window under a display: it fits a 1024 px screen.
 write_it_window_width_tests = executable(
   'write-it-window-width-tests',
   'tests/test_window_width.cpp',
-  'src/main_window.cpp',
-  'src/editor.cpp',
-  'src/about_dialog.cpp',
-  'src/settings.cpp',
-  'src/filename.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  'src/units.cpp',
-  'src/view.cpp',
-  'src/narrow_combo.cpp',
-  'src/page_text.cpp',
-  include_directories: inc,
-  dependencies: [gtkmm],
+  dependencies: [writeit_dep],
 )
 test('window-width', write_it_window_width_tests, timeout: 60)
 
@@ -212,39 +261,16 @@ test('window-width', write_it_window_width_tests, timeout: 60)
 write_it_window_memory_tests = executable(
   'write-it-window-memory-tests',
   'tests/test_window_memory.cpp',
-  'src/main_window.cpp',
-  'src/editor.cpp',
-  'src/about_dialog.cpp',
-  'src/settings.cpp',
-  'src/filename.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  'src/units.cpp',
-  'src/view.cpp',
-  'src/narrow_combo.cpp',
-  'src/page_text.cpp',
-  include_directories: inc,
-  dependencies: [gtkmm],
+  dependencies: [writeit_dep],
 )
 test('window-memory', write_it_window_memory_tests, timeout: 60)
 
-# The real window under a display: View > Zoom and View > Page / Draft, and
-# the width GTK allocates and wraps at after each change.
-write_it_page_width_tests = executable(
-  'write-it-page-width-tests',
-  'tests/test_page_width.cpp',
-  'src/main_window.cpp',
-  'src/editor.cpp',
-  'src/about_dialog.cpp',
-  'src/settings.cpp',
-  'src/filename.cpp',
-  'src/document.cpp',
-  'src/rtf.cpp',
-  'src/units.cpp',
-  'src/view.cpp',
-  'src/narrow_combo.cpp',
-  'src/page_text.cpp',
-  include_directories: inc,
-  dependencies: [gtkmm],
+# The real window under a display: what overflows the toolbars at 960 px and
+# at the narrowest reaches the overflow menus with its label, and does there
+# what its button or box does.
+write_it_toolbar_overflow_tests = executable(
+  'write-it-toolbar-overflow-tests',
+  'tests/test_toolbar_overflow.cpp',
+  dependencies: [writeit_dep],
 )
-test('page-width', write_it_page_width_tests, timeout: 120)
+test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120)

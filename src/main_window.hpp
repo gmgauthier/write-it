@@ -33,6 +33,7 @@ inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
+  ~MainWindow() override;
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -61,8 +62,25 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_chrome();
   void apply_toolbar_row();
   void apply_page_size();
+  // apply_page_size() once the current layout is done.
+  void queue_page_size();
   void set_zoom(int zoom);
+  // The text view sits on the page inside the pasteboard's scroller, so
+  // GTK's own scroll-to-caret has nothing to scroll. These scroll the
+  // pasteboard instead: follow_caret() after the caret moves or the text
+  // changes, scroll_to_caret() again whenever the layout settles, until the
+  // wheel or a scrollbar takes the view somewhere else.
+  void follow_caret();
+  void scroll_to_caret();
+  // Page Down and Page Up, with or without Shift. For the same reason GTK
+  // would take the whole buffer as one page; these move the caret, and the
+  // pasteboard, by the pasteboard's visible height and keep the caret's x.
+  static void on_move_cursor(GtkTextView* view, GtkMovementStep step, gint count, gboolean extend,
+                             gpointer self);
+  bool page_caret(int count, bool extend);
   void sync_zoom_checks();
+  void queue_page_status();
+  void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
   bool on_context(GdkEventButton* event);
@@ -155,6 +173,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void show_align();
   void on_paragraph();
   void toggle_list_kind(ListKind kind);
+  // Tags the paragraph that starts at `start` with `format`, or holds the
+  // format aside for the empty last paragraph.
+  void tag_paragraph(int start, const ParaFormat& format);
+  // The caret's paragraph, counted in '\n' as capture() counts them.
+  size_t caret_paragraph() const;
+  // Restart Numbering (true) or Continue Previous List (false) at the
+  // caret's item, as one undo step. False when it changes nothing.
+  bool renumber_list(bool restart);
+  // Shows the right-click menu's numbering items on a numbered item.
+  void sync_context_numbering();
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -180,6 +208,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Toolbar format_bar_;
   NarrowCombo font_combo_{128};
   NarrowCombo size_combo_{52};
+  // What size_combo_ lists now (size_choices()).
+  std::vector<int> size_choices_shown_;
   NarrowCombo style_combo_{110};
   Gtk::DrawingArea ruler_;
   Gtk::ScrolledWindow paste_;
@@ -224,10 +254,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
+  Gtk::MenuItem* justify_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
   Gtk::MenuItem* context_paste_ = nullptr;
+  Gtk::SeparatorMenuItem* context_numbering_rule_ = nullptr;
+  Gtk::MenuItem* context_restart_ = nullptr;
+  Gtk::MenuItem* context_continue_ = nullptr;
   std::vector<Gtk::MenuItem*> recent_items_;
 
   Gtk::ToolButton* new_tool_ = nullptr;
@@ -244,6 +278,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
+  Gtk::ToggleToolButton* justify_toggle_ = nullptr;
   Gtk::ToggleToolButton* bullets_toggle_ = nullptr;
   Gtk::ToggleToolButton* numbering_toggle_ = nullptr;
 
@@ -257,8 +292,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
-  // Fit width and Draft: the page is waiting to follow a new pasteboard size.
-  bool fit_queued_ = false;
+  // The idle that sizes the page again after a layout to a new pasteboard
+  // size (Fit width, Draft). One at a time, and gone with the window.
+  sigc::connection page_idle_;
+  bool follow_caret_ = false;
+  // The idle follow_caret() queues; one at a time, and gone with the window.
+  sigc::connection caret_idle_;
+  // The status bar's page count idle, likewise.
+  sigc::connection page_status_idle_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
