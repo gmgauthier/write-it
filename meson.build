@@ -74,6 +74,34 @@ write_it_settings_tests = executable(
 )
 test('settings', write_it_settings_tests)
 
+# check.hpp's guard. A suite that stops early, or names no minimum, fails;
+# done() without a minimum does not compile.
+check_guard = executable('check-guard', 'tests/check_guard.cpp', include_directories: inc)
+test('guard-early-return-fails', check_guard, args: ['early'], should_fail: true)
+test('guard-no-minimum-fails', check_guard, args: ['no-minimum'], should_fail: true)
+test('guard-exact-passes', check_guard, args: ['exact'])
+# The header's text goes into the probe itself, so editing check.hpp
+# reconfigures and the probe is never answered from meson's cache.
+done_without_minimum = meson.get_compiler('cpp').compiles(
+  import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x"); }\n',
+  args: ['-std=c++17'],
+  name: 'suite_test::done() without a minimum',
+)
+# The control: with a minimum it compiles, so the NO above is about the
+# missing minimum and nothing else.
+assert(
+  meson.get_compiler('cpp').compiles(
+    import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x", 1); }\n',
+    args: ['-std=c++17'],
+    name: 'suite_test::done() with a minimum',
+  ),
+  'check.hpp does not compile with a minimum either',
+)
+test(
+  'guard-minimum-required',
+  find_program(done_without_minimum ? 'false' : 'true'),
+)
+
 write_it_view_tests = executable(
   'write-it-view-tests',
   'tests/test_view.cpp',
@@ -145,31 +173,3 @@ write_it_rtf_unicode_tests = executable(
   dependencies: dependency('glib-2.0'),
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
-
-# check.hpp's guard. A suite that stops early, or names no minimum, fails;
-# done() without a minimum does not compile.
-check_guard = executable('check-guard', 'tests/check_guard.cpp', include_directories: inc)
-test('guard-early-return-fails', check_guard, args: ['early'], should_fail: true)
-test('guard-no-minimum-fails', check_guard, args: ['no-minimum'], should_fail: true)
-test('guard-exact-passes', check_guard, args: ['exact'])
-# The header's text goes into the probe itself, so editing check.hpp
-# reconfigures and the probe is never answered from meson's cache.
-done_without_minimum = meson.get_compiler('cpp').compiles(
-  import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x"); }\n',
-  args: ['-std=c++17'],
-  name: 'suite_test::done() without a minimum',
-)
-# The control: with a minimum it compiles, so the NO above is about the
-# missing minimum and nothing else.
-assert(
-  meson.get_compiler('cpp').compiles(
-    import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x", 1); }\n',
-    args: ['-std=c++17'],
-    name: 'suite_test::done() with a minimum',
-  ),
-  'check.hpp does not compile with a minimum either',
-)
-test(
-  'guard-minimum-required',
-  find_program(done_without_minimum ? 'false' : 'true'),
-)
