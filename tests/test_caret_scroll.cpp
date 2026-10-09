@@ -55,6 +55,13 @@ struct MainWindowProbe {
   }
   // The caret's rectangle in the scrolled board's coordinates, the space
   // the pasteboard's adjustments measure.
+  // The caret's rectangle in buffer coordinates.
+  static Gdk::Rectangle caret_rect(MainWindow& w)
+  {
+    Gdk::Rectangle rect;
+    w.text_.get_iter_location(w.buffer_->get_insert()->get_iter(), rect);
+    return rect;
+  }
   static bool caret_on_board(MainWindow& w, Gdk::Rectangle& out)
   {
     Gdk::Rectangle rect;
@@ -167,6 +174,48 @@ int caret_offset(writeit::MainWindow& window)
   return MainWindowProbe::buffer(window)->get_insert()->get_iter().get_offset();
 }
 
+int bound_offset(writeit::MainWindow& window)
+{
+  return MainWindowProbe::buffer(window)->get_selection_bound()->get_iter().get_offset();
+}
+
+int caret_line(writeit::MainWindow& window)
+{
+  return MainWindowProbe::buffer(window)->get_insert()->get_iter().get_line();
+}
+
+double page_size(writeit::MainWindow& window)
+{
+  return MainWindowProbe::scroller(window).get_vadjustment()->get_page_size();
+}
+
+// One Page Down or Page Up: the caret went about a screen (the pasteboard's
+// visible height, give or take two lines) in the right direction, kept its
+// x, and is in view; with Shift the selection's other end stayed put, and
+// without it there is no selection. Five checks.
+void page_key(writeit::MainWindow& window, guint keyval, bool shift, const char* where)
+{
+  const Gdk::Rectangle before = MainWindowProbe::caret_rect(window);
+  const int anchor = shift ? bound_offset(window) : -1;
+  const double sign = keyval == GDK_KEY_Page_Down ? 1 : -1;
+  key(window, keyval, shift ? GDK_SHIFT_MASK : GdkModifierType(0));
+  const Gdk::Rectangle after = MainWindowProbe::caret_rect(window);
+  const double moved = (after.get_y() - before.get_y()) * sign;
+  const double slack = 2.0 * before.get_height();
+  const bool far = std::abs(moved - page_size(window)) <= slack;
+  if (!far)
+    std::cerr << where << ": caret moved " << moved << " px, a screen is " << page_size(window)
+              << ", now on line " << caret_line(window) << "\n";
+  CHECK(far);
+  CHECK(std::abs(after.get_x() - before.get_x()) <= 2);
+  CHECK(caret_visible(window, where));
+  if (shift)
+    CHECK(bound_offset(window) == anchor);
+  else
+    CHECK(bound_offset(window) == caret_offset(window));
+  CHECK(caret_offset(window) != bound_offset(window) || !shift);
+}
+
 int char_count(writeit::MainWindow& window)
 {
   return MainWindowProbe::buffer(window)->get_char_count();
@@ -188,7 +237,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 120;
+constexpr int kChecks = 159;
 
 int main(int argc, char* argv[])
 {
@@ -297,6 +346,28 @@ int main(int argc, char* argv[])
     MainWindowProbe::view(window, ViewMode::Page);
     settle();
     CHECK(caret_visible(window, "Page 100% after Draft"));
+
+    // Page Down and Page Up move a screen, not to the ends of the letter,
+    // and scroll the pasteboard by about a screen with them.
+    // From column 5 of "Paragraph 1", so every line it lands on has the
+    // same letters before the caret and the same x is a character boundary.
+    key(window, GDK_KEY_Home, ctrl);
+    MainWindowProbe::buffer(window)->place_cursor(
+        MainWindowProbe::buffer(window)->get_iter_at_line_offset(1, 5));
+    settle();
+    const double top = vvalue(window);
+    page_key(window, GDK_KEY_Page_Down, false, "Page Down");
+    CHECK(caret_line(window) < 60);
+    CHECK(std::abs(vvalue(window) - top - page_size(window)) <= 2 * 21);
+    page_key(window, GDK_KEY_Page_Down, false, "Page Down again");
+    page_key(window, GDK_KEY_Page_Down, false, "Page Down a third time");
+    page_key(window, GDK_KEY_Page_Down, true, "Shift+Page Down");
+    page_key(window, GDK_KEY_Page_Up, false, "Page Up");
+    page_key(window, GDK_KEY_Page_Up, true, "Shift+Page Up");
+    const double before_up = vvalue(window);
+    page_key(window, GDK_KEY_Page_Up, false, "Page Up again");
+    CHECK(caret_line(window) > 0);
+    CHECK(std::abs(before_up - vvalue(window) - page_size(window)) <= 2 * 21);
     window.hide();
     settle();
   }
