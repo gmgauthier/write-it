@@ -5,9 +5,10 @@
 // overflow menu, the » arrow at its end. Every control that can go there must
 // arrive with its name, and choosing it there must do what the control does.
 //
-// First, at 960 px (the first launch) and at the narrowest the window can
-// be made: every toolbar's overflowed items have a proxy with a label, and
-// the arrow's menu lists exactly those, labelled and visible. Then each
+// First, at 960 px (the first launch), at the narrowest the window can be
+// made, and at 640 px: a toolbar with overflowed items shows its arrow where
+// it can be clicked, every overflowed item has a proxy with a label, and the
+// arrow's menu lists exactly those, labelled and visible. Then each
 // proxy is chosen in turn and checked against what its button or box does.
 
 #include "check.hpp"
@@ -173,6 +174,28 @@ Gtk::ToggleButton* arrow_of(Gtk::Toolbar& bar)
   return arrow;
 }
 
+// A bar with overflowed items shows its arrow where it can be clicked: laid
+// out, with a size, inside the bar.
+bool arrow_reachable(Gtk::Toolbar& bar, const char* where)
+{
+  if (overflowed(bar).empty())
+    return true;
+  Gtk::ToggleButton* arrow = arrow_of(bar);
+  if (!arrow || !arrow->get_visible() || !arrow->get_mapped()) {
+    std::cerr << where << ": items overflow but the arrow is not shown\n";
+    return false;
+  }
+  const Gtk::Allocation a = arrow->get_allocation();
+  const Gtk::Allocation b = bar.get_allocation();
+  const bool ok = a.get_width() > 1 && a.get_height() > 1 && a.get_x() >= b.get_x() &&
+                  a.get_x() + a.get_width() <= b.get_x() + b.get_width();
+  if (!ok)
+    std::cerr << where << ": arrow at " << a.get_x() << " " << a.get_width() << "x"
+              << a.get_height() << ", bar " << b.get_x() << " to " << b.get_x() + b.get_width()
+              << "\n";
+  return ok;
+}
+
 // Opens the arrow's menu as a click does and reads it: the label of every
 // entry that is not a separator, or "" for an entry with none or not shown.
 std::vector<std::string> arrow_menu(Gtk::Toolbar& bar)
@@ -325,7 +348,7 @@ struct Responder {
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 50;
+constexpr int kChecks = 60;
 
 int main(int argc, char* argv[])
 {
@@ -354,6 +377,8 @@ int main(int argc, char* argv[])
     CHECK(!overflowed(format).empty());
     CHECK(proxies_labelled(standard, "960 px, standard"));
     CHECK(proxies_labelled(format, "960 px, format"));
+    CHECK(arrow_reachable(standard, "960 px, standard"));
+    CHECK(arrow_reachable(format, "960 px, format"));
     CHECK(menu_matches(standard, "960 px, standard"));
     CHECK(menu_matches(format, "960 px, format"));
 
@@ -367,8 +392,20 @@ int main(int argc, char* argv[])
     CHECK(!overflowed(format).empty());
     CHECK(proxies_labelled(standard, "minimum, standard"));
     CHECK(proxies_labelled(format, "minimum, format"));
+    CHECK(arrow_reachable(standard, "minimum, standard"));
+    CHECK(arrow_reachable(format, "minimum, format"));
     CHECK(menu_matches(standard, "minimum, standard"));
     CHECK(menu_matches(format, "minimum, format"));
+
+    // 640 px, where the review found the standard overflow blank.
+    resize(window, 640);
+    CHECK(!overflowed(standard).empty());
+    CHECK(arrow_reachable(standard, "640 px, standard"));
+    CHECK(arrow_reachable(format, "640 px, format"));
+    CHECK(proxies_labelled(standard, "640 px, standard") &&
+          proxies_labelled(format, "640 px, format"));
+    CHECK(menu_matches(standard, "640 px, standard"));
+    CHECK(menu_matches(format, "640 px, format"));
     resize(window, 960);
 
     // Character format: the proxy sets the button and the text, and follows
