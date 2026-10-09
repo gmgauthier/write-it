@@ -93,7 +93,6 @@ write_it_import_clean_tests = executable(
   'src/view.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
-  'src/narrow_combo.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
@@ -197,7 +196,6 @@ write_it_justify_ui_tests = executable(
   'src/view.cpp',
   'src/page_text.cpp',
   'src/font_sizes.cpp',
-  'src/narrow_combo.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
 )
