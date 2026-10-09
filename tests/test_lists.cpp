@@ -33,6 +33,14 @@ writeit::Paragraph item(const char* text, ListKind kind, int level = 0)
   return paragraph;
 }
 
+// A numbered item in list `list`: 0 continues the numbered list above.
+writeit::Paragraph numbered(const char* text, int list, int level = 0)
+{
+  writeit::Paragraph paragraph = item(text, ListKind::Number, level);
+  paragraph.list.list = list;
+  return paragraph;
+}
+
 std::string text_of(const writeit::Paragraph& paragraph)
 {
   std::string out;
@@ -148,16 +156,17 @@ void labels()
 void numbering()
 {
   using writeit::list_numbers;
-  // Numbers count up through a list and restart after a plain paragraph.
+  // Numbers count up through a list and, as in Word 97, keep counting past a
+  // plain paragraph, empty or not.
   {
     std::vector<writeit::Paragraph> p;
     p.push_back(item("one", ListKind::Number));
     p.push_back(item("two", ListKind::Number));
     p.push_back(item("plain", ListKind::None));
-    p.push_back(item("one again", ListKind::Number));
-    p.push_back(item("", ListKind::None));  // an empty plain paragraph restarts too
-    p.push_back(item("one more", ListKind::Number));
-    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 0, 1, 0, 1}));
+    p.push_back(item("three", ListKind::Number));
+    p.push_back(item("", ListKind::None));
+    p.push_back(item("four", ListKind::Number));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 0, 3, 0, 4}));
   }
   // Nested levels count on their own and restart under each new parent.
   {
@@ -470,17 +479,32 @@ void rtf_write()
   CHECK(!contains(bare, "\\ls"));
   CHECK(!contains(bare, "pntext"));
 
-  // Each numbered list after a plain paragraph is its own Word list, so Word
-  // and LibreOffice restart the numbers where Write-It does.
+  // A plain paragraph does not end a list: both items are in \ls2, one
+  // Word list, so Word and LibreOffice keep counting as Write-It does.
   writeit::Document two;
   two.paragraphs.push_back(item("one", ListKind::Number));
   two.paragraphs.push_back(item("plain", ListKind::None));
-  two.paragraphs.push_back(item("one again", ListKind::Number));
-  const std::string restart = writeit::rtf_export(two);
-  CHECK(contains(restart, "\\ls2\\ilvl0"));
-  CHECK(contains(restart, "\\ls3\\ilvl0"));
-  CHECK(count_of(restart, "{\\listoverride\\listid") == 3);
-  CHECK(count_of(restart, "{\\pntext\\f0\\fs22 1.\\tab}") == 2);
+  two.paragraphs.push_back(item("two", ListKind::Number));
+  const std::string across = writeit::rtf_export(two);
+  CHECK(count_of(across, "\\ls2\\ilvl0") == 2);
+  CHECK(!contains(across, "\\ls3"));
+  CHECK(count_of(across, "{\\listoverride\\listid") == 2);
+  CHECK(count_of(across, "{\\pntext\\f0\\fs22 1.\\tab}") == 1);
+  CHECK(count_of(across, "{\\pntext\\f0\\fs22 2.\\tab}") == 1);
+
+  // Each list is its own Word list: a restarted list is \ls3, and going
+  // back to the first list goes back to \ls2.
+  writeit::Document lists;
+  lists.paragraphs.push_back(numbered("a1", 1));
+  lists.paragraphs.push_back(numbered("b1", 2));
+  lists.paragraphs.push_back(numbered("a2", 1));
+  const std::string separate = writeit::rtf_export(lists);
+  CHECK(contains(separate, "\\ls2\\ilvl0\\f0\\fs22\\b0\\i0\\ulnone a1"));
+  CHECK(contains(separate, "\\ls3\\ilvl0\\f0\\fs22\\b0\\i0\\ulnone b1"));
+  CHECK(contains(separate, "\\ls2\\ilvl0\\f0\\fs22\\b0\\i0\\ulnone a2"));
+  CHECK(count_of(separate, "{\\listoverride\\listid") == 3);
+  CHECK(count_of(separate, "{\\pntext\\f0\\fs22 1.\\tab}") == 2);
+  CHECK(count_of(separate, "{\\pntext\\f0\\fs22 2.\\tab}") == 1);
 }
 
 void rtf_round_trip()
@@ -861,6 +885,192 @@ void label_position()
   CHECK(list_label_space(Indents{100, 0, -5000}) == 360);
 }
 
+// Word 97's rule: a numbered list keeps counting until it is restarted.
+void continuing()
+{
+  using writeit::list_ids;
+  using writeit::list_numbers;
+  // Plain paragraphs and bullets in between do not stop the count, at any
+  // level: a plain paragraph no longer resets the levels below either.
+  {
+    std::vector<writeit::Paragraph> p;
+    p.push_back(item("1", ListKind::Number, 0));
+    p.push_back(item("a", ListKind::Number, 1));
+    p.push_back(item("plain", ListKind::None));
+    p.push_back(item("bullet", ListKind::Bullet, 1));
+    p.push_back(item("b", ListKind::Number, 1));
+    p.push_back(item("plain", ListKind::None));
+    p.push_back(item("2", ListKind::Number, 0));
+    p.push_back(item("a", ListKind::Number, 1));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 1, 0, 0, 2, 0, 2, 1}));
+  }
+  // Each list counts on its own; a list restarts only where a new list
+  // begins. 0 continues the numbered list above, and the document's first
+  // numbered item with 0 begins list 1.
+  {
+    std::vector<writeit::Paragraph> p;
+    p.push_back(numbered("a1", 0));
+    p.push_back(numbered("a2", 0));
+    p.push_back(numbered("b1", 2));
+    p.push_back(item("plain", ListKind::None));
+    p.push_back(numbered("b2", 0));
+    p.push_back(numbered("a3", 1));
+    p.push_back(numbered("b3", 2));
+    p.push_back(numbered("b4", 0));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 1, 0, 2, 3, 3, 4}));
+    // list_ids: each numbered item's list, numbered by first appearance.
+    CHECK(list_ids(p) == (std::vector<int>{1, 1, 2, 0, 2, 1, 2, 2}));
+  }
+  // Ids are labels: any numbers, in any order, give the same lists.
+  {
+    std::vector<writeit::Paragraph> p{numbered("x", 70), item("b", ListKind::Bullet),
+                                      numbered("y", 3), numbered("z", 70)};
+    CHECK(list_ids(p) == (std::vector<int>{1, 0, 2, 1}));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 0, 1, 2}));
+    writeit::canonical_lists(p);
+    CHECK(p[0].list.list == 1 && p[2].list.list == 2 && p[3].list.list == 1);
+    CHECK(p[1].list.list == 0);
+    // A negative id is read as 0; a bullet or a plain paragraph has none.
+    std::vector<writeit::Paragraph> q{numbered("x", -5), numbered("y", 0)};
+    CHECK(list_ids(q) == (std::vector<int>{1, 1}));
+    writeit::Paragraph bullet = item("b", ListKind::Bullet);
+    bullet.list.list = 9;
+    CHECK(writeit::clamp_list(bullet.list).list == 0);
+    CHECK(list_ids(std::vector<writeit::Paragraph>{}).empty());
+  }
+  // A paragraph tells its list apart; a document compares the lists it
+  // makes, not the labels: [0, 0] and [1, 1] are the same single list.
+  {
+    CHECK(numbered("x", 1).list != numbered("x", 2).list);
+    writeit::Document zeros;
+    zeros.paragraphs = {numbered("x", 0), numbered("y", 0)};
+    writeit::Document ones;
+    ones.paragraphs = {numbered("x", 1), numbered("y", 1)};
+    writeit::Document split;
+    split.paragraphs = {numbered("x", 0), numbered("y", 2)};
+    CHECK(zeros == ones);
+    CHECK(!(zeros == split));
+  }
+  // Restart Numbering: the item and the rest of its list become a new
+  // list. Another list in between is left alone. Continue Previous List
+  // joins them back.
+  {
+    std::vector<writeit::Paragraph> p;
+    p.push_back(item("1", ListKind::Number));
+    p.push_back(item("2", ListKind::Number));
+    p.push_back(item("plain", ListKind::None));
+    p.push_back(item("3", ListKind::Number));
+    p.push_back(numbered("other", 7));
+    p.push_back(numbered("4", 1));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 0, 3, 1, 4}));
+    CHECK(writeit::restart_numbering(p, 3));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 0, 1, 1, 2}));
+    CHECK(list_ids(p) == (std::vector<int>{1, 1, 0, 2, 3, 2}));
+    // Restarting where a list already starts, or off a numbered item, does
+    // nothing.
+    CHECK(!writeit::restart_numbering(p, 3));
+    CHECK(!writeit::restart_numbering(p, 0));
+    CHECK(!writeit::restart_numbering(p, 2));
+    CHECK(!writeit::restart_numbering(p, 99));
+    CHECK(writeit::continue_numbering(p, 3));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 0, 3, 1, 4}));
+    // Nothing above to continue: false.
+    CHECK(!writeit::continue_numbering(p, 0));
+    CHECK(!writeit::continue_numbering(p, 2));
+    // "other" continues the list above it, the first one.
+    CHECK(writeit::continue_numbering(p, 4));
+    CHECK(list_numbers(p) == (std::vector<int>{1, 2, 0, 3, 4, 5}));
+  }
+  // Format → Numbering on a paragraph joins the list above (id 0), and
+  // switching an item to bullets and back does too.
+  {
+    std::vector<writeit::Paragraph> p{item("x", ListKind::None)};
+    writeit::toggle_list(p, ListKind::Number);
+    CHECK(p[0].list.kind == ListKind::Number && p[0].list.list == 0);
+    std::vector<writeit::Paragraph> q{numbered("y", 4)};
+    writeit::toggle_list(q, ListKind::Bullet);
+    CHECK(q[0].list.kind == ListKind::Bullet && q[0].list.list == 0);
+    writeit::toggle_list(q, ListKind::Number);
+    CHECK(q[0].list.kind == ListKind::Number && q[0].list.list == 0);
+  }
+  // RTF round trip: the lists, the restarts and the return to an earlier
+  // list all come back, and the file is stable.
+  {
+    writeit::Document doc;
+    doc.paragraphs.push_back(item("a1", ListKind::Number));
+    doc.paragraphs.push_back(item("plain", ListKind::None));
+    doc.paragraphs.push_back(item("a2", ListKind::Number));
+    doc.paragraphs.push_back(numbered("b1", 2));
+    doc.paragraphs.push_back(item("bullet", ListKind::Bullet));
+    doc.paragraphs.push_back(numbered("b2", 2, 1));
+    doc.paragraphs.push_back(numbered("a3", 1));
+    const std::string rtf = writeit::rtf_export(doc);
+    const writeit::Document back = import(rtf);
+    CHECK(back == doc);
+    CHECK(list_numbers(back.paragraphs) == (std::vector<int>{1, 0, 2, 1, 0, 1, 3}));
+    CHECK(writeit::rtf_export(back) == rtf);
+    CHECK(contains(rtf, "{\\pntext\\f0\\fs22 3.\\tab}"));
+  }
+  // Reading: the list is the \listid the \ls points at. The same \ls keeps
+  // counting across plain paragraphs, and two \ls of one list are one list.
+  {
+    const writeit::Document doc =
+        import(std::string(kHead) + kTables +
+               "{\\*\\listoverridetable{\\listoverride\\listid22\\listoverridecount0\\ls3}}"
+               "\\pard\\ls2 one\\par\\pard plain\\par\\pard\\ls2 two\\par"
+               "\\pard\\ls3 three\\par}");
+    CHECK(list_numbers(doc.paragraphs) == (std::vector<int>{1, 0, 2, 3}));
+  }
+  // Two numbered \listid are two lists, and an override that starts its
+  // list again (\listoverridestartat) is a new list too.
+  {
+    const std::string tables =
+        "{\\*\\listtable{\\list{\\listlevel\\levelnfc0}\\listid5}"
+        "{\\list{\\listlevel\\levelnfc0}\\listid6}}"
+        "{\\*\\listoverridetable{\\listoverride\\listid5\\listoverridecount0\\ls1}"
+        "{\\listoverride\\listid6\\listoverridecount0\\ls2}"
+        "{\\listoverride\\listid5\\listoverridecount1{\\lfolevel\\listoverridestartat"
+        "{\\listlevel\\levelstartat1}}\\ls3}}";
+    const writeit::Document doc = import(std::string(kHead) + tables +
+                                         "\\pard\\ls1 a1\\par\\pard\\ls2 b1\\par"
+                                         "\\pard\\ls1 a2\\par\\pard\\ls3 c1\\par"
+                                         "\\pard\\ls1 a3\\par}");
+    CHECK(list_numbers(doc.paragraphs) == (std::vector<int>{1, 1, 2, 1, 3}));
+    CHECK(list_ids(doc.paragraphs) == (std::vector<int>{1, 2, 1, 3, 1}));
+  }
+  // Word 6/95's \pn numbers are one list, counting past a plain paragraph.
+  {
+    const writeit::Document doc =
+        import(std::string(kHead) +
+               "\\pard{\\*\\pn\\pnlvlbody\\pndec}one\\par\\pard plain\\par"
+               "\\pard{\\*\\pn\\pnlvlbody\\pndec}two\\par}");
+    CHECK(list_numbers(doc.paragraphs) == (std::vector<int>{1, 0, 2}));
+  }
+  // Hostile: an \ls near INT_MAX and thousands of one-item lists stay
+  // defined. A document has at most kMaxLists numbered lists; items of later
+  // ones join the last, so the file Write-It writes reads back the same.
+  {
+    std::string body = std::string(kHead) + "{\\*\\listtable";
+    for (int n = 1; n <= 5000; ++n)
+      body += "{\\list{\\listlevel\\levelnfc0}\\listid" + std::to_string(n) + "}";
+    body += "}{\\*\\listoverridetable";
+    for (int n = 1; n <= 5000; ++n)
+      body += "{\\listoverride\\listid" + std::to_string(n) + "\\ls" + std::to_string(n) + "}";
+    body += "}";
+    for (int n = 1; n <= 5000; ++n)
+      body += "\\pard\\ls" + std::to_string(n) + " x\\par";
+    body += "\\pard\\ls2147483647 y\\par}";
+    const writeit::Document doc = import(body);
+    CHECK(doc.paragraphs.size() == 5001);
+    const std::vector<int> numbers = list_numbers(doc.paragraphs);
+    CHECK(writeit::kMaxLists == 4000);
+    CHECK(numbers.front() == 1 && numbers[3999] == 1 && numbers[4000] == 2);
+    CHECK(writeit::list_ids(doc.paragraphs)[4000] == writeit::kMaxLists);
+    const writeit::Document again = import(writeit::rtf_export(doc));
+    CHECK(again == doc);
+  }
+}
+
 void markdown()
 {
   // Markdown lists wait until M4: a list item exports as its paragraph.
@@ -875,7 +1085,7 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 263;
+constexpr int kChecks = 319;
 
 int main()
 {
@@ -889,6 +1099,7 @@ int main()
   rtf_read();
   rtf_hostile();
   label_position();
+  continuing();
   markdown();
   return suite_test::done("lists", kChecks);
 }

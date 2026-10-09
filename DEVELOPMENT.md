@@ -54,7 +54,7 @@ One document, one window. The title is `Write-It - letter.rtf`. A dirty document
 
 Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized. The window remembers its size.
 
-The page sits on a neutral gray pasteboard, `#808080`.
+The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, the page is A4, 21 × 29.7 cm.
 
 ```
 +------------------------------------------------------------------+
@@ -75,7 +75,7 @@ The page sits on a neutral gray pasteboard, `#808080`.
 
 Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
 
-Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items.
+Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items. On a numbered list item those are Restart Numbering and Continue Previous List, each insensitive when it would change nothing.
 
 ### Menus
 
@@ -151,6 +151,8 @@ View → Side by side is on by default, so the two toolbars share one row. Turni
 ### Status bar
 
 The left side is a message (“Saved letter.rtf”) that stays until the next message. The rightmost cell is the zoom, and it pops the same list as View. The cell to its left is the page, “Page 2 of 4”.
+
+Until M3 lays out real pages the page count is approximate: a page is the A4 sheet’s height (16838 twips) on the screen page’s scale, less the page view’s top and bottom insets (692 px of laid-out text at 100%), `m` is how many of those the text fills, and `n` is the one the caret’s line starts on. Both scale with the zoom, so neither the zoom nor the view changes the count.
 
 ### Config
 
@@ -238,7 +240,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M2 — Paragraph
 
-- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection.
+- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection. Numbering follows Word 97: each numbered item belongs to a list, and a list keeps counting past plain paragraphs, bullets, and other lists in between, at every level. A numbered item restarts the levels below it in its own list. A list starts again at 1 only where a new list begins: the document’s first, a different list read from a file, or Restart Numbering, which makes the item and the rest of its list a new list. Continue Previous List joins them to the nearest numbered list above. Format → Numbering and Enter join the list above. In RTF each list is its own `\listid` and `\ls` (`\ls1` is every bullet), so Word and LibreOffice show the same numbers. Reading, an item counts in the `\listid` its `\ls` points at, so two overrides of one list are one list unless one has `\listoverridestartat`. Word 6/95’s `\pn` numbers are one list. A document holds at most 4000 numbered lists; items of later ones join the last.
 - Named styles. The style combo lists them and applies the chosen style. Style… edits a style. A new document has Normal, Heading 1 to 6, Block Text, and Plain Text, built on the default font and size. The format toolbar’s style combo follows the caret and applies a style to the selected paragraphs. Format → Style… changes a style’s font, size, bold, italic, underline, alignment, indents, outline level, base, and following style, or makes a new one from it. Every paragraph in that style follows, and so do the styles based on it. A style moves only what still matches the old style, so direct formatting stays. Enter at the end of a paragraph gives the new one the style’s following style, so a heading is followed by Normal. Each change is one undo step. Headings show at their style’s size, not a fixed scale. RTF writes `\stylesheet`, `\sN`, `\sbasedon`, and `\snext`, and repeats each paragraph’s format after `\sN` as Word does, because LibreOffice reads `\pard` as flush left. A document that only uses Normal from the default sheet is written without one, as before. A file from before styles opens with its headings (M1’s `\outlinelevel` on body-size text) in Heading 1 to 6, at heading size, so they do not shrink to body text. The reader is defensive: character styles are skipped, a base that is missing or circular is dropped, duplicate names get “ (2)”, and the sheet stops at 4096 styles. Markdown headings import and export as Heading 1 to 6. Renaming and deleting a style are out of scope for M2: Style… adds and edits, and a style nobody uses stays in the sheet.
 - Draft view hides the pagination chrome. Page stays the default and is still the view that prints.
 - RTF for this slice round-trips. Markdown lists wait until M4.
