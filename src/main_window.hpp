@@ -293,6 +293,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection caret_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // Paste's sensitivity follows the clipboard, which outlives the window.
+  sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
