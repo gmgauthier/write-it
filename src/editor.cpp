@@ -2500,22 +2500,21 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
   Glib::RefPtr<Gtk::TextTag> want;
   if (list.kind != ListKind::None &&
       (line.format.align == Align::Left || line.format.align == Align::Justify)) {
-    // The label in the paragraph's first font, as drawn.
+    // The label as drawn: list_label_layout() lays it out in the paragraph's
+    // first character's font, size, weight and slant, so the cache keys on
+    // all four, and the label's text.
     const Run format = format_of(buffer_->get_iter_at_offset(start));
-    const std::string family = format.font.empty() ? "Sans" : format.font;
-    const int size = std::max(1, format.size);
-    const std::string text = list_label(list, line.number);
-    const std::string key = family + '\x1f' + std::to_string(size) + '\x1f' + text;
+    const std::string key = (format.font.empty() ? "Sans" : format.font) + '\x1f' +
+                            std::to_string(std::max(1, format.size)) + '\x1f' +
+                            (format.bold ? 'b' : '-') + (format.italic ? 'i' : '-') + '\x1f' +
+                            list_label(list, line.number);
     auto known = tab_widths_.find(key);
     if (known == tab_widths_.end()) {
-      Pango::FontDescription desc;
-      desc.set_family(family);
-      desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
-      auto label = text_.create_pango_layout(text);
-      label->set_font_description(desc);
+      Paragraph paragraph;
+      paragraph.list = line.format.list;
       int width = 0;
-      int height = 0;
-      label->get_pixel_size(width, height);
+      int gap = 0;
+      list_label_layout(paragraph, start, line.number, width, gap);
       known = tab_widths_.emplace(key, width).first;
     }
     const Indents indents = clamp_indents(line.format.indents);

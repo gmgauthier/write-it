@@ -17,6 +17,7 @@
 #include <glibmm/miscutils.h>
 #include <gtkmm.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
@@ -70,6 +71,24 @@ struct MainWindowProbe {
   static bool dirty(MainWindow& w)
   {
     return w.dirty();
+  }
+  // The label widths the tab pass has cached, and the width the label of
+  // paragraph `line` is drawn at.
+  static std::vector<int> cached_widths(MainWindow& w)
+  {
+    std::vector<int> widths;
+    for (const auto& item : w.tab_widths_)
+      widths.push_back(item.second);
+    return widths;
+  }
+  static int drawn_width(MainWindow& w, int line)
+  {
+    const Document doc = w.capture();
+    const int offset = w.buffer_->get_iter_at_line(line).get_offset();
+    int width = 0;
+    int gap = 0;
+    w.list_label_layout(doc.paragraphs[static_cast<size_t>(line)], offset, 1, width, gap);
+    return width;
   }
   static long evaluated(MainWindow& w)
   {
@@ -505,9 +524,37 @@ void long_list(const std::string& home)
   g_remove(path.c_str());
 }
 
+// Three lists showing "1." in one font and size, plain, bold and italic: a
+// label is drawn in its item's first character's weight and slant (#19), so
+// the tab pass keeps a width for each, the width the label is drawn at.
+void label_attributes(const std::string& home)
+{
+  writeit::Document doc;
+  for (int i = 0; i < 3; ++i)
+    doc.paragraphs.push_back(numbered("Item", i + 1, 1));
+  doc.paragraphs[1].runs[0].bold = true;
+  doc.paragraphs[2].runs[0].italic = true;
+  const std::string path = Glib::build_filename(home, "attributes.rtf");
+  Glib::file_set_contents(path, writeit::rtf_export(doc));
+  writeit::MainWindow window;
+  window.show();
+  settle();
+  MainWindowProbe::open(window, path);
+  settle();
+  const std::vector<int> widths = MainWindowProbe::cached_widths(window);
+  CHECK(widths.size() == 3);
+  for (int line = 0; line < 3; ++line) {
+    const int drawn = MainWindowProbe::drawn_width(window, line);
+    CHECK(std::find(widths.begin(), widths.end(), drawn) != widths.end());
+  }
+  window.hide();
+  settle();
+  g_remove(path.c_str());
+}
+
 }  // namespace
 
-constexpr int kChecks = 74;
+constexpr int kChecks = 78;
 
 int main(int argc, char* argv[])
 {
@@ -559,6 +606,7 @@ int main(int argc, char* argv[])
   crossing(home);
   hundred(home);
   long_list(home);
+  label_attributes(home);
 
   g_remove(path.c_str());
   const std::string ini = Glib::build_filename(home, "write-it", "write-it.ini");
