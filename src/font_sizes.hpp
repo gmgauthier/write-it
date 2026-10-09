@@ -44,4 +44,8 @@ std::string size_text(double size);
 // does this.
 double parse_size(const std::string& text);
 
+// Why the box refuses an entry, as Word 97's message box says it, or "" for
+// an entry parse_size() takes.
+std::string size_refusal(const std::string& text);
+
 }  // namespace writeit

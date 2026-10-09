@@ -14,6 +14,7 @@
 namespace {
 
 using writeit::parse_size;
+using writeit::size_refusal;
 using writeit::size_choices;
 using writeit::size_text;
 
@@ -85,7 +86,8 @@ void parsing()
   CHECK(parse_size("") == 0);
   CHECK(parse_size("-5") == 0);
   CHECK(parse_size("12pt") == 0);
-  CHECK(parse_size(" 12") == 0);
+  // Spaces around a size are trimmed, as Word 97 trims them.
+  CHECK(parse_size(" 12") == 12);
   CHECK(parse_size("99999999999999999999") == 0);
   // Half points, as Word 97's box takes them.
   CHECK(parse_size("10.5") == 10.5);
@@ -105,8 +107,59 @@ void parsing()
   CHECK(parse_size("10.5.5") == 0);
   CHECK(parse_size("10,5") == 0);
   CHECK(parse_size("1e1") == 0);
-  CHECK(parse_size("10.5 ") == 0);
+  CHECK(parse_size("10.5 ") == 10.5);
   CHECK(parse_size("99999999999999999999.5") == 0);
+  // Bug Basher: "  12 " was refused, and "012" accepted but "00012" not.
+  CHECK(parse_size("  12 ") == 12);
+  CHECK(parse_size("\t12\t") == 12);
+  CHECK(parse_size("012") == 12);
+  CHECK(parse_size("00012") == 12);
+  CHECK(parse_size("0000000000000000000012") == 12);
+  CHECK(parse_size("0010.5") == 10.5);
+  CHECK(parse_size("01638") == 1638);
+  CHECK(parse_size("01639") == 0);
+  CHECK(parse_size("00000") == 0);
+  CHECK(parse_size("1 2") == 0);
+  CHECK(parse_size("   ") == 0);
+}
+
+// What the box says when it refuses an entry, in Word 97's words; "" when
+// the entry is a size.
+void refusals()
+{
+  const std::string not_number = "This is not a valid number.";
+  const std::string range = "The number must be between 1 and 1638.";
+  const std::string half = "Font sizes must be whole numbers or end in .5.";
+  CHECK(size_refusal("12").empty());
+  CHECK(size_refusal("10.5").empty());
+  CHECK(size_refusal("  12 ").empty());
+  CHECK(size_refusal("00012").empty());
+  CHECK(size_refusal("1638").empty());
+  CHECK(size_refusal("1").empty());
+  CHECK(size_refusal("abc") == not_number);
+  CHECK(size_refusal("") == not_number);
+  CHECK(size_refusal("   ") == not_number);
+  CHECK(size_refusal("12pt") == not_number);
+  CHECK(size_refusal("10,5") == not_number);
+  CHECK(size_refusal("10.5.5") == not_number);
+  CHECK(size_refusal("1 2") == not_number);
+  CHECK(size_refusal("0") == range);
+  CHECK(size_refusal("1639") == range);
+  CHECK(size_refusal("-5") == range);
+  CHECK(size_refusal("0.5") == range);
+  CHECK(size_refusal("1638.5") == range);
+  CHECK(size_refusal("99999999999999999999") == range);
+  CHECK(size_refusal("10.3") == half);
+  CHECK(size_refusal("10.25") == half);
+  CHECK(size_refusal("10.55") == half);
+  // Exactly the entries parse_size() takes, over every half point and the
+  // fractions between.
+  bool agree = true;
+  for (int tenth = 0; tenth <= 16400; ++tenth) {
+    const std::string entry = std::to_string(tenth / 10) + "." + std::to_string(tenth % 10);
+    agree = agree && size_refusal(entry).empty() == (parse_size(entry) != 0);
+  }
+  CHECK(agree);
 }
 
 }  // namespace
@@ -117,5 +170,6 @@ int main()
   choices();
   text();
   parsing();
-  return suite_test::done("font-sizes", 68);
+  refusals();
+  return suite_test::done("font-sizes", 102);
 }

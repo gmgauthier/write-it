@@ -18,9 +18,14 @@
 #include <glibmm/miscutils.h>
 #include <gtkmm.h>
 
+#include <gdk/gdkkeysyms.h>
+
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace writeit {
 
@@ -61,6 +66,22 @@ struct MainWindowProbe {
   static void undo(MainWindow& w)
   {
     w.undo();
+  }
+  static size_t undo_steps(MainWindow& w)
+  {
+    return w.undo_.size();
+  }
+  static Gtk::MenuItem* bold_item(MainWindow& w)
+  {
+    return w.bold_item_;
+  }
+  static Gtk::MenuItem* italic_item(MainWindow& w)
+  {
+    return w.italic_item_;
+  }
+  static Gtk::MenuItem* underline_item(MainWindow& w)
+  {
+    return w.underline_item_;
   }
 };
 
@@ -132,10 +153,166 @@ bool contains(const std::string& text, const std::string& part)
   return text.find(part) != std::string::npos;
 }
 
+// A key press as the keyboard delivers it: to the window, which hands it to
+// whatever has the keyboard focus, after its own accelerators if it lets them.
+void key(writeit::MainWindow& window, guint keyval, GdkModifierType state = GdkModifierType(0))
+{
+  GdkEvent* event = gdk_event_new(GDK_KEY_PRESS);
+  event->key.window = GDK_WINDOW(g_object_ref(window.get_window()->gobj()));
+  event->key.send_event = TRUE;
+  event->key.time = GDK_CURRENT_TIME;
+  event->key.state = state;
+  event->key.keyval = keyval;
+  GdkKeymapKey* keys = nullptr;
+  gint n = 0;
+  if (gdk_keymap_get_entries_for_keyval(gdk_keymap_get_for_display(gdk_display_get_default()),
+                                        keyval, &keys, &n) &&
+      n > 0) {
+    event->key.hardware_keycode = static_cast<guint16>(keys[0].keycode);
+    event->key.group = static_cast<guint8>(keys[0].group);
+  }
+  g_free(keys);
+  GdkSeat* seat = gdk_display_get_default_seat(gdk_display_get_default());
+  gdk_event_set_device(event, gdk_seat_get_keyboard(seat));
+  gtk_main_do_event(event);
+  gdk_event_free(event);
+  settle();
+}
+
+void ctrl(writeit::MainWindow& window, guint keyval)
+{
+  key(window, keyval, GDK_CONTROL_MASK);
+}
+
+// Types `text` at the keyboard, one key per character.
+void keys(writeit::MainWindow& window, const char* text)
+{
+  for (const char* c = text; *c; ++c)
+    key(window, gdk_unicode_to_keyval(static_cast<guchar>(*c)));
+}
+
+// The box takes the keyboard as a click into it does: without selecting.
+Gtk::Entry& click_into_box(writeit::MainWindow& window)
+{
+  Gtk::Entry& entry = *MainWindowProbe::size_combo(window).get_entry();
+  entry.grab_focus_without_selecting();
+  settle();
+  return entry;
+}
+
+void select(writeit::MainWindow& window, int from, int to)
+{
+  auto buffer = MainWindowProbe::buffer(window);
+  MainWindowProbe::text(window).grab_focus();
+  buffer->select_range(buffer->get_iter_at_offset(from), buffer->get_iter_at_offset(to));
+  settle();
+}
+
+std::pair<int, int> selection(writeit::MainWindow& window)
+{
+  Gtk::TextIter from;
+  Gtk::TextIter to;
+  MainWindowProbe::buffer(window)->get_selection_bounds(from, to);
+  return {from.get_offset(), to.get_offset()};
+}
+
+// Every character from `from` to `to` is `size` pt.
+bool sized(writeit::MainWindow& window, int from, int to, double size)
+{
+  for (int k = from; k < to; ++k) {
+    if (MainWindowProbe::format_at(window, k).size != size)
+      return false;
+  }
+  return true;
+}
+
+// The text of the box's active list item, or "" with none.
+std::string highlighted(writeit::MainWindow& window)
+{
+  auto& combo = MainWindowProbe::size_combo(window);
+  auto row = combo.get_active();
+  if (!row)
+    return "";
+  Glib::ustring text;
+  row->get_value(0, text);
+  return text.raw();
+}
+
+int pixel_width(Gtk::Entry& entry, const char* text)
+{
+  int width = 0;
+  int height = 0;
+  entry.create_pango_layout(text)->get_pixel_size(width, height);
+  return width;
+}
+
+// How much of the box's text area shows: GTK lays the arrow button over
+// the entry when the box is given less than both need.
+int visible_text_width(writeit::MainWindow& window)
+{
+  auto& combo = MainWindowProbe::size_combo(window);
+  Gtk::Entry& entry = *combo.get_entry();
+  GdkRectangle area{};
+  gtk_entry_get_text_area(entry.gobj(), &area);
+  const int left = entry.get_allocation().get_x() + area.x;
+  int right = left + area.width;
+  // The arrow is an internal child of the box inside the combo.
+  std::vector<GtkWidget*> found;
+  std::vector<GtkWidget*> todo = {GTK_WIDGET(combo.gobj())};
+  while (!todo.empty()) {
+    GtkWidget* widget = todo.back();
+    todo.pop_back();
+    if (GTK_IS_TOGGLE_BUTTON(widget))
+      found.push_back(widget);
+    else if (GTK_IS_CONTAINER(widget))
+      gtk_container_forall(
+          GTK_CONTAINER(widget),
+          [](GtkWidget* child, gpointer list) {
+            static_cast<std::vector<GtkWidget*>*>(list)->push_back(child);
+          },
+          &todo);
+  }
+  for (GtkWidget* button : found) {
+    GtkAllocation at;
+    gtk_widget_get_allocation(button, &at);
+    if (at.x > left)
+      right = std::min(right, at.x);
+  }
+  return right - left;
+}
+
+// Answers the box's message (Word 97's modal message box) from inside its
+// run(), and remembers what it said.
+struct Messages {
+  int count = 0;
+  std::string last;
+  sigc::connection poll;
+  Messages()
+  {
+    poll = Glib::signal_timeout().connect(
+        [this] {
+          for (Gtk::Window* top : Gtk::Window::list_toplevels()) {
+            auto* message = dynamic_cast<Gtk::MessageDialog*>(top);
+            if (message && message->get_visible()) {
+              ++count;
+              last = message->property_text().get_value();
+              message->response(Gtk::RESPONSE_OK);
+            }
+          }
+          return true;
+        },
+        20);
+  }
+  ~Messages()
+  {
+    poll.disconnect();
+  }
+};
+
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 22;
+constexpr int kChecks = 46;
 
 int main(int argc, char* argv[])
 {
@@ -149,6 +326,15 @@ int main(int argc, char* argv[])
     return 77;
   }
   Gtk::Main kit(argc, argv);
+  Messages messages;
+  // A message nobody answers would hang the suite: fail instead.
+  Glib::signal_timeout().connect_seconds(
+      [] {
+        std::cerr << "font-size-ui: stuck in a dialog\n";
+        std::exit(EXIT_FAILURE);
+        return false;
+      },
+      50);
   const std::string path = Glib::build_filename(home, "sizes.rtf");
   Glib::file_set_contents(path, kFile);
   {
@@ -239,6 +425,8 @@ int main(int argc, char* argv[])
       settle();
     }
     CHECK(MainWindowProbe::format_at(window, kSmall).size == 10.5 && shown(window) == "10.5");
+    // The list highlights the size applied, not its first item (8).
+    CHECK(highlighted(window) == "10.5");
 
     // Saved as \fs21, the empty lines still \fs40.
     CHECK(MainWindowProbe::save(window));
@@ -246,6 +434,141 @@ int main(int argc, char* argv[])
     CHECK(contains(saved, "\\pard\\f0\\fs21\\b0\\i0\\ulnone Small\\par\n") &&
           contains(saved, "Half\\par\n\\pard\\f0\\fs40\\b0\\i0\\ulnone\\par\n") &&
           contains(saved, "Small\\par\n\\pard\\f0\\fs40\\b0\\i0\\ulnone\\par\n}"));
+
+    // Bug Basher's review of #36. The box is wide enough to read "10.5" and
+    // Word's largest size, "1638", in the font it uses: the part of its text
+    // area that the arrow button does not cover holds either.
+    {
+      Gtk::Entry& entry = *MainWindowProbe::size_combo(window).get_entry();
+      const int room = visible_text_width(window);
+      if (room < pixel_width(entry, "1638"))
+        std::cerr << "size box: " << room << " px of text area shows, \"10.5\" needs "
+                  << pixel_width(entry, "10.5") << ", \"1638\" " << pixel_width(entry, "1638")
+                  << "\n";
+      CHECK(room >= pixel_width(entry, "10.5"));
+      CHECK(room >= pixel_width(entry, "1638"));
+    }
+
+    // Editing keys typed in the box edit the box, not the document: the
+    // window's Delete, Select All, Copy and Undo do not take them first.
+    const std::string text = buffer->get_text().raw();
+    const size_t steps = MainWindowProbe::undo_steps(window);
+    select(window, kSmall, kSmall + 5);
+    {
+      click_into_box(window);
+      ctrl(window, GDK_KEY_z);
+      CHECK(sized(window, kSmall, kSmall + 5, 10.5) && MainWindowProbe::undo_steps(window) == steps &&
+            buffer->get_text().raw() == text);
+    }
+    select(window, kSmall, kSmall + 5);
+    {
+      Gtk::Entry& entry = click_into_box(window);
+      key(window, GDK_KEY_End);
+      key(window, GDK_KEY_Home);
+      key(window, GDK_KEY_Delete);
+      CHECK(buffer->get_text().raw() == text && entry.get_text().raw() == "0.5");
+      ctrl(window, GDK_KEY_a);
+      int from = 0;
+      int to = 0;
+      CHECK(entry.get_selection_bounds(from, to) && from == 0 && to == 3);
+      // And the document keeps its selection: the box selecting its own
+      // text does not take it away.
+      CHECK(selection(window) == std::make_pair(kSmall, kSmall + 5));
+      ctrl(window, GDK_KEY_c);
+      CHECK(Gtk::Clipboard::get()->wait_for_text().raw() == "0.5");
+      key(window, GDK_KEY_BackSpace);
+      CHECK(buffer->get_text().raw() == text && entry.get_text().raw().empty());
+    }
+
+    // Select the box's text with Shift+Home, type a size and press Enter:
+    // it sizes the document's selection, as in Word.
+    select(window, kSmall, kSmall + 5);
+    {
+      Gtk::Entry& entry = click_into_box(window);
+      key(window, GDK_KEY_End);
+      key(window, GDK_KEY_Home, GDK_SHIFT_MASK);
+      CHECK(selection(window) == std::make_pair(kSmall, kSmall + 5));
+      keys(window, "14");
+      CHECK(entry.get_text().raw() == "14" && sized(window, kSmall, kSmall + 5, 10.5));
+      key(window, GDK_KEY_Return);
+      CHECK(sized(window, kSmall, kSmall + 5, 14) && sized(window, 0, 4, 10.5) &&
+            selection(window) == std::make_pair(kSmall, kSmall + 5) && shown(window) == "14");
+    }
+    // Selected as a double-click selects it, likewise.
+    select(window, kSmall, kSmall + 5);
+    {
+      Gtk::Entry& entry = click_into_box(window);
+      entry.select_region(0, -1);
+      settle();
+      CHECK(selection(window) == std::make_pair(kSmall, kSmall + 5));
+      keys(window, "12");
+      key(window, GDK_KEY_Return);
+      CHECK(sized(window, kSmall, kSmall + 5, 12) && sized(window, 0, 4, 10.5));
+    }
+
+    // A refused entry says why, in a message, as Word 97's box does. The
+    // document is unchanged, and the box shows the size again and keeps the
+    // keyboard.
+    select(window, kSmall, kSmall + 5);
+    {
+      const writeit::Document before = MainWindowProbe::capture(window);
+      const int seen = messages.count;
+      Gtk::Entry& entry = click_into_box(window);
+      entry.select_region(0, -1);
+      keys(window, "10.3");
+      key(window, GDK_KEY_Return);
+      settle();
+      CHECK(messages.count == seen + 1 &&
+            messages.last == "Font sizes must be whole numbers or end in .5.");
+      CHECK(MainWindowProbe::capture(window) == before && shown(window) == "12" &&
+            entry.is_focus());
+      entry.select_region(0, -1);
+      keys(window, "abc");
+      key(window, GDK_KEY_Return);
+      settle();
+      CHECK(messages.count == seen + 2 && messages.last == "This is not a valid number." &&
+            MainWindowProbe::capture(window) == before && shown(window) == "12");
+      // Spaces around a size are trimmed.
+      entry.set_text("  16 ");
+      key(window, GDK_KEY_Return);
+      CHECK(messages.count == seen + 2 && sized(window, kSmall, kSmall + 5, 16));
+    }
+
+    // Bold, italic and underline on a selected empty line take, as size and
+    // font do, and survive Save and reopening.
+    select(window, kEmpty, kEmpty + 1);
+    MainWindowProbe::bold_item(window)->activate();
+    settle();
+    select(window, kEmpty, kEmpty + 1);
+    MainWindowProbe::italic_item(window)->activate();
+    settle();
+    select(window, kEmpty, kEmpty + 1);
+    MainWindowProbe::underline_item(window)->activate();
+    settle();
+    {
+      const writeit::Document doc = MainWindowProbe::capture(window);
+      CHECK(doc.paragraphs.size() == 4 && doc.paragraphs[1].mark && doc.paragraphs[1].mark->bold &&
+            doc.paragraphs[1].mark->italic && doc.paragraphs[1].mark->underline &&
+            doc.paragraphs[1].mark->size == 20);
+    }
+    CHECK(MainWindowProbe::save(window));
+    CHECK(contains(Glib::file_get_contents(path), "Half\\par\n\\pard\\f0\\fs40\\b\\i\\ul\\par\n"));
+    CHECK(MainWindowProbe::open(window, path));
+    settle();
+    {
+      const writeit::Document doc = MainWindowProbe::capture(window);
+      CHECK(doc.paragraphs.size() == 4 && doc.paragraphs[1].mark && doc.paragraphs[1].mark->bold &&
+            doc.paragraphs[1].mark->italic && doc.paragraphs[1].mark->underline);
+    }
+    // And off again.
+    select(window, kEmpty, kEmpty + 1);
+    MainWindowProbe::bold_item(window)->activate();
+    settle();
+    {
+      const writeit::Document doc = MainWindowProbe::capture(window);
+      CHECK(doc.paragraphs[1].mark && !doc.paragraphs[1].mark->bold &&
+            doc.paragraphs[1].mark->italic);
+    }
 
     window.hide();
     settle();

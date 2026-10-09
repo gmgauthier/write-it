@@ -85,4 +85,9 @@ double parse_size(const std::string& text)
   return valid_size(size) ? size : 0;
 }
 
+std::string size_refusal(const std::string& /*text*/)
+{
+  return "";
+}
+
 }  // namespace writeit
