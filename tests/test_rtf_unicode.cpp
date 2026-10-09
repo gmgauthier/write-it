@@ -227,6 +227,10 @@ void font_table()
   CHECK(font_of("{\\f1 \\u55357?\\u56832?Emoji;}") == "\xF0\x9F\x98\x80Emoji");
   CHECK(font_of("{\\f1 \\u9999999999?X;}") == kFffd + "X");
   CHECK(font_of("{\\f1 A\\'00\\u0?B;}") == "AB");
+  // Word's font entries carry \\*\\panose and \\falt groups; they are not the name.
+  CHECK(font_of("{\\f1\\froman\\fcharset0\\fprq2{\\*\\panose 02020603050405020304}Times New "
+                "Roman;}") == "Times New Roman");
+  CHECK(font_of("{\\f1 MS Mincho{\\*\\falt \\'82\\'6c\\'82\\'72 \\'96\\'be\\'92\\'a9};}") == "MS Mincho");
   // Font numbers are not indices: Word's theme fonts are \\f31500 and up, and a
   // huge number must not allocate a table that size.
   CHECK(read_doc("\\f31507 x", "{\\f31507 Theme;}").paragraphs[0].runs[0].font == "Theme");
