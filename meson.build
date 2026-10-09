@@ -174,6 +174,16 @@ write_it_rtf_unicode_tests = executable(
   include_directories: inc,
   dependencies: dependency('glib-2.0'),
 )
+# The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 20 s
+# under ASan and UBSan, against meson's 30 s default, hence its own timeout.
+# `meson test --no-suite slow` leaves it out locally; CI runs everything.
+test(
+  'rtf-unicode-fuzz',
+  write_it_rtf_unicode_tests,
+  args: ['fuzz'],
+  timeout: 120,
+  suite: 'slow',
+)
 test('rtf-unicode', write_it_rtf_unicode_tests)
 
 write_it_page_count_tests = executable(
