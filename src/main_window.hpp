@@ -11,6 +11,7 @@
 
 #include <array>
 #include <functional>
+#include <utility>
 #include <memory>
 #include <string>
 #include <vector>
@@ -52,6 +53,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   }
   // A file with no local path, such as an sftp:// URI that is not mounted.
   void refuse_not_local(const std::string& uri);
+  // Asked by File > Open and Open Recent before loading: if a window
+  // already holds that file (by same_file), bring it forward and return
+  // true, and nothing is loaded here. Set by the application.
+  void set_open_elsewhere(std::function<bool(const std::string&)> open_elsewhere)
+  {
+    open_elsewhere_ = std::move(open_elsewhere);
+  }
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -303,6 +311,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   // else (New, Close, Save As). Lets a second request for it find this
   // window, since an import keeps no save path.
   std::string source_path_;
+  std::function<bool(const std::string&)> open_elsewhere_;
   bool loading_ = false;
   bool restoring_ = false;
   bool suppress_format_ = false;

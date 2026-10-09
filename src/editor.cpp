@@ -514,6 +514,10 @@ bool MainWindow::open_path(const std::string& path, OpenKind fallback)
     tell(missing_message(path));
     return false;
   }
+  // Already open, under this name or another (a link, a ".." path): that
+  // window comes forward instead of a second copy here.
+  if (open_elsewhere_ && open_elsewhere_(path))
+    return true;
   std::string bytes;
   try {
     bytes = Glib::file_get_contents(path);

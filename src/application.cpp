@@ -21,6 +21,21 @@ MainWindow* Application::new_window()
 {
   auto* window = new MainWindow();
   add_window(*window);
+  window->set_open_elsewhere([this](const std::string& path) {
+    std::vector<MainWindow*> windows;
+    std::vector<WindowState> states;
+    for (auto* each : get_windows()) {
+      if (auto* main = dynamic_cast<MainWindow*>(each)) {
+        windows.push_back(main);
+        states.push_back({main->document_path(), main->pristine(), main->import_source()});
+      }
+    }
+    const int holding = window_holding(states, path);
+    if (holding < 0)
+      return false;
+    windows[static_cast<size_t>(holding)]->present();
+    return true;
+  });
   // A closed window is finished with; the application keeps no list.
   window->signal_hide().connect([window] { delete window; });
   window->present();

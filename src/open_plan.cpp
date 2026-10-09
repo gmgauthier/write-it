@@ -2,9 +2,50 @@
 
 #include "open_plan.hpp"
 
+#include <sys/stat.h>
+
 #include <algorithm>
+#include <climits>
+#include <cstdlib>
 
 namespace writeit {
+
+namespace {
+
+// The real path, or the path as written when it cannot be resolved.
+std::string real_path(const std::string& path)
+{
+  char resolved[PATH_MAX];
+  return realpath(path.c_str(), resolved) ? std::string(resolved) : path;
+}
+
+}  // namespace
+
+bool same_file(const std::string& a, const std::string& b)
+{
+  if (a.empty() || b.empty())
+    return false;
+  if (a == b)
+    return true;
+  struct stat sa{};
+  struct stat sb{};
+  const bool stat_a = stat(a.c_str(), &sa) == 0;
+  const bool stat_b = stat(b.c_str(), &sb) == 0;
+  if (stat_a && stat_b)
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+  if (stat_a != stat_b)
+    return false;
+  return real_path(a) == real_path(b);
+}
+
+int window_holding(const std::vector<WindowState>& windows, const std::string& path)
+{
+  for (size_t i = 0; i < windows.size(); ++i) {
+    if (same_file(windows[i].path, path) || same_file(windows[i].source, path))
+      return static_cast<int>(i);
+  }
+  return -1;
+}
 
 std::vector<OpenAction> plan_open(const std::vector<OpenRequest>& requests,
                                   const std::vector<WindowState>& windows,
@@ -15,14 +56,13 @@ std::vector<OpenAction> plan_open(const std::vector<OpenRequest>& requests,
   std::vector<std::string> seen;
 
   auto plan_file = [&](const std::string& path) {
-    if (std::find(seen.begin(), seen.end(), path) != seen.end())
+    if (std::any_of(seen.begin(), seen.end(),
+                    [&](const std::string& earlier) { return same_file(earlier, path); }))
       return;
     seen.push_back(path);
-    const auto open = std::find_if(windows.begin(), windows.end(), [&](const WindowState& w) {
-      return w.path == path || w.source == path;
-    });
-    if (open != windows.end()) {
-      actions.push_back({OpenStep::Present, static_cast<int>(open - windows.begin()), path});
+    const int open = window_holding(windows, path);
+    if (open >= 0) {
+      actions.push_back({OpenStep::Present, open, path});
       return;
     }
     for (size_t i = 0; i < windows.size(); ++i) {

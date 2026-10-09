@@ -58,9 +58,18 @@ struct OpenAction {
   std::string uri{};  // for RefuseNotLocal
 };
 
+// Whether two paths name the same file: the same device and inode, so a
+// symlink, a hard link, or a path through "." or ".." to it all match.
+// Paths that cannot be stat'ed (a missing file) compare by their real path,
+// else as written. An empty path matches nothing.
+bool same_file(const std::string& a, const std::string& b);
+
+// The window holding `path`, saved to or imported from it, or -1.
+int window_holding(const std::vector<WindowState>& windows, const std::string& path);
+
 // One action per requested file. A request's path comes from
 // Gio::File::get_path(), "" for a file with none. A file already open
-// (saved to, or imported from, that path), or
+// (saved to, or imported from, that file, by same_file), or
 // asked for twice, is presented rather than loaded again. Each pristine
 // window may take one file; the others get new windows. Files that exist
 // come first, in order, then refusals, then missing files, so the error
