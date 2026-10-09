@@ -228,6 +228,9 @@ void zoom_cell(writeit::MainWindow& window)
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 39;
+
 int main(int argc, char* argv[])
 {
   std::string home = Glib::build_filename(Glib::get_tmp_dir(), "write-it-status-XXXXXX");
@@ -256,5 +259,5 @@ int main(int argc, char* argv[])
   g_remove(Glib::build_filename(home, "write-it", "write-it.ini").c_str());
   g_rmdir(Glib::build_filename(home, "write-it").c_str());
   g_rmdir(home.c_str());
-  return suite_test::done("status-bar");
+  return suite_test::done("status-bar", kChecks);
 }

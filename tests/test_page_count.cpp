@@ -65,11 +65,14 @@ void labels()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 29;
+
 int main()
 {
   heights();
   counts();
   zoom_free();
   labels();
-  return suite_test::done("page-count");
+  return suite_test::done("page-count", kChecks);
 }
