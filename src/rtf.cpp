@@ -848,7 +848,7 @@ class Reader {
             format.list = o.restarts ? label_for(1, marks.ls) : label_for(0, o.list_id);
             // A restarting override's own start for the level, else the list's.
             const size_t lvl = static_cast<size_t>(level);
-            format.start = o.restarts && o.starts[lvl] != 0 ? o.starts[lvl] : def.starts[at];
+            format.start = o.restarts && o.starts[lvl] >= 0 ? o.starts[lvl] : def.starts[at];
           }
           return format;
         }
@@ -983,15 +983,19 @@ class Reader {
   };
   static int clamp_start(int start)
   {
-    return std::max(1, std::min(kMaxListStart, start));
+    return std::max(0, std::min(kMaxListStart, start));
   }
   struct Override {
     int list_id = 0;
     bool has_id = false;
     int ls = 0;
     bool restarts = false;
-    // Each \lfolevel's \levelstartat, 0 for none.
-    std::array<int, kListLevels> starts{};
+    // Each \lfolevel's \levelstartat, -1 for none: 0 is a start.
+    std::array<int, kListLevels> starts = [] {
+      std::array<int, kListLevels> all{};
+      all.fill(-1);
+      return all;
+    }();
     int lfo = 0;
   };
   // Enough for any real document; a hostile one cannot grow the maps further.

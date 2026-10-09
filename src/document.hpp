@@ -52,7 +52,7 @@ struct ListFormat {
   // above). Items keep counting in their list past plain paragraphs, bullets
   // and other lists; a new list starts again at 1. Bullets have none.
   int list = 0;
-  // The number the item's list level starts at, as Word's \levelstartat: 1
+  // The number the item's list level starts at, as Word's \levelstartat: 0
   // through kMaxListStart. A level takes its first item's start, at the
   // start of the list and again under each new parent. Bullets have none.
   int start = 1;

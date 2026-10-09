@@ -184,7 +184,7 @@ ListFormat clamp_list(ListFormat list)
   list.level = std::max(0, std::min(kListLevels - 1, list.level));
   if (list.kind != ListKind::Number || list.list < 0)
     list.list = 0;
-  list.start = list.kind == ListKind::Number ? std::max(1, std::min(kMaxListStart, list.start)) : 1;
+  list.start = list.kind == ListKind::Number ? std::max(0, std::min(kMaxListStart, list.start)) : 1;
   list.own = list.has_own ? clamp_indents(list.own) : Indents{};
   return list;
 }
@@ -215,14 +215,25 @@ std::map<std::pair<int, int>, int> level_starts(const std::vector<Paragraph>& pa
 
 }  // namespace
 
+namespace {
+
+// list_numbers()' counters before a level has counted.
+const std::array<int, kListLevels> kNotCounted = [] {
+  std::array<int, kListLevels> all{};
+  all.fill(-1);
+  return all;
+}();
+
+}  // namespace
+
 std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
 {
   std::vector<int> numbers;
   numbers.reserve(paragraphs.size());
   // One set of level counters per list. Plain paragraphs and bullets leave
   // them alone, so a list counts on past them.
-  // Each level starts at its first item's start; 0 marks a level that has
-  // not counted yet under its current parent.
+  // Each level starts at its first item's start, which may be 0; -1 marks a
+  // level that has not counted yet under its current parent.
   const std::vector<int> ids = list_ids(paragraphs);
   const auto starts = level_starts(paragraphs, ids);
   std::vector<std::array<int, kListLevels>> counters;
@@ -234,16 +245,16 @@ std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
     }
     const size_t id = static_cast<size_t>(ids[i]);
     if (counters.size() <= id)
-      counters.resize(id + 1, std::array<int, kListLevels>{});
+      counters.resize(id + 1, kNotCounted);
     std::array<int, kListLevels>& count = counters[id];
     int& here = count[static_cast<size_t>(list.level)];
-    if (here == 0)
+    if (here < 0)
       here = starts.at(std::make_pair(ids[i], list.level));
     // Paragraph counts cannot reach INT_MAX, but stay defined if they did.
     else if (here < 2000000000)
       ++here;
     for (int deeper = list.level + 1; deeper < kListLevels; ++deeper)
-      count[static_cast<size_t>(deeper)] = 0;
+      count[static_cast<size_t>(deeper)] = -1;
     numbers.push_back(count[static_cast<size_t>(list.level)]);
   }
   return numbers;
@@ -353,10 +364,14 @@ std::string list_label(const ListFormat& raw, int number)
     static const char* const kBullets[] = {"\xE2\x80\xA2", "\xE2\x97\xA6", "\xE2\x96\xAA"};
     return kBullets[list.level % 3];
   }
-  number = std::max(1, number);
+  // Letters and roman numerals have no zero: a level that starts at 0
+  // (Word's \levelstartat0) shows 0 in any style.
+  number = std::max(0, number);
   const int style = list.level % 3;
   std::string text;
-  if (style == 1) {
+  if (number == 0) {
+    text = "0";
+  } else if (style == 1) {
     // a ... z, aa, ab ...: bijective base 26, as Word letters.
     unsigned value = static_cast<unsigned>(number);
     while (value > 0) {
