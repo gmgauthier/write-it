@@ -505,9 +505,14 @@ class Reader {
       state_.marks = ListMarks{};
       return;
     }
-    // There is no justified: \qj (and \qd, distributed) read as left.
-    if (word == "ql" || word == "qj" || word == "qd") {
+    // \qd, distributed, is East Asian Word's and has no Word 97 button: it
+    // reads as left.
+    if (word == "ql" || word == "qd") {
       state_.align = Align::Left;
+      return;
+    }
+    if (word == "qj") {
+      state_.align = Align::Justify;
       return;
     }
     if (word == "qc") {
@@ -1141,6 +1146,8 @@ std::string rtf_export(const Document& doc)
       out << "\\qc";
     else if (paragraph.align == Align::Right)
       out << "\\qr";
+    else if (paragraph.align == Align::Justify)
+      out << "\\qj";
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.
