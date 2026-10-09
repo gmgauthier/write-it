@@ -73,6 +73,15 @@ write_it_document_tests = executable(
 )
 test('document', write_it_document_tests)
 
+write_it_heading_paragraph_tests = executable(
+  'write-it-heading-paragraph-tests',
+  'tests/test_heading_paragraphs.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+)
+test('heading-paragraphs', write_it_heading_paragraph_tests)
+
 write_it_indents_tests = executable(
   'write-it-indents-tests',
   'tests/test_indents.cpp',
