@@ -2396,8 +2396,10 @@ void MainWindow::update_list_tabs()
       auto same = [](const TabLine& a, const TabLine& b) {
         return a.format == b.format && a.number == b.number;
       };
-      size_t head_max = fresh.size();
-      size_t tail_max = fresh.size();
+      // With no edit noted, no paragraph came or went (else every one is
+      // looked at above), so both matches may run the whole list.
+      size_t head_max = std::min(fresh.size(), tab_lines_.size());
+      size_t tail_max = head_max;
       if (tabs_noted_) {
         const int from = std::max(0, tabs_from_->get_iter().get_line());
         const int to = std::max(from, tabs_to_->get_iter().get_line());
