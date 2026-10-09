@@ -43,8 +43,10 @@ failures=0
 pids=()
 
 # Our own X server. -displayfd has Xvfb choose a free display number itself,
-# so two runs at once never share one.
-Xvfb -displayfd 9 -screen 0 1280x900x24 -nolisten tcp 9>"$WORK/display" >/dev/null 2>&1 &
+# so two runs at once never share one. -noreset keeps it from resetting each
+# time its last client goes: each case stops the program before starting the
+# next, and a launch during a reset fails with "cannot open display".
+Xvfb -displayfd 9 -screen 0 1280x900x24 -nolisten tcp -noreset 9>"$WORK/display" >/dev/null 2>&1 &
 XVFB=$!
 for _ in $(seq 100); do
   [ -s "$WORK/display" ] && break
