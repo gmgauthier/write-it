@@ -75,7 +75,7 @@ The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, 
 
 Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
 
-Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items.
+Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items. On a numbered list item those are Restart Numbering and Continue Previous List, each insensitive when it would change nothing.
 
 ### Menus
 
@@ -240,7 +240,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M2 — Paragraph
 
-- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection.
+- Indents, alignment, bulleted lists, and numbered lists. The format-toolbar bullets and numbering apply to the selection. Numbering follows Word 97: each numbered item belongs to a list, and a list keeps counting past plain paragraphs, bullets, and other lists in between, at every level. A numbered item restarts the levels below it in its own list. A list starts again at 1 only where a new list begins: the document’s first, a different list read from a file, or Restart Numbering, which makes the item and the rest of its list a new list. Continue Previous List joins them to the nearest numbered list above. Format → Numbering and Enter join the list above. In RTF each list is its own `\listid` and `\ls` (`\ls1` is every bullet), so Word and LibreOffice show the same numbers. Reading, an item counts in the `\listid` its `\ls` points at, so two overrides of one list are one list unless one has `\listoverridestartat`. Word 6/95’s `\pn` numbers are one list. A document holds at most 4000 numbered lists; items of later ones join the last.
 - Named styles. The style combo lists them and applies the chosen style. Style… edits a style.
 - Draft view hides the pagination chrome. Page stays the default and is still the view that prints.
 - RTF for this slice round-trips. Markdown lists wait until M4.
