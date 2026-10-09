@@ -376,6 +376,89 @@ void MainWindow::build_page()
       apply_page_size();
     ruler_.queue_draw();
   });
+
+  // Keep the caret in view. Any move of the insert mark, and any edit (the
+  // caret rides along with typing without a mark-set), asks to follow it;
+  // each later layout (the page growing, a zoom, a view switch, a resize)
+  // scrolls to it again. The wheel and the scrollbars let it go.
+  buffer_->signal_mark_set().connect(
+      [this](const Gtk::TextBuffer::iterator&, const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
+        if (mark == buffer_->get_insert())
+          follow_caret();
+      });
+  buffer_->signal_changed().connect([this] { follow_caret(); });
+  text_.signal_size_allocate().connect([this](Gtk::Allocation&) { scroll_to_caret(); });
+  paste_.get_vadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
+  paste_.get_hadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
+  paste_.signal_scroll_event().connect(
+      [this](GdkEventScroll*) {
+        follow_caret_ = false;
+        return false;
+      },
+      false);
+  for (Gtk::Scrollbar* bar : {paste_.get_vscrollbar(), paste_.get_hscrollbar()}) {
+    if (!bar)
+      continue;
+    bar->add_events(Gdk::BUTTON_PRESS_MASK);
+    bar->signal_button_press_event().connect(
+        [this](GdkEventButton*) {
+          follow_caret_ = false;
+          return false;
+        },
+        false);
+  }
+}
+
+void MainWindow::follow_caret()
+{
+  follow_caret_ = true;
+  // Opening a file or an undo rebuilds the buffer in many edits; the idle
+  // below scrolls once, after the last of them.
+  if (!loading_ && !restoring_)
+    scroll_to_caret();
+  // The layout may not have caught up with the move yet; look again once
+  // the main loop is idle.
+  if (caret_idle_)
+    return;
+  caret_idle_ = true;
+  Glib::signal_idle().connect_once([this] {
+    caret_idle_ = false;
+    scroll_to_caret();
+  });
+}
+
+void MainWindow::scroll_to_caret()
+{
+  if (!follow_caret_ || !buffer_ || !text_.get_realized())
+    return;
+  Gdk::Rectangle rect;
+  text_.get_iter_location(buffer_->get_insert()->get_iter(), rect);
+  int wx = 0;
+  int wy = 0;
+  text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(), rect.get_y(), wx, wy);
+  int x = 0;
+  int y = 0;
+  if (!text_.translate_coordinates(board_, wx, wy, x, y))
+    return;
+  // Bring [from, from + size) inside the adjustment's page, with a little
+  // room either side when the page has it.
+  auto reveal = [](const Glib::RefPtr<Gtk::Adjustment>& adj, double from, double size) {
+    const double page = adj->get_page_size();
+    if (page <= 0)
+      return;
+    const double pad = page >= size + 2 * 18 ? 18 : 0;
+    const double value = adj->get_value();
+    double want = value;
+    if (from - pad < value)
+      want = from - pad;
+    else if (from + size + pad > value + page)
+      want = from + size + pad - page;
+    want = std::max(adj->get_lower(), std::min(want, adj->get_upper() - page));
+    if (want != value)
+      adj->set_value(want);
+  };
+  reveal(paste_.get_vadjustment(), y, rect.get_height());
+  reveal(paste_.get_hadjustment(), x, std::max(1, rect.get_width()));
 }
 
 void MainWindow::build_status()

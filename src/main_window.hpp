@@ -61,6 +61,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_toolbar_row();
   void apply_page_size();
   void set_zoom(int zoom);
+  // The text view sits on the page inside the pasteboard's scroller, so
+  // GTK's own scroll-to-caret has nothing to scroll. These scroll the
+  // pasteboard instead: follow_caret() after the caret moves or the text
+  // changes, scroll_to_caret() again whenever the layout settles, until the
+  // wheel or a scrollbar takes the view somewhere else.
+  void follow_caret();
+  void scroll_to_caret();
   void sync_zoom_checks();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -254,6 +261,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  bool follow_caret_ = false;
+  bool caret_idle_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

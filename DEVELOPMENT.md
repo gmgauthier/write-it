@@ -54,7 +54,7 @@ One document, one window. The title is `Write-It - letter.rtf`. A dirty document
 
 Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized. The window remembers its size.
 
-The page sits on a neutral gray pasteboard, `#808080`.
+The page sits on a neutral gray pasteboard, `#808080`. The pasteboard scrolls to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back.
 
 ```
 +------------------------------------------------------------------+
