@@ -38,6 +38,7 @@ executable(
   'src/document.cpp',
   'src/rtf.cpp',
   'src/units.cpp',
+  'src/view.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,

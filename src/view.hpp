@@ -17,7 +17,8 @@ constexpr int kScreenPageTwips = 11906;
 struct ViewGeometry {
   int page_width = 0;    // the white area across
   int page_height = 0;   // its least height; 0 lets the text decide
-  int margin_x = 0;      // text inset, left and right
+  int margin_left = 0;   // text inset on the left
+  int margin_right = 0;  // text inset on the right
   int margin_y = 0;      // text inset, top and bottom
   int gap = 0;           // pasteboard showing above and below the page
   bool chrome = false;   // border, shadow, and the gray pasteboard
