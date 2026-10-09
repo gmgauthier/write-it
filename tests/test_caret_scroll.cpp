@@ -4,9 +4,9 @@
 // view sits on the page, inside the pasteboard's scroller, so its own
 // scroll_mark_onscreen has nothing to scroll. This opens a letter several
 // screens long and moves the caret the ways a user does (Ctrl+End, Ctrl+Home,
-// the arrows, End, typing, a jump from Find) in Page and Draft and at 200%,
-// and checks after each that the pasteboard shows the caret, across as well
-// as down. A turn of the mouse wheel may leave the caret behind.
+// the arrows, End, Page Down and Up, typing, Edit > Find…) in Page and Draft
+// and at 200%, and checks after each that the pasteboard shows the caret. A
+// turn of the mouse wheel may leave the caret behind.
 
 #include "check.hpp"
 #include "main_window.hpp"
@@ -40,6 +40,21 @@ struct MainWindowProbe {
   static void view(MainWindow& w, ViewMode mode)
   {
     (mode == ViewMode::Page ? w.page_item_ : w.draft_item_)->set_active(true);
+  }
+  // Edit > Find…, type the needle, press Next, then Close; what is selected.
+  static Glib::ustring find(MainWindow& w, const char* needle)
+  {
+    w.find_item_->activate();
+    w.find_entry_->set_text(needle);
+    auto* next =
+        dynamic_cast<Gtk::Button*>(w.find_dialog_->get_widget_for_response(Gtk::RESPONSE_APPLY));
+    if (next && next->get_label() == "Next")
+      next->clicked();
+    w.find_dialog_->response(Gtk::RESPONSE_CLOSE);
+    Gtk::TextIter start;
+    Gtk::TextIter end;
+    w.buffer_->get_selection_bounds(start, end);
+    return w.buffer_->get_text(start, end);
   }
   static Gtk::TextView& text(MainWindow& w)
   {
@@ -259,7 +274,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 167;
+constexpr int kChecks = 172;
 
 int main(int argc, char* argv[])
 {
@@ -314,12 +329,15 @@ int main(int argc, char* argv[])
       CHECK(caret_visible(window, "Page 100% Up"));
     }
 
-    // A caret placed by the program, as Find and Undo place it.
+    // Edit > Find…: the real menu item, dialog, entry and Next button.
     key(window, GDK_KEY_Home, ctrl);
-    MainWindowProbe::buffer(window)->place_cursor(
-        MainWindowProbe::buffer(window)->get_iter_at_line(90));
-    settle();
-    CHECK(caret_visible(window, "Page 100% placed"));
+    CHECK(MainWindowProbe::find(window, "Paragraph 90 ") == "Paragraph 90 ");
+    CHECK(caret_line(window) == 90);
+    CHECK(caret_visible(window, "Page 100% Find down"));
+    // From there, a match above it: Find wraps round to the top.
+    CHECK(MainWindowProbe::find(window, "Paragraph 7 ") == "Paragraph 7 ");
+    CHECK(caret_line(window) == 7);
+    CHECK(caret_visible(window, "Page 100% Find wrapping up"));
 
     // Typing new paragraphs at the end grows the page under the caret.
     key(window, GDK_KEY_End, ctrl);
