@@ -203,6 +203,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Toolbar format_bar_;
   Gtk::ComboBoxText font_combo_;
   Gtk::ComboBoxText size_combo_;
+  // What size_combo_ lists now (size_choices()).
+  std::vector<int> size_choices_shown_;
   Gtk::ComboBoxText style_combo_;
   Gtk::DrawingArea ruler_;
   Gtk::ScrolledWindow paste_;
