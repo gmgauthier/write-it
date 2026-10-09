@@ -52,7 +52,7 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 
 One document, one window. The title is `Write-It - letter.rtf`. A dirty document adds a trailing `*`. A new document is `Write-It - Untitled`.
 
-Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized. The window remembers its size.
+Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized, at Fit width. The window remembers its size, whether it is maximized, and the zoom, Fit width included. The next launch restores them, no larger than the screen it opens on. A maximized window comes back maximized and restores to the size it had before.
 
 The page sits on a neutral gray pasteboard, `#808080`.
 
@@ -121,7 +121,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 | Format Toolbar | Check. On by default |
 | Side by side | Check. On by default. The two toolbars share one row. Off stacks them, standard above format |
 | Status Bar | Check. On by default |
-| Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width |
+| Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width. Fit width is the default: the page fills the visible width and follows the window as it is resized. The choice is remembered |
 | Page / Draft | Radio. Page is the default |
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
@@ -156,7 +156,7 @@ The left side is a message (“Saved letter.rtf”) that stays until the next me
 
 `~/.config/write-it/write-it.ini`
 
-Keys: `window-width`, `window-height`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`, `units` (`in` or `cm`; missing or anything else is `in`).
+Keys: `window-width`, `window-height`, `window-maximized`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom` (`50` through `200`, or `fit-width`; missing or anything else is `fit-width`), `units` (`in` or `cm`; missing or anything else is `in`).
 
 ## 5. Feature floor
 
@@ -216,7 +216,7 @@ The Meson tree, the gtkmm window, and `scripts/lint.sh`. No document on disk.
 - Menus in order: File, Edit, View, Insert, Format, Tools, Table, Help, with the mnemonics from the window section. Items are visible. Commands that need a document are insensitive. Save stays sensitive.
 - The standard toolbar and the format toolbar share one row. View → Side by side is on by default, and turning it off stacks them. The format toolbar runs through alignment, then the style combo, bullets, and numbering. App-specific controls are visible and wait for their milestone.
 - Ruler stub. Empty white page on the `#808080` pasteboard. Page view is the selected radio. Draft is present and waits for M2.
-- Title `Write-It - Untitled`. First launch asks for 960×700. With the toolbars on one row, the window opens wide enough to show every control on that row. The ini remembers `window-width` and `window-height`.
+- Title `Write-It - Untitled`. First launch asks for 960×700. With the toolbars on one row, the window opens wide enough to show every control on that row. The ini remembers `window-width`, `window-height`, `window-maximized`, and `zoom`. With no ini, the zoom is Fit width.
 - Status message, then `Page 1 of 1`, then the zoom. View → Zoom and the zoom cell share one list, including Fit width.
 - About Write-It: name, version, one sentence, the Unlicense, Close.
 - Close (Ctrl+W) and Exit (Ctrl+Q). The right-click menu starts with Cut, Copy, Paste.

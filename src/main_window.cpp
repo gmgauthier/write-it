@@ -47,7 +47,38 @@ MainWindow::MainWindow()
 {
   settings_.load();
   set_title("Write-It - Untitled");
-  set_default_size(settings_.window_width, settings_.window_height);
+  // The saved size, or 960 x 700 the first time, on the screen it opens on.
+  int width = settings_.window_width;
+  int height = settings_.window_height;
+  if (auto display = Gdk::Display::get_default()) {
+    auto monitor = display->get_primary_monitor();
+    if (!monitor && display->get_n_monitors() > 0)
+      monitor = display->get_monitor(0);
+    if (monitor) {
+      Gdk::Rectangle area;
+      monitor->get_workarea(area);
+      clamp_window(width, height, area.get_width(), area.get_height());
+    }
+  }
+  set_default_size(width, height);
+  window_memory_ = WindowMemory(settings_);
+  window_memory_.update(width, height, settings_.window_maximized);
+  if (settings_.window_maximized)
+    maximize();
+  signal_size_allocate().connect([this](Gtk::Allocation&) {
+    int w = 0;
+    int h = 0;
+    get_size(w, h);
+    window_memory_.update(w, h, is_maximized());
+  });
+  signal_window_state_event().connect(
+      [this](GdkEventWindowState* event) {
+        // Only the state: the size that comes with it may still be the old one.
+        if (event->changed_mask & GDK_WINDOW_STATE_MAXIMIZED)
+          window_memory_.update(0, 0, (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) != 0);
+        return false;
+      },
+      false);
   accel_ = Gtk::AccelGroup::create();
   add_accel_group(accel_);
 
@@ -75,11 +106,8 @@ bool MainWindow::on_delete_event(GdkEventAny* event)
 {
   if (!confirm_discard_or_save())
     return true;
-  if (get_width() > 0 && get_height() > 0) {
-    settings_.window_width = get_width();
-    settings_.window_height = get_height();
-    settings_.save();
-  }
+  window_memory_.store(settings_);
+  settings_.save();
   return Gtk::ApplicationWindow::on_delete_event(event);
 }
 
@@ -382,8 +410,18 @@ void MainWindow::build_page()
   paste_.add_events(Gdk::BUTTON_PRESS_MASK);
   paste_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   paste_.signal_size_allocate().connect([this](Gtk::Allocation&) {
-    if (settings_.zoom == 0 || view_ == ViewMode::Draft)
-      apply_page_size();
+    // Fit width and Draft follow the pasteboard. A size request set while
+    // GTK is allocating is lost, so a narrower window left the page at the
+    // old width; the page is sized again just after this layout instead.
+    if ((settings_.zoom == 0 || view_ == ViewMode::Draft) && !fit_queued_) {
+      fit_queued_ = true;
+      Glib::signal_idle().connect_once(
+          [this] {
+            fit_queued_ = false;
+            apply_page_size();
+          },
+          Glib::PRIORITY_HIGH_IDLE);
+    }
     ruler_.queue_draw();
   });
 }

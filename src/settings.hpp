@@ -15,8 +15,8 @@ struct Settings {
   // Maximised when the window last closed. window_width and window_height
   // are then the size it had before it was maximised.
   bool window_maximized = false;
-  // 50, 75, 100, 150, 200, or 0 for Fit width.
-  int zoom = 100;
+  // 50, 75, 100, 150, 200, or 0 for Fit width, the first launch's.
+  int zoom = 0;
   bool show_standard_toolbar = true;
   bool show_format_toolbar = true;
   bool show_statusbar = true;

@@ -168,6 +168,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void tell(const char* sentence);
 
   Settings settings_;
+  // The size, while not maximised, and the maximised state, saved on close.
+  WindowMemory window_memory_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
   bool suppress_zoom_ = false;
 
@@ -255,6 +257,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  // Fit width and Draft: the page is waiting to follow a new pasteboard size.
+  bool fit_queued_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
