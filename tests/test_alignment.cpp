@@ -112,6 +112,8 @@ void rtf_round_trip()
   doc.paragraphs.push_back(para("Justified", Align::Justify));
   doc.paragraphs.push_back(para("Justified hanging", Align::Justify, 720, 360, -360));
   doc.paragraphs.push_back(para("", Align::Justify));
+  // The heading in its Heading style, as since named styles.
+  writeit::adopt_heading_styles(doc, "Sans", 11);
   writeit::Document back;
   CHECK(writeit::rtf_import(writeit::rtf_export(doc), back));
   CHECK(back == doc);
