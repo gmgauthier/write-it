@@ -2124,6 +2124,7 @@ void MainWindow::update_list_tabs()
       length += static_cast<int>(Glib::ustring(run.text).length());
     const int end = std::min(total, offset + length + 1);
     Glib::RefPtr<Gtk::TextTag> want;
+    ++list_tabs_evaluated_;
     if (tabbed(paragraph)) {
       // The label in the paragraph's first font, as drawn.
       const Run format = paragraph.runs.empty() ? format_of(buffer_->get_iter_at_offset(offset))

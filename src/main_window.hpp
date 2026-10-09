@@ -303,6 +303,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The list-tab idle, likewise; tabbing_ while it retags.
   sigc::connection list_tabs_idle_;
   bool tabbing_ = false;
+  // Paragraphs update_list_tabs() has looked at, for the tests.
+  long list_tabs_evaluated_ = 0;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

@@ -67,6 +67,15 @@ struct MainWindowProbe {
   {
     return w.dirty();
   }
+  static long evaluated(MainWindow& w)
+  {
+    return w.list_tabs_evaluated_;
+  }
+  // Enter at the end of paragraph `line`, as one user action.
+  static void enter_at_end(MainWindow& w, int line)
+  {
+    type_at_end(w, line, "\n");
+  }
   static void undo(MainWindow& w)
   {
     w.undo();
@@ -166,9 +175,82 @@ void expect(writeit::MainWindow& w, int percent)
   CHECK(MainWindowProbe::text_x(w, kRoomy) == MainWindowProbe::px(w, 1440));
 }
 
+// Where paragraph `line` of a standard first-level list item, labelled
+// `label`, must start: at the hang, or at the next stop clear of the label.
+int want_x(writeit::MainWindow& w, const std::string& label)
+{
+  const writeit::Indents in = writeit::list_indents(0);
+  const int end = MainWindowProbe::px(w, in.left + in.first) +
+                  MainWindowProbe::width(w, label.c_str()) + 1;
+  const int hang = MainWindowProbe::px(w, in.left);
+  return end <= hang ? hang : next_stop(w, end);
+}
+
+// Every item of the long list sits where its label puts it.
+bool all_placed(writeit::MainWindow& w, int items)
+{
+  for (int i = 0; i < items; ++i) {
+    const std::string label = std::to_string(i + 1) + ".";
+    if (MainWindowProbe::text_x(w, i) != want_x(w, label)) {
+      std::cout << "  item " << i << " at " << MainWindowProbe::text_x(w, i) << ", want "
+                << want_x(w, label) << "\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+// A long list: typing in one item looks again at that item only, not the
+// whole document, while Enter (which renumbers the items below), undo and
+// zoom still leave every item's text in the right place.
+void long_list(const std::string& home)
+{
+  constexpr int kItems = 2000;
+  writeit::Document doc;
+  for (int i = 0; i < kItems; ++i)
+    doc.paragraphs.push_back(numbered("Item", 1, 1));
+  const std::string path = Glib::build_filename(home, "long.rtf");
+  Glib::file_set_contents(path, writeit::rtf_export(doc));
+  writeit::MainWindow window;
+  window.show();
+  settle();
+  MainWindowProbe::open(window, path);
+  settle();
+  CHECK(all_placed(window, kItems));
+
+  // One keystroke in item 1000, then one in item 5: O(1) paragraphs each.
+  for (int line : {999, 4}) {
+    const long before = MainWindowProbe::evaluated(window);
+    MainWindowProbe::type_at_end(window, line, "x");
+    settle();
+    const long looked = MainWindowProbe::evaluated(window) - before;
+    std::cout << "  typing in item " << line + 1 << ": " << looked << " paragraphs\n";
+    CHECK(looked <= 3);
+  }
+  CHECK(all_placed(window, kItems));
+
+  // Enter after item 9 makes a new item 10: it and every item below move
+  // to their new numbers' places.
+  MainWindowProbe::enter_at_end(window, 8);
+  settle();
+  CHECK(all_placed(window, kItems + 1));
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, kItems));
+
+  MainWindowProbe::zoom(window, 200);
+  settle();
+  CHECK(all_placed(window, kItems));
+  MainWindowProbe::zoom(window, 100);
+  settle();
+  window.hide();
+  settle();
+  g_remove(path.c_str());
+}
+
 }  // namespace
 
-constexpr int kChecks = 37;
+constexpr int kChecks = 44;
 
 int main(int argc, char* argv[])
 {
@@ -216,6 +298,8 @@ int main(int argc, char* argv[])
     window.hide();
     settle();
   }
+
+  long_list(home);
 
   g_remove(path.c_str());
   const std::string ini = Glib::build_filename(home, "write-it", "write-it.ini");
