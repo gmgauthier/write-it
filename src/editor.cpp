@@ -2597,7 +2597,7 @@ void MainWindow::on_paragraph()
   // As in Word 97, OK on a choice that will not do says why and goes back to
   // the dialog with the field to fix selected, rather than quietly changing
   // the value: a field out of range or not a measure, a hanging indent past
-  // the left margin, or indents that leave no room for text.
+  // the left margin, or indents that leave too little room for text.
   Indents chosen;
   for (;;) {
     if (dialog.run() != Gtk::RESPONSE_OK) {

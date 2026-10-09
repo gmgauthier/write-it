@@ -583,7 +583,7 @@ void paragraph_ok()
   // ...and when Left and Right alone leave too little, they are the fault.
   {
     const auto c = check_paragraph(fields(Indents{}, in, "4", "4", "1", 1));
-    CHECK(c.field == ParaField::Left && c.message == sides_in);
+    CHECK(c.field == ParaField::Right && c.message == sides_in);
   }
   // A hanging indent gives the first line more room, not less.
   {
@@ -633,7 +633,7 @@ void paragraph_ok()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 9980;
+constexpr int kChecks = 11185;
 
 int main()
 {

@@ -3,6 +3,7 @@
 #include "para_check.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace writeit {
 namespace {
@@ -105,21 +106,42 @@ ParaCheck check_paragraph(const ParaFields& fields, int text_width)
   if (!indents_fit(chosen))
     return refuse(by_edited || !left_edited ? ParaField::By : ParaField::Left, kHangPastMargin);
 
-  // Nor will it take indents that leave no room for the text. A first-line
-  // indent starts its line further right; a hanging one gives it more room.
+  // Nor will it take indents that leave too little room for the text: at
+  // least kMinTextTwips of the text area, in twips and as the dialog shows
+  // it, so a total that rounds to fit on screen still leaves real width. A
+  // first-line indent starts its line further right; a hanging one gives it
+  // more room.
+  const int digits_scale = units_digits(units) == 2 ? 100 : 1;
+  auto shown = [units, digits_scale](long twips) {
+    return std::llround(twips_to_units(static_cast<int>(twips), units) * digits_scale);
+  };
+  const long long shown_room = shown(text_width) - shown(kMinTextTwips);
+  auto too_wide = [&](long twips) {
+    return twips + kMinTextTwips > text_width || shown(twips) > shown_room;
+  };
+  const std::string room = " leave too little room for text. They must leave at least " +
+                           format_measure(twips_to_units(kMinTextTwips, units), units) +
+                           " of the " + width_text(text_width, units) + " text area.";
   const long sides = static_cast<long>(chosen.left) + chosen.right;
   const long first_line = sides + std::max(0, chosen.first);
-  if (sides >= text_width) {
-    // Right is at fault unless only Left changed.
-    return refuse(left_edited && !right_edited ? ParaField::Left : ParaField::Right,
-                  "The left and right indents are too large for the " +
-                      width_text(text_width, units) +
-                      " text area. The text cannot fit between them.");
+  if (too_wide(sides)) {
+    // A side too wide on its own is the one to fix; otherwise Right is at
+    // fault unless only Left changed.
+    ParaField field = left_edited && !right_edited ? ParaField::Left : ParaField::Right;
+    if (too_wide(chosen.left))
+      field = ParaField::Left;
+    else if (too_wide(chosen.right))
+      field = ParaField::Right;
+    return refuse(field, "The left and right indents" + room);
   }
-  if (first_line >= text_width) {
-    return refuse(ParaField::By, "The left, first-line and right indents are too large for the " +
-                                     width_text(text_width, units) +
-                                     " text area. The first line cannot fit between them.");
+  if (too_wide(first_line)) {
+    // By is at fault when it or Special changed, else the side that did.
+    ParaField field = ParaField::By;
+    if (!by_edited && right_edited && !left_edited)
+      field = ParaField::Right;
+    else if (!by_edited && left_edited)
+      field = ParaField::Left;
+    return refuse(field, "The left, first-line and right indents" + room);
   }
   result.indents = chosen;
   return result;

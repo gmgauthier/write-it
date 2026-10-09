@@ -200,7 +200,7 @@ const char* kRangeCm = "The measurement must be between 0 cm and 55.88 cm.";
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 36;
+constexpr int kChecks = 46;
 
 int main(int argc, char* argv[])
 {

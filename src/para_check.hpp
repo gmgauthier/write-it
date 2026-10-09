@@ -65,9 +65,11 @@ struct ParaCheck {
 
 // The fields first, Left, Right, then By (only when Special is on); then a
 // hanging indent past the left margin (indents_fit); then indents that leave
-// no room for text: Left and Right, or the first line's start and Right,
-// adding up to `text_width` or more. An untouched field keeps the file's
-// twips (keep_twips), so OK on an unchanged dialog changes nothing.
+// too little room for text: Left and Right, or the first line's start and
+// Right, leaving less than kMinTextTwips of `text_width`, in twips or as the
+// dialog shows them (6.73" in all is the most, 17.09 cm). A side too wide on
+// its own is selected first. An untouched field keeps the file's twips
+// (keep_twips), so OK on an unchanged dialog changes nothing.
 ParaCheck check_paragraph(const ParaFields& fields, int text_width = kTextWidthTwips);
 
 }  // namespace writeit
