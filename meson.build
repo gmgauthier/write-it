@@ -99,3 +99,13 @@ write_it_units_tests = executable(
   include_directories: inc,
 )
 test('units', write_it_units_tests)
+
+write_it_rtf_unicode_tests = executable(
+  'write-it-rtf-unicode-tests',
+  'tests/test_rtf_unicode.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  include_directories: inc,
+  dependencies: dependency('glib-2.0'),
+)
+test('rtf-unicode', write_it_rtf_unicode_tests)
