@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -114,7 +115,35 @@ std::string valid_utf8(const std::string& text)
   return out;
 }
 
-std::string escape_rtf(const std::string& text)
+// C0 controls, DEL and C1 controls. Tab, newline and carriage return are
+// controls too; callers that give them meaning check for them first.
+bool is_control(uint32_t cp)
+{
+  return cp < 0x20 || cp == 0x7F || (cp >= 0x80 && cp <= 0x9F);
+}
+
+// The reader's last word on a string: valid UTF-8 with no control character
+// but, where allowed, tab.
+std::string clean_text(const std::string& text, bool keep_tab)
+{
+  const std::string valid = valid_utf8(text);
+  std::string out;
+  out.reserve(valid.size());
+  size_t i = 0;
+  while (i < valid.size()) {
+    const size_t begin = i;
+    const uint32_t cp = decode_utf8(valid, i);
+    if (is_control(cp) && !(keep_tab && cp == '\t'))
+      continue;
+    out.append(valid, begin, i - begin);
+  }
+  return out;
+}
+
+// RTF text for a run or a font name. No raw control character is written:
+// in text a tab is \tab and a newline (LF, CR or CR LF) is \line; in a font
+// name, and for every other control, the character is dropped.
+std::string escape_rtf(const std::string& text, bool font_name = false)
 {
   std::string out;
   size_t i = 0;
@@ -126,8 +155,19 @@ std::string escape_rtf(const std::string& text)
       ++i;
       continue;
     }
-    if (c == '\t') {
+    if (c == '\t' && !font_name) {
       out += "\\tab ";
+      ++i;
+      continue;
+    }
+    if ((c == '\n' || c == '\r') && !font_name) {
+      out += "\\line ";
+      ++i;
+      if (c == '\r' && i < text.size() && text[i] == '\n')
+        ++i;
+      continue;
+    }
+    if (c < 0x20 || c == 0x7F) {
       ++i;
       continue;
     }
@@ -137,6 +177,8 @@ std::string escape_rtf(const std::string& text)
       continue;
     }
     const uint32_t cp = decode_utf8(text, i);
+    if (is_control(cp))
+      continue;
     auto unit = [&](uint32_t value) {
       const int n = value >= 32768 ? static_cast<int>(value) - 65536 : static_cast<int>(value);
       out += "\\u" + std::to_string(n) + "?";
@@ -221,6 +263,8 @@ struct State {
   Indents indents;
   bool ignore = false;
   bool in_fonttbl = false;
+  // Inside a font entry, a group that is not the name: \*\panose, \falt.
+  bool font_skip = false;
   bool pending_dest = false;
   int uc = 1;
 };
@@ -279,31 +323,23 @@ class Reader {
  private:
   void literal(char c)
   {
-    if (state_.in_fonttbl) {
-      if (c == ';')
-        commit_font();
-      else
-        font_chars_.push_back(c);
+    if (state_.in_fonttbl && !state_.font_skip && c == ';') {
+      commit_font();
       return;
     }
-    if (state_.ignore)
+    if (!sink_open())
       return;
-    std::string utf8;
-    if (static_cast<unsigned char>(c) < 0x80) {
-      utf8.push_back(c);
-    } else {
+    uint32_t cp = static_cast<unsigned char>(c);
+    if (cp >= 0x80) {
       // Not valid RTF, which is 7-bit, but be kind: well-formed UTF-8 is
       // taken as such, and any other byte as the declared code page.
       size_t at = i_;
-      uint32_t cp = 0;
-      if (decode_utf8_strict(text_, at, cp)) {
-        append_utf8(utf8, cp);
+      if (decode_utf8_strict(text_, at, cp))
         i_ = at - 1;
-      } else {
-        append_utf8(utf8, cp1252(static_cast<unsigned char>(c)));
-      }
+      else
+        cp = cp1252(static_cast<unsigned char>(c));
     }
-    add_text(utf8);
+    put(cp);
   }
 
   void control()
@@ -312,30 +348,27 @@ class Reader {
     if (i_ >= text_.size())
       return;
     if (text_[i_] == '\'') {
+      // \'hh: up to two real hex digits and nothing more. A bare \' is
+      // dropped and leaves what follows alone.
       ++i_;
       unsigned int byte = 0;
-      for (int n = 0; n < 2 && i_ < text_.size(); ++n, ++i_) {
-        byte *= 16;
+      int digits = 0;
+      while (digits < 2 && i_ < text_.size() &&
+             std::isxdigit(static_cast<unsigned char>(text_[i_]))) {
         const char h = text_[i_];
-        if (h >= '0' && h <= '9')
-          byte += static_cast<unsigned>(h - '0');
-        else if (h >= 'a' && h <= 'f')
-          byte += static_cast<unsigned>(h - 'a' + 10);
-        else if (h >= 'A' && h <= 'F')
-          byte += static_cast<unsigned>(h - 'A' + 10);
+        const unsigned value = std::isdigit(static_cast<unsigned char>(h))
+                                   ? static_cast<unsigned>(h - '0')
+                                   : static_cast<unsigned>(std::tolower(h) - 'a' + 10);
+        byte = byte * 16 + value;
+        ++digits;
+        ++i_;
       }
-      if (!state_.ignore && !state_.in_fonttbl) {
-        std::string utf8;
-        append_utf8(utf8, cp1252(static_cast<unsigned char>(byte)));
-        add_text(utf8);
-      }
+      if (digits > 0)
+        put(cp1252(static_cast<unsigned char>(byte)));
       return;
     }
     if (text_[i_] == '\\' || text_[i_] == '{' || text_[i_] == '}') {
-      if (!state_.ignore && !state_.in_fonttbl) {
-        std::string one(1, text_[i_]);
-        add_text(one);
-      }
+      put(static_cast<unsigned char>(text_[i_]));
       ++i_;
       state_.pending_dest = false;
       return;
@@ -343,8 +376,11 @@ class Reader {
     if (!std::isalpha(static_cast<unsigned char>(text_[i_]))) {
       const char symbol = text_[i_];
       ++i_;
-      if (state_.pending_dest && symbol == '*')
+      if (state_.pending_dest && symbol == '*') {
         state_.ignore = true;
+        if (state_.in_fonttbl)
+          state_.font_skip = true;
+      }
       state_.pending_dest = false;
       return;
     }
@@ -385,6 +421,10 @@ class Reader {
         state_.ignore = true;
         return;
       }
+      if (state_.in_fonttbl && (word == "panose" || word == "falt")) {
+        state_.font_skip = true;
+        return;
+      }
       if (skip_destination(word)) {
         state_.ignore = true;
         return;
@@ -394,6 +434,16 @@ class Reader {
       commit_font();
       font_index_ = param;
       font_chars_.clear();
+      return;
+    }
+    // \uN and \ucN work everywhere, the font table included.
+    if (word == "uc" && has_param) {
+      state_.uc = std::max(0, param);
+      return;
+    }
+    if (word == "u" && has_param) {
+      unicode(param);
+      skip_fallback(state_.uc);
       return;
     }
     if (state_.ignore || state_.in_fonttbl)
@@ -464,14 +514,6 @@ class Reader {
       state_.underline = false;
       return;
     }
-    if (word == "uc" && has_param) {
-      state_.uc = std::max(0, param);
-      return;
-    }
-    if (word == "u" && has_param) {
-      unicode(param);
-      skip_fallback(state_.uc);
-    }
   }
 
   // \uN is a UTF-16 code unit written as a signed 16-bit number, though
@@ -479,6 +521,8 @@ class Reader {
   // not a code unit at all and reads as U+FFFD.
   void unicode(int param)
   {
+    if (!sink_open())
+      return;
     if (param < -32768 || param > 65535) {
       emit(kReplacement);
       return;
@@ -502,9 +546,42 @@ class Reader {
 
   void emit(uint32_t cp)
   {
-    if (state_.ignore || state_.in_fonttbl)
+    put(cp);
+  }
+
+  // Whether decoded characters go anywhere: the font name being read, or the
+  // text outside ignored destinations.
+  bool sink_open() const
+  {
+    return state_.in_fonttbl ? !state_.font_skip : !state_.ignore;
+  }
+
+  // Every decoded character goes through here. In text, LF and CR are line
+  // breaks (a paragraph, as \line is here; CR LF is one), tab is a tab, and
+  // other control characters, NUL among them, are dropped. Font names take
+  // no control characters at all.
+  void put(uint32_t cp)
+  {
+    if (!sink_open())
       return;
-    if (cp == 0)
+    if (state_.in_fonttbl) {
+      flush_lead();
+      if (!is_control(cp))
+        append_utf8(font_chars_, cp);
+      return;
+    }
+    if (cp == '\n' || cp == '\r') {
+      const bool second_half = cp == '\n' && after_cr_;
+      if (!second_half)
+        finish_paragraph(true);
+      after_cr_ = cp == '\r' && !second_half;
+      return;
+    }
+    if (cp == '\t') {
+      add_text("\t");
+      return;
+    }
+    if (is_control(cp))
       return;
     std::string utf8;
     append_utf8(utf8, cp);
@@ -518,9 +595,7 @@ class Reader {
     if (lead_ == 0)
       return;
     lead_ = 0;
-    std::string utf8;
-    append_utf8(utf8, kReplacement);
-    add_text(utf8);
+    put(kReplacement);
   }
 
   // Skips the \ucN fallback after \uN. Per the RTF spec a control word, a
@@ -577,6 +652,7 @@ class Reader {
   void add_text(const std::string& utf8)
   {
     flush_lead();
+    after_cr_ = false;
     Run run;
     run.text = utf8;
     run.font = font_name(state_.font);
@@ -591,6 +667,7 @@ class Reader {
   void finish_paragraph(bool from_par)
   {
     flush_lead();
+    after_cr_ = false;
     if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty())
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
@@ -605,21 +682,20 @@ class Reader {
 
   void commit_font()
   {
-    const std::string name = valid_utf8(trim(font_chars_));
+    flush_lead();
+    const std::string name = clean_text(trim(font_chars_), false);
     font_chars_.clear();
     if (name.empty())
       return;
-    if (font_index_ < 0)
-      return;
-    if (static_cast<int>(fonts_.size()) <= font_index_)
-      fonts_.resize(static_cast<size_t>(font_index_) + 1);
-    fonts_[static_cast<size_t>(font_index_)] = name;
+    // Font numbers are labels, not indices: Word uses \f31500 and up.
+    fonts_[font_index_] = name;
   }
 
   std::string font_name(int index) const
   {
-    if (index >= 0 && static_cast<size_t>(index) < fonts_.size() && !fonts_[index].empty())
-      return fonts_[static_cast<size_t>(index)];
+    const auto found = fonts_.find(index);
+    if (found != fonts_.end() && !found->second.empty())
+      return found->second;
     return "Sans";
   }
 
@@ -631,8 +707,8 @@ class Reader {
       merged.heading = paragraph.heading;
       merged.indents = paragraph.indents;
       for (Run& run : paragraph.runs) {
-        run.text = valid_utf8(run.text);
-        run.font = valid_utf8(run.font);
+        run.text = clean_text(run.text, true);
+        run.font = clean_text(run.font, false);
         add_run(merged, std::move(run));
       }
       doc.paragraphs.push_back(std::move(merged));
@@ -643,7 +719,7 @@ class Reader {
   size_t i_ = 0;
   State state_;
   std::vector<State> stack_;
-  std::vector<std::string> fonts_;
+  std::map<int, std::string> fonts_;
   int font_index_ = 0;
   std::string font_chars_;
   Paragraph paragraph_;
@@ -652,6 +728,9 @@ class Reader {
   Indents final_indents_;
   bool closed_ = false;
   uint32_t lead_ = 0;
+  // The last character was a CR line break, so an LF straight after it is
+  // the same break.
+  bool after_cr_ = false;
 };
 
 }  // namespace
@@ -684,7 +763,8 @@ std::string rtf_export(const Document& doc)
   std::ostringstream out;
   out << "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n{\\fonttbl";
   for (size_t i = 0; i < fonts.size(); ++i) {
-    out << "{\\f" << i << "\\" << font_family(fonts[i]) << " " << escape_rtf(fonts[i]) << ";}";
+    out << "{\\f" << i << "\\" << font_family(fonts[i]) << " " << escape_rtf(fonts[i], true)
+        << ";}";
   }
   out << "}\n";
   bool wrote = false;
