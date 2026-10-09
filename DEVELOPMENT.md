@@ -72,6 +72,7 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - Where this file makes a claim, the app has to keep it. A mismatch is a bug, not a design question.
 - One PR per feature. The PR updates the lines of this file that describe that feature, in the section the feature belongs to. The Status section is updated separately.
 - Failing tests come first, in their own commit, then the fix.
+- Everything in `src/` except `main.cpp` builds once as the `writeit_core` static library, which the app and every test link. A new `src/*.cpp` file goes in that one list in `meson.build`, never in a test target's own sources.
 - Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
 - Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag.
 - Bug Basher reviews every PR on GitHub with a comment that starts `Bug Basher: <commit>: approved.` and names the commit. The project has one GitHub account, so a comment review is the gate. He reads the code, runs its suites under ASan and UBSan, and tries whatever the PR adds in a live window for a few minutes.
