@@ -28,7 +28,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 | Toolbars overflow, so the window fits a 1024 px screen | In `m2` |
 | Open files from the command line and the desktop file | In `m2` |
 | An imported `.txt` or `.md` opens unmodified | In `m2` |
-| Window size, maximised state, and zoom remembered | Draft, #25 |
+| Window size, maximised state, and zoom remembered | In `m2` |
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -76,9 +76,9 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - A test that opens a window is marked `is_parallel: false` in `meson.build`, so window tests never share the X display at the same time.
 - Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
 - Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag.
-- Bug Basher reviews every PR on GitHub with a comment that starts `Bug Basher: <commit>: approved.` and names the commit. The project has one GitHub account, so a comment review is the gate. He reads the code, runs its suites under ASan and UBSan, and tries whatever the PR adds in a live window for a few minutes.
+- Bug Basher reviews every PR on GitHub with a comment that starts `Bug Basher: <commit>: approved.` and names the commit. The project has one GitHub account, so a comment review is the gate. An approval covers only the commit it names and never carries over: every new head, including a clean merge, needs its own review naming that commit before it merges. He reads the code, runs its suites under ASan and UBSan, and tries whatever the PR adds in a live window for a few minutes.
 - Bug Basher does not change product code. Defects go back to the PR's owner as a task with the failing case, and the owner fixes them on the same PR.
-- SysAdmin merges a PR into the milestone branch once its head is approved and all four CI checks pass: the Devuan Excalibur build and tests, the Debian trixie build and tests, lint, and "ASan and UBSan (debian:trixie)", which runs every suite under the sanitisers. A PR does not have to be up to date with the milestone branch, so one merge does not send the others back for review. If a PR conflicts, its owner fixes the conflict and Bug Basher re-checks the conflicted files.
+- SysAdmin merges a PR into the milestone branch once its head is approved and all four CI checks pass: the Devuan Excalibur build and tests, the Debian trixie build and tests, lint, and "ASan and UBSan (debian:trixie)", which runs every suite under the sanitisers. A PR does not have to be up to date with the milestone branch, so one merge does not send the others back for review. If a PR conflicts, its owner fixes the conflict, and Bug Basher's review of the new head looks at the conflicted files.
 - A draft PR from the milestone branch into `master` stays open while the milestone is under way, so CI tests the combined branch after every merge.
 - Coordinator owns the queue: the order PRs merge in and who holds each one. If nothing moves for 15 minutes, Watcher asks the room for a status, and goes to Greg only if the same PR is still stuck after a second ask.
 - When every feature is in, Bug Basher does one full live pass on the milestone branch head. Defects go back as small fix PRs into the milestone branch. Then SysAdmin merges the milestone branch into `master` once, deletes the branch, and tags.
