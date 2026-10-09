@@ -2100,11 +2100,6 @@ bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int nu
   return true;
 }
 
-MainWindow::~MainWindow()
-{
-  list_shifts_idle_.disconnect();
-}
-
 void MainWindow::queue_list_shifts()
 {
   if (list_shifts_queued_ || !buffer_)

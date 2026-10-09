@@ -62,6 +62,19 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_toolbar_row();
   void apply_page_size();
   void set_zoom(int zoom);
+  // The text view sits on the page inside the pasteboard's scroller, so
+  // GTK's own scroll-to-caret has nothing to scroll. These scroll the
+  // pasteboard instead: follow_caret() after the caret moves or the text
+  // changes, scroll_to_caret() again whenever the layout settles, until the
+  // wheel or a scrollbar takes the view somewhere else.
+  void follow_caret();
+  void scroll_to_caret();
+  // Page Down and Page Up, with or without Shift. For the same reason GTK
+  // would take the whole buffer as one page; these move the caret, and the
+  // pasteboard, by the pasteboard's visible height and keep the caret's x.
+  static void on_move_cursor(GtkTextView* view, GtkMovementStep step, gint count, gboolean extend,
+                             gpointer self);
+  bool page_caret(int count, bool extend);
   void sync_zoom_checks();
   void queue_page_status();
   void update_page_status();
@@ -287,7 +300,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
-  bool page_status_queued_ = false;
+  bool follow_caret_ = false;
+  // The idle follow_caret() queues; one at a time, and gone with the window.
+  sigc::connection caret_idle_;
+  // The status bar's page count idle, likewise.
+  sigc::connection page_status_idle_;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;
