@@ -181,6 +181,9 @@ void hang_matches_left()
   CHECK(writeit::hang_twips(0.5, 719, 1440, 1.0, Units::Inches) == 719);
 }
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 4514;
+
 int main()
 {
   parsing_the_setting();
@@ -190,5 +193,5 @@ int main()
   no_drift(Units::Centimetres);
   conversion_is_clamped();
   hang_matches_left();
-  return suite_test::done("units");
+  return suite_test::done("units", kChecks);
 }

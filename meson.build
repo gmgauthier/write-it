@@ -3,7 +3,7 @@ project(
   'cpp',
   version: '0.1.0',
   license: 'Unlicense',
-  meson_version: '>=0.56',
+  meson_version: '>=0.57',
   default_options: [
     'cpp_std=c++17',
     'warning_level=2',
@@ -74,6 +74,35 @@ write_it_settings_tests = executable(
   dependencies: [glibmm],
 )
 test('settings', write_it_settings_tests)
+
+# check.hpp's guard. A suite that runs one check too few or too many, or
+# names no count, fails; done() without a count does not compile.
+check_guard = executable('check-guard', 'tests/check_guard.cpp', include_directories: inc)
+test('guard-too-few-fails', check_guard, args: ['early'], should_fail: true)
+test('guard-too-many-fails', check_guard, args: ['too-many'], should_fail: true)
+test('guard-no-count-fails', check_guard, args: ['no-count'], should_fail: true)
+test('guard-exact-passes', check_guard, args: ['exact'])
+# The header's text goes into the probe itself, so editing check.hpp
+# reconfigures and the probe is never answered from meson's cache.
+done_without_count = meson.get_compiler('cpp').compiles(
+  import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x"); }\n',
+  args: ['-std=c++17'],
+  name: 'suite_test::done() without a count',
+)
+# The control: with a count it compiles, so the NO above is about the
+# missing count and nothing else.
+assert(
+  meson.get_compiler('cpp').compiles(
+    import('fs').read('tests/check.hpp') + '\nint main() { return suite_test::done("x", 1); }\n',
+    args: ['-std=c++17'],
+    name: 'suite_test::done() with a count',
+  ),
+  'check.hpp does not compile with a count either',
+)
+test(
+  'guard-count-required',
+  find_program(done_without_count ? 'false' : 'true'),
+)
 
 write_it_view_tests = executable(
   'write-it-view-tests',
