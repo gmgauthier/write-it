@@ -319,11 +319,36 @@ void MainWindow::build_editor()
   buffer_->signal_changed().connect([this] { queue_page_status(); });
   // Wide list labels push their text on: see update_list_tabs().
   buffer_->signal_changed().connect([this] { queue_list_tabs(); });
-  auto tab_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
-                           const Gtk::TextIter&) {
-    if (!tabbing_ && !is_list_tab(tag_name(tag)))
-      queue_list_tabs();
+  auto tab_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                           const Gtk::TextIter& end) {
+    if (tabbing_ || is_list_tab(tag_name(tag)))
+      return;
+    // A paragraph format can renumber the items below; a character format
+    // changes only the label's font in its own paragraph.
+    ParaFormat ignored;
+    if (parse_para(tag_name(tag), ignored))
+      tabs_renumber_ = true;
+    note_list_tabs(start, end);
+    queue_list_tabs();
   };
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
+        auto start = end;
+        start.backward_chars(static_cast<int>(text.length()));
+        if (text.find('\n') != Glib::ustring::npos)
+          tabs_renumber_ = true;
+        note_list_tabs(start, end);
+      },
+      true);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+        if (buffer_->get_slice(start, end, true).find('\n') != Glib::ustring::npos)
+          tabs_renumber_ = true;
+      },
+      false);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter&) { note_list_tabs(start, start); },
+      true);
   buffer_->signal_apply_tag().connect(tab_on_tag);
   buffer_->signal_remove_tag().connect(tab_on_tag);
   buffer_->signal_mark_set().connect(
@@ -1195,6 +1220,8 @@ void MainWindow::restyle_tags()
       style_para_tag(tag, format);
   });
   // Zoom, the view, and the margins move labels and tab stops.
+  tabs_full_ = true;
+  tab_widths_.clear();
   queue_list_tabs();
   caret_key_.clear();
   update_caret_font();
@@ -2128,6 +2155,21 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::list_tab_tag(int indent)
   return tag;
 }
 
+void MainWindow::note_list_tabs(const Gtk::TextIter& start, const Gtk::TextIter& end)
+{
+  if (!buffer_)
+    return;
+  if (!tabs_from_) {
+    tabs_from_ = buffer_->create_mark(buffer_->begin(), true);
+    tabs_to_ = buffer_->create_mark(buffer_->begin(), false);
+  }
+  if (!tabs_noted_ || start.compare(tabs_from_->get_iter()) < 0)
+    buffer_->move_mark(tabs_from_, start);
+  if (!tabs_noted_ || end.compare(tabs_to_->get_iter()) > 0)
+    buffer_->move_mark(tabs_to_, end);
+  tabs_noted_ = true;
+}
+
 void MainWindow::update_list_tabs()
 {
   if (!buffer_)
@@ -2138,91 +2180,188 @@ void MainWindow::update_list_tabs()
     if (is_list_tab(tag_name(tag)))
       old.push_back(tag);
   });
-  const Document doc = capture();
-  auto tabbed = [](const Paragraph& p) {
-    return clamp_list(p.list).kind != ListKind::None &&
-           (p.align == Align::Left || p.align == Align::Justify);
-  };
-  if (old.empty() && std::none_of(doc.paragraphs.begin(), doc.paragraphs.end(), tabbed))
-    return;
-  const std::vector<int> numbers = list_numbers(doc.paragraphs);
   const int total = buffer_->get_char_count();
+  const int lines = buffer_->get_line_count();
+  // The paragraphs to look at again, as indices into tab_lines_.
+  std::vector<char> dirty;
+  std::vector<int> starts;
+  const bool walk = tabs_full_ || tabs_renumber_ || static_cast<int>(tab_lines_.size()) != lines;
+  if (walk) {
+    // Each paragraph's start and format, as capture() reads them, and the
+    // list numbers they give; GTK's lines also break at other separators.
+    std::vector<Paragraph> paragraphs;
+    auto it = buffer_->begin();
+    starts.push_back(0);
+    while (it.forward_line()) {
+      auto before = it;
+      before.backward_char();
+      if (before.get_char() == '\n')
+        starts.push_back(it.get_offset());
+    }
+    std::vector<TabLine> fresh(starts.size());
+    paragraphs.resize(starts.size());
+    for (size_t i = 0; i < starts.size(); ++i) {
+      const ParaFormat format = para_at(starts[i]);
+      fresh[i].format = format;
+      paragraphs[i].list = format.list;
+      paragraphs[i].indents = format.indents;
+      paragraphs[i].align = format.align;
+    }
+    const std::vector<int> numbers = list_numbers(paragraphs);
+    for (size_t i = 0; i < fresh.size(); ++i)
+      fresh[i].number = numbers[i];
+    dirty.assign(fresh.size(), 0);
+    if (tabs_full_ || static_cast<int>(fresh.size()) != lines) {
+      std::fill(dirty.begin(), dirty.end(), 1);
+    } else {
+      // Paragraphs whose format or number changed, matching the old list
+      // from the top and from the bottom around the paragraphs added or
+      // removed.
+      auto same = [](const TabLine& a, const TabLine& b) {
+        return a.format == b.format && a.number == b.number;
+      };
+      size_t head = 0;
+      while (head < fresh.size() && head < tab_lines_.size() && same(fresh[head], tab_lines_[head]))
+        ++head;
+      size_t tail = 0;
+      while (tail < fresh.size() - head && tail < tab_lines_.size() - head &&
+             same(fresh[fresh.size() - 1 - tail], tab_lines_[tab_lines_.size() - 1 - tail]))
+        ++tail;
+      for (size_t i = head; i < fresh.size() - tail; ++i)
+        dirty[i] = 1;
+    }
+    tab_lines_ = std::move(fresh);
+  } else {
+    dirty.assign(tab_lines_.size(), 0);
+  }
+  // The edited paragraphs, which a GTK line each when lines are paragraphs.
+  if (tabs_noted_ && static_cast<int>(tab_lines_.size()) == lines) {
+    const int from = tabs_from_->get_iter().get_line();
+    const int to = tabs_to_->get_iter().get_line();
+    for (int line = std::max(0, from); line <= to && line < lines; ++line)
+      dirty[static_cast<size_t>(line)] = 1;
+  }
+  const bool full = tabs_full_;
+  tabs_full_ = false;
+  tabs_renumber_ = false;
+  tabs_noted_ = false;
+  if (std::find(dirty.begin(), dirty.end(), 1) == dirty.end())
+    return;
   tabbing_ = true;
   std::vector<Glib::RefPtr<Gtk::TextTag>> used;
-  int offset = 0;
-  for (size_t i = 0; i < doc.paragraphs.size() && offset < total; ++i) {
-    const Paragraph& paragraph = doc.paragraphs[i];
-    int length = 0;
-    for (const Run& run : paragraph.runs)
-      length += static_cast<int>(Glib::ustring(run.text).length());
-    const int end = std::min(total, offset + length + 1);
-    Glib::RefPtr<Gtk::TextTag> want;
-    ++list_tabs_evaluated_;
-    if (tabbed(paragraph)) {
-      // The label in the paragraph's first font, as drawn.
-      const Run format = paragraph.runs.empty() ? format_of(buffer_->get_iter_at_offset(offset))
-                                                : paragraph.runs.front();
-      Pango::FontDescription desc;
-      desc.set_family(format.font.empty() ? "Sans" : format.font);
-      desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
-      int width = 0;
-      int height = 0;
-      auto label = text_.create_pango_layout(list_label(clamp_list(paragraph.list), numbers[i]));
-      label->set_font_description(desc);
-      label->get_pixel_size(width, height);
-      const Indents indents = clamp_indents(paragraph.indents);
-      const int text_twips = list_text_first(indents);
-      // As Word's tab after the label: the text stays put while the label
-      // ends before it, at least a pixel clear.
-      const int label_end = margin_left() + indent_px(indents.left + indents.first) + width + 1;
-      if (label_end > margin_left() + indent_px(text_twips)) {
-        // The first half-inch stop from the left margin that clears it.
-        int stop = text_twips - ((text_twips % kDefaultTab) + kDefaultTab) % kDefaultTab;
-        while (margin_left() + indent_px(stop) < label_end && stop < 2 * kMaxIndent)
-          stop += kDefaultTab;
-        // Relative to the paragraph tag's left margin, as its indent is.
-        want = list_tab_tag(margin_left() + indent_px(stop) -
-                            std::max(0, margin_left() + indent_px(indents.left)));
-      }
+  for (size_t i = 0; i < dirty.size(); ++i) {
+    if (!dirty[i])
+      continue;
+    const int start =
+        walk ? starts[i] : buffer_->get_iter_at_line(static_cast<int>(i)).get_offset();
+    if (start >= total)
+      continue;
+    int end = total;
+    if (walk && i + 1 < starts.size())
+      end = starts[i + 1];
+    else if (!walk) {
+      auto next = buffer_->get_iter_at_line(static_cast<int>(i));
+      if (next.forward_line())
+        end = next.get_offset();
     }
-    const auto s = buffer_->get_iter_at_offset(offset);
-    const auto e = buffer_->get_iter_at_offset(end);
-    for (const auto& tag : old) {
-      auto it = s;
-      if (tag != want && (s.has_tag(tag) || (it.forward_to_tag_toggle(tag) && it.compare(e) < 0)))
-        buffer_->remove_tag(tag, buffer_->get_iter_at_offset(offset),
-                            buffer_->get_iter_at_offset(end));
+    // A paragraph whose own format changed renumbers: start again.
+    if (!walk && !(para_at(start) == tab_lines_[i].format)) {
+      tabbing_ = false;
+      tabs_renumber_ = true;
+      // The edited range still needs its look.
+      tabs_noted_ = true;
+      update_list_tabs();
+      return;
     }
-    if (want) {
-      auto it = s;
-      if (!s.has_tag(want) || (it.forward_to_tag_toggle(want) && it.compare(e) < 0))
-        buffer_->apply_tag(want, buffer_->get_iter_at_offset(offset),
-                           buffer_->get_iter_at_offset(end));
-      if (std::find(used.begin(), used.end(), want) == used.end())
-        used.push_back(want);
-    }
-    offset += length + 1;
+    auto want = retab_paragraph(i, start, end, old);
+    if (want && std::find(used.begin(), used.end(), want) == used.end())
+      used.push_back(want);
   }
-  // Tags no paragraph needs go, so the table holds one per indent in use.
-  for (const auto& tag : old)
-    if (std::find(used.begin(), used.end(), tag) == used.end())
-      table->remove(tag);
+  // After a full look, tags no paragraph needs go, so the table holds one
+  // per indent in use.
+  if (full) {
+    for (const auto& tag : old)
+      if (std::find(used.begin(), used.end(), tag) == used.end())
+        table->remove(tag);
+  }
   // A tab outranks every paragraph tag's indent. Raising a tag relays out
   // the text, so only when a paragraph tag sits above one.
   int top_para = -1;
   ParaFormat ignored;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> tabs;
   table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
     if (parse_para(tag_name(tag), ignored))
       top_para = std::max(top_para, tag->get_priority());
+    else if (is_list_tab(tag_name(tag)))
+      tabs.push_back(tag);
   });
-  if (std::any_of(used.begin(), used.end(), [&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+  if (std::any_of(tabs.begin(), tabs.end(), [&](const Glib::RefPtr<Gtk::TextTag>& tag) {
         return tag->get_priority() < top_para;
       })) {
-    for (const auto& tag : used)
+    for (const auto& tag : tabs)
       tag->set_priority(table->get_size() - 1);
     raise_headings();
   }
   tabbing_ = false;
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
+    size_t index, int start, int end, const std::vector<Glib::RefPtr<Gtk::TextTag>>& old)
+{
+  ++list_tabs_evaluated_;
+  const TabLine& line = tab_lines_[index];
+  const ListFormat list = clamp_list(line.format.list);
+  Glib::RefPtr<Gtk::TextTag> want;
+  if (list.kind != ListKind::None &&
+      (line.format.align == Align::Left || line.format.align == Align::Justify)) {
+    // The label in the paragraph's first font, as drawn.
+    const Run format = format_of(buffer_->get_iter_at_offset(start));
+    const std::string family = format.font.empty() ? "Sans" : format.font;
+    const int size = std::max(1, format.size);
+    const std::string text = list_label(list, line.number);
+    const std::string key = family + '\x1f' + std::to_string(size) + '\x1f' + text;
+    auto known = tab_widths_.find(key);
+    if (known == tab_widths_.end()) {
+      Pango::FontDescription desc;
+      desc.set_family(family);
+      desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
+      auto label = text_.create_pango_layout(text);
+      label->set_font_description(desc);
+      int width = 0;
+      int height = 0;
+      label->get_pixel_size(width, height);
+      known = tab_widths_.emplace(key, width).first;
+    }
+    const Indents indents = clamp_indents(line.format.indents);
+    const int text_twips = list_text_first(indents);
+    // As Word's tab after the label: the text stays put while the label
+    // ends before it, at least a pixel clear.
+    const int label_end =
+        margin_left() + indent_px(indents.left + indents.first) + known->second + 1;
+    if (label_end > margin_left() + indent_px(text_twips)) {
+      // The first half-inch stop from the left margin that clears it.
+      int stop = text_twips - ((text_twips % kDefaultTab) + kDefaultTab) % kDefaultTab;
+      while (margin_left() + indent_px(stop) < label_end && stop < 2 * kMaxIndent)
+        stop += kDefaultTab;
+      // Relative to the paragraph tag's left margin, as its indent is.
+      want = list_tab_tag(margin_left() + indent_px(stop) -
+                          std::max(0, margin_left() + indent_px(indents.left)));
+    }
+  }
+  const auto s = buffer_->get_iter_at_offset(start);
+  const auto e = buffer_->get_iter_at_offset(end);
+  for (const auto& tag : old) {
+    auto it = s;
+    if (tag != want && (s.has_tag(tag) || (it.forward_to_tag_toggle(tag) && it.compare(e) < 0)))
+      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start), buffer_->get_iter_at_offset(end));
+  }
+  if (want) {
+    auto it = s;
+    if (!s.has_tag(want) || (it.forward_to_tag_toggle(want) && it.compare(e) < 0))
+      buffer_->apply_tag(want, buffer_->get_iter_at_offset(start),
+                         buffer_->get_iter_at_offset(end));
+  }
+  return want;
 }
 
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
