@@ -164,6 +164,9 @@ void mode_names()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 63;
+
 int main()
 {
   page();
@@ -172,5 +175,5 @@ int main()
   page_widths();
   transitions();
   mode_names();
-  return suite_test::done("view");
+  return suite_test::done("view", kChecks);
 }

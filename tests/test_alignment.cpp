@@ -179,6 +179,9 @@ void markdown()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 71;
+
 int main()
 {
   model();
@@ -186,5 +189,5 @@ int main()
   rtf_round_trip();
   rtf_read();
   markdown();
-  return suite_test::done("alignment");
+  return suite_test::done("alignment", kChecks);
 }

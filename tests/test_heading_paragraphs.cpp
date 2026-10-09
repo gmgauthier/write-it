@@ -111,10 +111,13 @@ void markdown()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 33;
+
 int main()
 {
   rtf();
   rtf_read();
   markdown();
-  return suite_test::done("heading-paragraphs");
+  return suite_test::done("heading-paragraphs", kChecks);
 }

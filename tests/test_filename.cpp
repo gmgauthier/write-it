@@ -270,6 +270,9 @@ void folder_named_like_the_file()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 162;
+
 int main()
 {
   save_as_names();
@@ -280,5 +283,5 @@ int main()
   overwrite_order();
   no_local_path();
   folder_named_like_the_file();
-  return suite_test::done("filename");
+  return suite_test::done("filename", kChecks);
 }

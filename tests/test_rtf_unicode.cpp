@@ -375,6 +375,9 @@ void fuzz()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 245;
+
 int main()
 {
   scalar_values();
@@ -386,5 +389,5 @@ int main()
   control_characters();
   writer_controls();
   fuzz();
-  return suite_test::done("rtf-unicode");
+  return suite_test::done("rtf-unicode", kChecks);
 }
