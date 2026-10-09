@@ -10,7 +10,25 @@ Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.co
 
 ## Status (2026-10-09)
 
-**M1, with M2 under way.** Typing, font, size, bold, italic, underline, undo, find and replace, and RTF open and save are in this tree, on the M0 window. Recent files, plain-text import, and Markdown import and export cover headings, paragraphs, bold, and italic. From M2, paragraph indents (left, right, and first line or hanging) are in: Format → Paragraph… sets them, the ruler marks them, and RTF round-trips them as `\li`, `\ri`, and `\fi`. The dialog speaks the measurement units from Tools → Options…, inches (the default) or centimetres. The file keeps twips. Alignment is in too: Format → Align Left, Center, and Align Right, the matching toolbar toggles (which follow the caret), and the Paragraph dialog set it, and RTF writes `\qc` and `\qr` (left is the default and is not written). There is no justified, so `\qj` reads as left. View → Draft is in: the same text without the sheet, its shadow, or the gray pasteboard, wrapped at the page’s text width so lines break where they print, with indents and alignment as on the page. Page stays the default and the view that prints, and the choice is not saved: every launch opens in Page. Bulleted and numbered lists are in too: Format → Bullets and Format → Numbering, and the matching format-toolbar toggles, apply a list to the selected paragraphs or take it off. A list sits on the indents, half an inch per level with the label hanging a quarter inch. Tab and Shift+Tab at the start of an item change its level, Enter on an empty item and Backspace at the start of one end the list there. Numbers restart after a plain paragraph. RTF round-trips lists as `\listtable`, `\listoverridetable`, `\ls`, and `\ilvl`, with a `\pntext` label for readers without lists, and reads Word 6/95’s `\pn` as well. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
+**M1 is done. M2 (Paragraph) is under way.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
+
+| M2 item | State |
+|---|---|
+| Paragraph indents, and inches or centimetres in Tools → Options… | Merged |
+| Align left, center, and right | Merged |
+| Justify | Open, #22 |
+| Draft view | Merged |
+| Bulleted and numbered lists, numbering that keeps counting as in Word 97 | Merged |
+| List labels on centred and right-aligned items | Open, #12 |
+| List start values (`\levelstartat`) | Open, #27 |
+| Named styles | Open, #19 |
+| Size box shows the real size | Merged |
+| Status bar: `Page n of m` and the zoom cell | Merged |
+| The caret stays in view | Merged |
+| Toolbars overflow, so the window fits a 1024 px screen | Open, #16 |
+| Open files from the command line and the desktop file | Open, #17 |
+| An imported `.txt` or `.md` opens unmodified | Open, #23 |
+| Window size, maximised state, and zoom remembered | Draft, #25 |
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -47,6 +65,19 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - Borrow the LCOS palette. Do not use Bryan’s seal
 - Ship `.deb`, source tarball, and AppImage at M5
 - Tests headless and offline. Lint covers `src/` only
+
+### How changes land
+
+- When a design choice is in doubt, Word 97 decides. If Word 97 still leaves it open, ask Greg.
+- Where this file makes a claim, the app has to keep it. A mismatch is a bug, not a design question.
+- One PR per feature. The PR updates the lines of this file that describe that feature, in the section the feature belongs to. The Status section is updated separately.
+- Failing tests come first, in their own commit, then the fix.
+- Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
+- Bug Basher reviews every PR on GitHub with a comment that starts `Bug Basher: <commit>: approved.` and names the commit. The project has one GitHub account, so a comment review is the gate. Every new head, including a clean merge from `master`, needs a fresh review naming that commit.
+- Bug Basher does not change product code. Defects go back to the PR's owner as a task with the failing case.
+- `master` is protected: a PR merges only when it is up to date with `master` and CI passes on Devuan Excalibur, Debian trixie, and lint. Nobody bypasses it, and force-pushes to `master` are blocked. Branches are updated by merging `master` in, not by rebasing.
+- Every commit, PR description, and GitHub comment starts with its author's name, for example `Coordinator:` or `Scribe:`.
+- Each finished milestone gets an annotated tag (`m2`, `m3`, …) and no GitHub release. The only release is `v1.0.0`, with the `.deb`, the AppImage, and the source tarball.
 
 ## 4. Window
 
