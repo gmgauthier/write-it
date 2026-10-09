@@ -41,6 +41,7 @@ executable(
   'src/units.cpp',
   'src/view.cpp',
   'src/narrow_combo.cpp',
+  'src/page_text.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,
@@ -174,7 +175,66 @@ write_it_rtf_unicode_tests = executable(
   include_directories: inc,
   dependencies: dependency('glib-2.0'),
 )
+# The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 20 s
+# under ASan and UBSan, against meson's 30 s default, hence its own timeout.
+# `meson test --no-suite slow` leaves it out locally; CI runs everything.
+test(
+  'rtf-unicode-fuzz',
+  write_it_rtf_unicode_tests,
+  args: ['fuzz'],
+  timeout: 120,
+  suite: 'slow',
+)
 test('rtf-unicode', write_it_rtf_unicode_tests)
+
+write_it_page_count_tests = executable(
+  'write-it-page-count-tests',
+  'tests/test_page_count.cpp',
+  'src/view.cpp',
+  include_directories: inc,
+)
+test('page-count', write_it_page_count_tests)
+
+# The real window under a display: the status bar's page cell and zoom cell.
+write_it_status_bar_tests = executable(
+  'write-it-status-bar-tests',
+  'tests/test_status_bar.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/narrow_combo.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('status-bar', write_it_status_bar_tests, timeout: 120)
+
+# The real window under a display: View > Zoom and View > Page / Draft, and
+# the width GTK allocates and wraps at after each change.
+write_it_page_width_tests = executable(
+  'write-it-page-width-tests',
+  'tests/test_page_width.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/narrow_combo.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('page-width', write_it_page_width_tests, timeout: 120)
 
 # The real window under a display: it fits a 1024 px screen.
 write_it_window_width_tests = executable(
@@ -189,6 +249,7 @@ write_it_window_width_tests = executable(
   'src/rtf.cpp',
   'src/units.cpp',
   'src/view.cpp',
+  'src/page_text.cpp',
   'src/narrow_combo.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
