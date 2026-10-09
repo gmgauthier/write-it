@@ -8,10 +8,12 @@
 #include "check.hpp"
 #include "view.hpp"
 
+#include <vector>
+
 namespace {
 
-using writeit::ViewMode;
 using writeit::view_geometry;
+using writeit::ViewMode;
 
 const double kZooms[] = {0.5, 0.75, 1.0, 1.5, 2.0, 1.7333, 0.2222, 3.1};
 
@@ -83,6 +85,77 @@ void indents_scale()
   CHECK(writeit::twips_to_px(1440, 0.5) == 33);
 }
 
+// The widths the window lays out at each zoom, worked by hand from the M0
+// page: 540 px across at 100% with a 42 px margin either side.
+struct Expected {
+  int percent;
+  int page;
+  int wrap;
+};
+const Expected kExpected[] = {
+    {50, 270, 228}, {75, 405, 341}, {100, 540, 456}, {150, 810, 684}, {200, 1080, 912},
+};
+
+void page_widths()
+{
+  // Both views, every menu zoom: the page and the wrap scale with the zoom,
+  // down as well as up, and Draft wraps where Page does.
+  for (const auto& e : kExpected) {
+    const double z = e.percent / 100.0;
+    for (ViewMode mode : {ViewMode::Page, ViewMode::Draft}) {
+      const auto w = writeit::page_widths(mode, z);
+      CHECK(w.page == e.page);
+      CHECK(w.wrap == e.wrap);
+      // The wrap is what the margins leave of the page.
+      const auto g = view_geometry(mode, z);
+      CHECK(w.page == g.page_width);
+      CHECK(w.wrap == text_width(g));
+    }
+  }
+  // Half the zoom is half the wrap, give or take the rounding of a margin.
+  const auto full = writeit::page_widths(ViewMode::Draft, 1.0);
+  const auto half = writeit::page_widths(ViewMode::Draft, 0.5);
+  CHECK(half.wrap * 2 >= full.wrap - 2 && half.wrap * 2 <= full.wrap + 2);
+  CHECK(half.wrap < full.wrap);
+  CHECK(writeit::page_widths(ViewMode::Draft, 2.0).wrap > full.wrap);
+}
+
+void transitions()
+{
+  // The widths depend on the zoom and the view now, never on the way there.
+  // Every ordered pair of states, then the sequence SysAdmin found
+  // (Draft 200, Page 100, Draft 50) and its reverse.
+  struct State {
+    ViewMode mode;
+    int percent;
+  };
+  std::vector<State> states;
+  for (const auto& e : kExpected)
+    for (ViewMode mode : {ViewMode::Page, ViewMode::Draft})
+      states.push_back({mode, e.percent});
+  auto expected = [](int percent) {
+    for (const auto& e : kExpected)
+      if (e.percent == percent)
+        return e;
+    return Expected{};
+  };
+  for (const auto& from : states) {
+    for (const auto& to : states) {
+      (void)writeit::page_widths(from.mode, from.percent / 100.0);
+      const auto w = writeit::page_widths(to.mode, to.percent / 100.0);
+      CHECK(w.page == expected(to.percent).page);
+      CHECK(w.wrap == expected(to.percent).wrap);
+    }
+  }
+  const State sequence[] = {{ViewMode::Draft, 200}, {ViewMode::Page, 100},  {ViewMode::Draft, 50},
+                            {ViewMode::Page, 50},   {ViewMode::Draft, 200}, {ViewMode::Page, 100}};
+  for (const auto& s : sequence) {
+    const auto w = writeit::page_widths(s.mode, s.percent / 100.0);
+    CHECK(w.page == expected(s.percent).page);
+    CHECK(w.wrap == expected(s.percent).wrap);
+  }
+}
+
 void mode_names()
 {
   // The default, and the one View starts on every launch.
@@ -92,13 +165,15 @@ void mode_names()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 63;
+constexpr int kChecks = 318;
 
 int main()
 {
   page();
   draft();
   indents_scale();
+  page_widths();
+  transitions();
   mode_names();
   return suite_test::done("view", kChecks);
 }
