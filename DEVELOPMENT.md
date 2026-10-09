@@ -52,7 +52,7 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 
 One document, one window. The title is `Write-It - letter.rtf`. A dirty document adds a trailing `*`. A new document is `Write-It - Untitled`. An opened file is not dirty until it is edited, as in Word 97, whether it is RTF, Markdown, or plain text: `Write-It - notes.txt` has no `*`, and closing it asks nothing. A Markdown or text file is not RTF, so its Save is Save As, which offers the name with `.rtf` (`notes.rtf`) and leaves the original alone.
 
-Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized. The window remembers its size.
+Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized, at Fit width. The window remembers its size, whether it is maximized, and the zoom, Fit width included. The next launch restores them, no larger than the screen it opens on. A maximized window comes back maximized and restores to the size it had before. A missing, empty, or corrupt ini, or a size in it that is not one, opens as the first launch does.
 
 The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, the page is A4, 21 × 29.7 cm. The pasteboard scrolls up and down, and sideways when the page is wider than the window, to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top, and on the last line right to the bottom. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back.
 
@@ -121,7 +121,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 | Format Toolbar | Check. On by default |
 | Side by side | Check. On by default. The two toolbars share one row. Off stacks them, standard above format |
 | Status Bar | Check. On by default |
-| Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width |
+| Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width. Fit width is the default: the page fills the visible width and follows the window as it is resized. The choice is remembered |
 | Page / Draft | Radio. Page is the default |
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
@@ -158,7 +158,7 @@ Until M3 lays out real pages the page count is approximate: a page is the A4 she
 
 `~/.config/write-it/write-it.ini`
 
-Keys: `window-width`, `window-height`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`, `units` (`in` or `cm`; missing or anything else is `in`).
+Keys: `window-width`, `window-height`, `window-maximized`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom` (`50` through `200`, or `fit-width`; missing or anything else is `fit-width`), `units` (`in` or `cm`; missing or anything else is `in`).
 
 ## 5. Feature floor
 
@@ -218,7 +218,7 @@ The Meson tree, the gtkmm window, and `scripts/lint.sh`. No document on disk.
 - Menus in order: File, Edit, View, Insert, Format, Tools, Table, Help, with the mnemonics from the window section. Items are visible. Commands that need a document are insensitive. Save stays sensitive.
 - The standard toolbar and the format toolbar share one row. View → Side by side is on by default, and turning it off stacks them. The format toolbar runs through alignment, then the style combo, bullets, and numbering. App-specific controls are visible and wait for their milestone.
 - Ruler stub. Empty white page on the `#808080` pasteboard. Page view is the selected radio. Draft is present and waits for M2.
-- Title `Write-It - Untitled`. First launch asks for 960×700, and the window can be made narrow enough for a 1024 px screen. A toolbar too narrow for its controls ends in an overflow arrow. Its menu lists the controls that do not fit under the words the menus use: Bold, Italic, Underline, Bullets, and Numbering as check items, the alignments as radio items, the font, size, and style boxes as submenus of their entries, and the rest as commands. The ini remembers `window-width` and `window-height`.
+- Title `Write-It - Untitled`. The first launch opens at 960×700, at Fit width, and the window can be made narrow enough for a 1024 px screen. A toolbar too narrow for its controls ends in an overflow arrow. Its menu lists the controls that do not fit under the words the menus use: Bold, Italic, Underline, Bullets, and Numbering as check items, the alignments as radio items, the font, size, and style boxes as submenus of their entries, and the rest as commands. Later launches restore the user’s size, whether the window was maximized, and the zoom, from `window-width`, `window-height`, `window-maximized`, and `zoom` in the ini, no larger than the screen.
 - Status message, then `Page 1 of 1`, then the zoom. View → Zoom and the zoom cell share one list, including Fit width.
 - About Write-It: name, version, one sentence, the Unlicense, Close.
 - Close (Ctrl+W) and Exit (Ctrl+Q). The right-click menu starts with Cut, Copy, Paste.

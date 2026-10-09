@@ -90,6 +90,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_chrome();
   void apply_toolbar_row();
   void apply_page_size();
+  // apply_page_size() once the current layout is done.
+  void queue_page_size();
   void set_zoom(int zoom);
   // The text view sits on the page inside the pasteboard's scroller, so
   // GTK's own scroll-to-caret has nothing to scroll. These scroll the
@@ -238,6 +240,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void tell(const std::string& sentence);
 
   Settings settings_;
+  // The size, while not maximised, and the maximised state, saved on close.
+  WindowMemory window_memory_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
   bool suppress_zoom_ = false;
 
@@ -337,6 +341,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  // The idle that sizes the page again after a layout: to a new pasteboard
+  // size (Fit width, Draft) or to text that rewrapped to another height.
+  // One at a time, and gone with the window.
+  sigc::connection page_idle_;
+  // The text wants more height than the page gave it; the idle resizes.
+  bool grow_page_ = false;
   bool follow_caret_ = false;
   // The idle follow_caret() queues; one at a time, and gone with the window.
   sigc::connection caret_idle_;
