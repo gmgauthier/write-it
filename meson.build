@@ -38,6 +38,7 @@ executable(
   'src/document.cpp',
   'src/rtf.cpp',
   'src/units.cpp',
+  'src/filename.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,
@@ -99,3 +100,11 @@ write_it_units_tests = executable(
   include_directories: inc,
 )
 test('units', write_it_units_tests)
+
+write_it_filename_tests = executable(
+  'write-it-filename-tests',
+  'tests/test_filename.cpp',
+  'src/filename.cpp',
+  include_directories: inc,
+)
+test('filename', write_it_filename_tests)
