@@ -7,6 +7,12 @@
 #include "open_plan.hpp"
 #include "settings.hpp"
 
+#include <glib.h>
+#include <glib/gstdio.h>
+#include <glibmm/fileutils.h>
+#include <glibmm/miscutils.h>
+#include <unistd.h>
+
 #include <string>
 #include <vector>
 
@@ -116,7 +122,9 @@ void missing_files_last()
 {
   // Files that exist open first; missing ones come after, so their error
   // dialogs (modal, as from File > Open) do not hold up the others.
-  const auto exists = [](const std::string& path) { return path.find("missing") == std::string::npos; };
+  const auto exists = [](const std::string& path) {
+    return path.find("missing") == std::string::npos;
+  };
   auto plan = plan_open({"/d/missing.rtf", "/d/a.rtf", "", "/d/b.rtf"}, {kPristine}, exists);
   CHECK(plan.size() == 4);
   CHECK(is(plan, 0, OpenStep::LoadInto, 0, "/d/a.rtf"));
@@ -145,6 +153,57 @@ void imports_are_found_again()
   // Another file of the same name elsewhere is another file.
   plan = plan_open({"/e/n.txt"}, {notes});
   CHECK(is(plan, 0, OpenStep::LoadNew, -1, "/e/n.txt"));
+}
+
+// "Already open" is the file itself, not the name it was asked for by: a
+// symlink, a hard link, or a path through "." or ".." to an open file
+// brings its window forward. Real files, in a scratch folder.
+void same_file_by_identity()
+{
+  std::string dir = Glib::build_filename(Glib::get_tmp_dir(), "write-it-open-XXXXXX");
+  if (!g_mkdtemp(&dir[0])) {
+    CHECK(false);
+    return;
+  }
+  const std::string a = Glib::build_filename(dir, "a.rtf");
+  const std::string copy = Glib::build_filename(dir, "copy.rtf");
+  const std::string sym = Glib::build_filename(dir, "link.rtf");
+  const std::string hard = Glib::build_filename(dir, "hard.rtf");
+  const std::string sub = Glib::build_filename(dir, "sub");
+  const std::string notes = Glib::build_filename(dir, "notes.txt");
+  const std::string notes_link = Glib::build_filename(dir, "notes-link.txt");
+  Glib::file_set_contents(a, "{\\rtf1 A.}");
+  Glib::file_set_contents(copy, "{\\rtf1 A.}");
+  Glib::file_set_contents(notes, "Notes.\n");
+  g_mkdir(sub.c_str(), 0700);
+  const bool made = symlink("a.rtf", sym.c_str()) == 0 && link(a.c_str(), hard.c_str()) == 0 &&
+                    symlink("notes.txt", notes_link.c_str()) == 0;
+  CHECK(made);
+  const std::string dotted = dir + "/./a.rtf";
+  const std::string up = sub + "/../a.rtf";
+
+  const WindowState open_a{a, false};
+  for (const std::string& name : {sym, hard, dotted, up}) {
+    auto plan = plan_open({name}, {open_a});
+    CHECK(plan.size() == 1);
+    CHECK(is(plan, 0, OpenStep::Present, 0, name));
+  }
+  // Asked for under four names at once, it is opened once.
+  auto plan = plan_open({a, sym, hard, up}, {kPristine});
+  CHECK(plan.size() == 1);
+  CHECK(is(plan, 0, OpenStep::LoadInto, 0, a));
+  // An import is found by its file too.
+  plan = plan_open({notes_link}, {WindowState{"", false, notes}});
+  CHECK(plan.size() == 1);
+  CHECK(is(plan, 0, OpenStep::Present, 0, notes_link));
+  // A copy, the same bytes in another file, is another file.
+  plan = plan_open({copy}, {open_a});
+  CHECK(is(plan, 0, OpenStep::LoadNew, -1, copy));
+
+  for (const std::string& file : {sym, hard, notes_link, a, copy, notes})
+    g_remove(file.c_str());
+  g_rmdir(sub.c_str());
+  g_rmdir(dir.c_str());
 }
 
 void refusals_name_the_uri()
@@ -202,7 +261,7 @@ void recent_files()
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 60;
+constexpr int kChecks = 74;
 
 int main()
 {
@@ -212,6 +271,7 @@ int main()
   not_local();
   missing_files_last();
   imports_are_found_again();
+  same_file_by_identity();
   refusals_name_the_uri();
   messages();
   failed_windows_close();

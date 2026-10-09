@@ -269,6 +269,28 @@ write_it_caret_scroll_tests = executable(
 )
 test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)
 
+# The real application under a display: a file already open, asked for by a
+# symlink, a hard link or a ".." path, from Application::open or File > Open.
+write_it_open_identity_tests = executable(
+  'write-it-open-identity-tests',
+  'tests/test_open_identity.cpp',
+  'src/application.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/open_plan.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('open-identity', write_it_open_identity_tests, timeout: 60)
+
 # Launches the program with files, on its own Xvfb and private D-Bus; see the script.
 test(
   'smoke-open',
