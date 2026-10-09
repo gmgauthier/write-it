@@ -35,6 +35,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool on_delete_event(GdkEventAny* event) override;
 
  private:
+  // The window tests in tests/ drive the real window and read back what GTK
+  // made of it.
+  friend struct MainWindowProbe;
+
   struct Snapshot {
     Document doc;
     int offset = 0;
