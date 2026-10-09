@@ -102,6 +102,13 @@ std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs);
 // The label in front of an item: a bullet by level, or "1.", "a.", "i." by
 // level for a number. Empty for no list.
 std::string list_label(const ListFormat& list, int number);
+// Where a list item's label starts, in pixels, in the coordinates of the
+// arguments. Left-aligned items keep it at the first-line indent (`hang_x`,
+// left + first) as before. Centred and right-aligned text moves away from the
+// indent, so, as in Word, the label sits just before the first line's text
+// (`text_x`): a hang's width before it, or the label's width and `gap` when
+// the label is wider than the hang. Never left of 0.
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int hang_width, int gap);
 // Format > Bullets and Format > Numbering on the selected paragraphs. When
 // every one already has `kind` the list comes off; otherwise every one takes
 // it. A paragraph joining a list hangs its label in front of its text; one

@@ -349,6 +349,12 @@ bool operator==(const Document& a, const Document& b)
   return a.paragraphs == b.paragraphs;
 }
 
+int list_label_x(Align /*align*/, int hang_x, int /*text_x*/, int /*label_width*/,
+                 int /*hang_width*/, int /*gap*/)
+{
+  return hang_x;
+}
+
 Document blank_document(const std::string& font, int size)
 {
   (void)font;

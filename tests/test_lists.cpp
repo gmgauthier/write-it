@@ -815,6 +815,26 @@ void rtf_hostile()
   }
 }
 
+void label_position()
+{
+  using writeit::Align;
+  using writeit::list_label_x;
+  // Left-aligned: the label stays in the hang, wherever the text starts.
+  CHECK(list_label_x(Align::Left, 100, 124, 8, 24, 4) == 100);
+  CHECK(list_label_x(Align::Left, 100, 400, 40, 24, 4) == 100);
+  // Centred and right-aligned: the label moves with the text, a hang's width
+  // before the first character, not back at the left indent.
+  CHECK(list_label_x(Align::Center, 100, 400, 8, 24, 4) == 376);
+  CHECK(list_label_x(Align::Right, 100, 700, 8, 24, 4) == 676);
+  // A label wider than the hang ("viii.") ends `gap` before the text.
+  CHECK(list_label_x(Align::Center, 100, 400, 40, 24, 4) == 356);
+  CHECK(list_label_x(Align::Right, 100, 700, 40, 24, 4) == 656);
+  // Text pushed against the left edge cannot push the label off the page.
+  CHECK(list_label_x(Align::Center, 0, 10, 8, 24, 4) == 0);
+  // Hostile sizes: negative widths count as nothing.
+  CHECK(list_label_x(Align::Right, 100, 400, -50, -24, -4) == 400);
+}
+
 void markdown()
 {
   // Markdown lists wait until M4: a list item exports as its paragraph.
@@ -839,6 +859,7 @@ int main()
   rtf_round_trip();
   rtf_read();
   rtf_hostile();
+  label_position();
   markdown();
   return suite_test::done("lists");
 }
