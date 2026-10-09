@@ -3,6 +3,7 @@
 #pragma once
 
 #include "document.hpp"
+#include "narrow_combo.hpp"
 #include "page_text.hpp"
 #include "settings.hpp"
 #include "view.hpp"
@@ -218,11 +219,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Box toolbars_{Gtk::ORIENTATION_HORIZONTAL};
   Gtk::Toolbar standard_bar_;
   Gtk::Toolbar format_bar_;
-  Gtk::ComboBoxText font_combo_;
-  Gtk::ComboBoxText size_combo_;
+  NarrowCombo font_combo_{128};
+  NarrowCombo size_combo_{52};
   // What size_combo_ lists now (size_choices()).
   std::vector<int> size_choices_shown_;
-  Gtk::ComboBoxText style_combo_;
+  NarrowCombo style_combo_{110};
   Gtk::DrawingArea ruler_;
   Gtk::ScrolledWindow paste_;
   Gtk::Box board_{Gtk::ORIENTATION_VERTICAL};
@@ -266,6 +267,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
+  Gtk::MenuItem* justify_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
@@ -289,6 +291,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
+  Gtk::ToggleToolButton* justify_toggle_ = nullptr;
   Gtk::ToggleToolButton* bullets_toggle_ = nullptr;
   Gtk::ToggleToolButton* numbering_toggle_ = nullptr;
 
