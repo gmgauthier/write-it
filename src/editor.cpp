@@ -465,18 +465,18 @@ void MainWindow::open_document()
   open_path(dialog.get_filename(), fallback);
 }
 
-void MainWindow::open_path(const std::string& path, OpenKind fallback)
+bool MainWindow::open_path(const std::string& path, OpenKind fallback)
 {
   if (!Glib::file_test(path, Glib::FILE_TEST_EXISTS)) {
     tell("That file is missing.");
-    return;
+    return false;
   }
   std::string bytes;
   try {
     bytes = Glib::file_get_contents(path);
   } catch (const Glib::Error&) {
     tell("That file could not be opened.");
-    return;
+    return false;
   }
   const std::string ext = extension_of(path);
   OpenKind kind = fallback;
@@ -490,7 +490,7 @@ void MainWindow::open_path(const std::string& path, OpenKind fallback)
   if (kind == OpenKind::Rtf) {
     if (!rtf_import(bytes, doc)) {
       tell("That file could not be opened.");
-      return;
+      return false;
     }
   } else if (kind == OpenKind::Markdown) {
     doc = markdown_import(bytes, typing_.font, typing_.size);
@@ -498,8 +498,24 @@ void MainWindow::open_path(const std::string& path, OpenKind fallback)
     doc = plain_import(bytes, typing_.font, typing_.size);
   }
   if (!confirm_discard_or_save())
-    return;
+    return false;
   install_loaded(doc, path, kind == OpenKind::Rtf);
+  return true;
+}
+
+bool MainWindow::open_file(const std::string& path)
+{
+  return open_path(path, OpenKind::Rtf);
+}
+
+bool MainWindow::pristine() const
+{
+  return save_path_.empty() && save_point_ && !dirty();
+}
+
+void MainWindow::refuse_not_local()
+{
+  tell("Write-It can only open files on this computer.");
 }
 
 void MainWindow::install_loaded(const Document& doc, const std::string& path, bool keep_path)
@@ -625,13 +641,18 @@ bool MainWindow::confirm_discard_or_save()
 
 void MainWindow::remember_path(const std::string& path)
 {
-  auto& recent = settings_.recent;
-  recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
-  recent.insert(recent.begin(), path);
-  if (static_cast<int>(recent.size()) > settings_.recent_count)
-    recent.resize(static_cast<size_t>(settings_.recent_count));
+  // Other windows may have added files since this one read the ini.
+  reload_recent();
+  settings_.recent = push_recent(settings_.recent, path, settings_.recent_count);
   settings_.save();
   rebuild_recent();
+}
+
+void MainWindow::reload_recent()
+{
+  Settings disk;
+  disk.load();
+  settings_.recent = disk.recent;
 }
 
 void MainWindow::rebuild_recent()
@@ -2213,6 +2234,7 @@ void MainWindow::on_options()
       settings_.recent_count = count;
   } catch (const std::exception&) {
   }
+  reload_recent();
   if (static_cast<int>(settings_.recent.size()) > settings_.recent_count)
     settings_.recent.resize(static_cast<size_t>(settings_.recent_count));
   settings_.units = units_from_text(units->get_active_id().raw());

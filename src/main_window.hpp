@@ -31,6 +31,20 @@ class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
 
+  // For files handed to the program (see open_plan.hpp). open_file is
+  // File > Open's route: RTF, Markdown or plain text by extension, recent
+  // files, and the same error sentences. True when the file was loaded.
+  bool open_file(const std::string& path);
+  // Untitled, never edited: safe to load a file into without asking.
+  bool pristine() const;
+  // The RTF file this window saves to, or "".
+  const std::string& document_path() const
+  {
+    return save_path_;
+  }
+  // A file with no local path, such as an sftp:// URI that is not mounted.
+  void refuse_not_local();
+
  protected:
   bool on_delete_event(GdkEventAny* event) override;
 
@@ -68,13 +82,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void fill_font_combo(Gtk::ComboBoxText& combo, const std::string& active);
   bool new_document(bool prompt);
   void open_document();
-  void open_path(const std::string& path, OpenKind fallback);
+  bool open_path(const std::string& path, OpenKind fallback);
   bool save_document();
   bool save_document_as();
   void export_markdown();
   bool confirm_discard_or_save();
   void close_document();
   void remember_path(const std::string& path);
+  // Takes Open Recent from the ini: every window writes the whole file, so
+  // a window reads the list fresh before it writes it.
+  void reload_recent();
   void rebuild_recent();
   void install_loaded(const Document& doc, const std::string& path, bool keep_path);
   bool write_rtf(const std::string& path);

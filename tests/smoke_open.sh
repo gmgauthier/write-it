@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Unlicense
 #
 # Launches the built write-it with files on the command line, as a desktop
-# file's %F or a terminal would, and checks what opens. Needs an X display
-# (CI runs the suite under xvfb-run), xwininfo, and dbus-run-session: every
-# case runs on a private session bus, so GApplication's single instance is
-# real but shared with nothing else on the machine.
+# file's %F or a terminal would, and checks what opens. Everything runs on
+# this script's own Xvfb and its own private session bus, so GApplication's
+# single instance is real but shared with nothing else on the machine, and
+# no other program's windows are counted. Needs Xvfb, xwininfo and
+# dbus-run-session.
 #
 # Exits 77 (skipped) without those tools, unless WRITE_IT_SMOKE_REQUIRED=1.
 
@@ -20,11 +21,19 @@ skip() {
   exit 77
 }
 
-[ -n "${DISPLAY:-}" ] || skip "no DISPLAY"
+command -v Xvfb >/dev/null || skip "no Xvfb"
 command -v xwininfo >/dev/null || skip "no xwininfo (x11-utils)"
 command -v dbus-run-session >/dev/null || skip "no dbus-run-session (dbus-daemon)"
-if [ -z "${WRITE_IT_SMOKE_BUS:-}" ]; then
-  WRITE_IT_SMOKE_BUS=1 exec dbus-run-session -- "$0" "$@"
+# Always on a private session bus: a launch on a shared bus would hand its
+# files to any Write-It already running there, someone else's included.
+if [ -z "${WRITE_IT_SMOKE_OUTER_BUS+set}" ]; then
+  export WRITE_IT_SMOKE_OUTER_BUS="${DBUS_SESSION_BUS_ADDRESS:-none}"
+  exec dbus-run-session -- "$0" "$@"
+fi
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] ||
+  [ "$DBUS_SESSION_BUS_ADDRESS" = "$WRITE_IT_SMOKE_OUTER_BUS" ]; then
+  echo "smoke-open: not on a private session bus; refusing to launch write-it"
+  exit 1
 fi
 
 WORK=$(mktemp -d /tmp/write-it-smoke-XXXXXX)
@@ -33,8 +42,25 @@ mkdir -p "$DOCS"
 failures=0
 pids=()
 
+# Our own X server. -displayfd has Xvfb choose a free display number itself,
+# so two runs at once never share one.
+Xvfb -displayfd 9 -screen 0 1280x900x24 -nolisten tcp 9>"$WORK/display" >/dev/null 2>&1 &
+XVFB=$!
+for _ in $(seq 100); do
+  [ -s "$WORK/display" ] && break
+  sleep 0.1
+done
+if [ ! -s "$WORK/display" ]; then
+  echo "smoke-open: Xvfb did not start"
+  kill "$XVFB" 2>/dev/null
+  rm -rf "$WORK"
+  exit 1
+fi
+export DISPLAY=":$(head -n 1 "$WORK/display")"
+
 fail() {
   echo "FAIL: $1"
+  echo "  windows now: $(titles | tr '\n' '|')"
   failures=$((failures + 1))
 }
 
@@ -42,6 +68,7 @@ cleanup() {
   for pid in "${pids[@]}"; do
     kill "$pid" 2>/dev/null
   done
+  kill "$XVFB" 2>/dev/null
   wait 2>/dev/null
   rm -rf "$WORK"
 }
@@ -130,6 +157,9 @@ no_refusal "$LOG" several
 stop
 
 # 3. A second launch hands its file to the running instance and exits 0.
+# The first instance is started here, on this script's private bus, so the
+# second launch can only reach it; c.rtf's title appearing on this display
+# proves it did.
 start second
 wait_title "Write-It - Untitled" || fail "second: no first window"
 (cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/second/config" GTK_A11Y=none timeout 20 \
@@ -145,7 +175,8 @@ has_title "Write-It - Untitled" && fail "second: the empty Untitled was not reus
   "$BIN" notes.md) >"$WORK/second/remote2.log" 2>&1
 status=$?
 [ "$status" = 0 ] || fail "second: the third launch exited $status"
-wait_title "Write-It - notes.md" || fail "second: notes.md did not open"
+# An import is an unsaved document, as from File > Open: hence the " *".
+wait_title "Write-It - notes.md *" || fail "second: notes.md did not open"
 has_title "Write-It - c.rtf" || fail "second: c.rtf's window was replaced"
 # Asking again for a file already open brings it forward: no second window.
 (cd "$DOCS" && env XDG_CONFIG_HOME="$WORK/second/config" GTK_A11Y=none timeout 20 \
@@ -157,7 +188,7 @@ stop
 
 # 4. Plain text imports, as File > Open does.
 start plain plain.txt
-wait_title "Write-It - plain.txt" || fail "plain: plain.txt did not open"
+wait_title "Write-It - plain.txt *" || fail "plain: plain.txt did not open"
 stop
 
 # 5. A missing file: the program stays up with one usable window and the
@@ -171,11 +202,12 @@ alive || fail "missing: the program exited"
 no_refusal "$LOG" missing
 stop
 
-# 6. A missing file beside a good one: only the good one's window stays.
+# 6. A missing file before a good one: the good one opens first, then the
+# error. (The missing file's window closes when the error is dismissed,
+# which a headless run cannot do.)
 start mixed "$DOCS/missing.rtf" "$DOCS/a.rtf"
 wait_title "Write-It - a.rtf" || fail "mixed: a.rtf did not open"
-# The error dialog is up; the missing file's window closes once it is
-# dismissed, which a headless run cannot do, so only check nothing else.
+wait_title "Write-It" || fail "mixed: no error dialog"
 alive || fail "mixed: the program exited"
 stop
 

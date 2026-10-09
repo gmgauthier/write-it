@@ -2,6 +2,8 @@
 
 #include "settings.hpp"
 
+#include <algorithm>
+
 #include <glib.h>
 #include <glibmm/fileutils.h>
 #include <glibmm/keyfile.h>
@@ -171,8 +173,13 @@ void Settings::save_to(const std::string& path) const
   }
 }
 
-std::vector<std::string> push_recent(std::vector<std::string> recent, const std::string&, int)
+std::vector<std::string> push_recent(std::vector<std::string> recent, const std::string& path,
+                                     int count)
 {
+  recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
+  recent.insert(recent.begin(), path);
+  if (count >= 0 && static_cast<int>(recent.size()) > count)
+    recent.resize(static_cast<size_t>(count));
   return recent;
 }
 

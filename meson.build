@@ -149,7 +149,7 @@ write_it_rtf_unicode_tests = executable(
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
 
-# Launches the program with files under the suite's X display; see the script.
+# Launches the program with files, on its own Xvfb and private D-Bus; see the script.
 test(
   'smoke-open',
   find_program('tests/smoke_open.sh'),

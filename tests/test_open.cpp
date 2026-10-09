@@ -100,15 +100,33 @@ void documents_are_never_replaced()
 void not_local()
 {
   // No local path (an sftp:// or http:// URI without a mount): refused, and
-  // it does not use up the pristine window.
+  // it does not use up the pristine window. It comes after the files that
+  // can be opened.
   auto plan = plan_open({"", "/d/a.rtf"}, {kPristine});
   CHECK(plan.size() == 2);
-  CHECK(step_is(plan, 0, OpenStep::RefuseNotLocal));
-  CHECK(is(plan, 1, OpenStep::LoadInto, 0, "/d/a.rtf"));
+  CHECK(is(plan, 0, OpenStep::LoadInto, 0, "/d/a.rtf"));
+  CHECK(step_is(plan, 1, OpenStep::RefuseNotLocal));
 
   plan = plan_open({""}, {});
   CHECK(plan.size() == 1);
   CHECK(step_is(plan, 0, OpenStep::RefuseNotLocal));
+}
+
+void missing_files_last()
+{
+  // Files that exist open first; missing ones come after, so their error
+  // dialogs (modal, as from File > Open) do not hold up the others.
+  const auto exists = [](const std::string& path) { return path.find("missing") == std::string::npos; };
+  auto plan = plan_open({"/d/missing.rtf", "/d/a.rtf", "", "/d/b.rtf"}, {kPristine}, exists);
+  CHECK(plan.size() == 4);
+  CHECK(is(plan, 0, OpenStep::LoadInto, 0, "/d/a.rtf"));
+  CHECK(is(plan, 1, OpenStep::LoadNew, -1, "/d/b.rtf"));
+  CHECK(step_is(plan, 2, OpenStep::RefuseNotLocal));
+  CHECK(is(plan, 3, OpenStep::LoadNew, -1, "/d/missing.rtf"));
+  // Only a missing file: it may take the pristine window, which stays.
+  plan = plan_open({"/d/missing.rtf"}, {kPristine}, exists);
+  CHECK(plan.size() == 1);
+  CHECK(is(plan, 0, OpenStep::LoadInto, 0, "/d/missing.rtf"));
 }
 
 void failed_windows_close()
@@ -149,6 +167,7 @@ int main()
   pristine_window_is_reused();
   documents_are_never_replaced();
   not_local();
+  missing_files_last();
   failed_windows_close();
   recent_files();
   return suite_test::done("open");

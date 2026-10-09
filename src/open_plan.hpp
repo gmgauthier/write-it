@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -31,12 +32,17 @@ struct OpenAction {
   std::string path;
 };
 
-// One action per requested file, in order. `paths` are local paths from
+// One action per requested file. `paths` are local paths from
 // Gio::File::get_path(), "" for a file with none. A file already open, or
-// asked for twice, is presented rather than loaded again. The first file may
-// take one pristine window; the others get new windows.
-std::vector<OpenAction> plan_open(const std::vector<std::string>& paths,
-                                  const std::vector<WindowState>& windows);
+// asked for twice, is presented rather than loaded again. Each pristine
+// window may take one file; the others get new windows. Files that exist
+// come first, in order, then refusals, then missing files, so the error
+// dialogs come after everything that could be opened.
+std::vector<OpenAction> plan_open(
+    const std::vector<std::string>& paths, const std::vector<WindowState>& windows,
+    const std::function<bool(const std::string&)>& exists = [](const std::string&) {
+      return true;
+    });
 
 // After the actions run: for each window created for them, in order,
 // whether it failed to load (missing, unreadable, not a document) and so

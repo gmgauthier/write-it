@@ -70,6 +70,7 @@ bool MainWindow::on_delete_event(GdkEventAny* event)
   if (get_width() > 0 && get_height() > 0) {
     settings_.window_width = get_width();
     settings_.window_height = get_height();
+    reload_recent();
     settings_.save();
   }
   return Gtk::ApplicationWindow::on_delete_event(event);
@@ -142,21 +143,25 @@ void MainWindow::build_menus()
   standard->signal_toggled().connect([this, standard] {
     settings_.show_standard_toolbar = standard->get_active();
     standard_bar_.set_visible(settings_.show_standard_toolbar);
+    reload_recent();
     settings_.save();
   });
   format->signal_toggled().connect([this, format] {
     settings_.show_format_toolbar = format->get_active();
     format_bar_.set_visible(settings_.show_format_toolbar);
+    reload_recent();
     settings_.save();
   });
   side->signal_toggled().connect([this, side] {
     settings_.toolbars_side_by_side = side->get_active();
     apply_toolbar_row();
+    reload_recent();
     settings_.save();
   });
   status->signal_toggled().connect([this, status] {
     settings_.show_statusbar = status->get_active();
     status_.set_visible(settings_.show_statusbar);
+    reload_recent();
     settings_.save();
   });
   view->append(*standard);
@@ -478,6 +483,7 @@ void MainWindow::set_zoom(int zoom)
   suppress_zoom_ = false;
   zoom_label_.set_text(zoom_label(zoom));
   apply_page_size();
+  reload_recent();
   settings_.save();
 }
 
