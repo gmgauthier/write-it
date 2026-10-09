@@ -107,7 +107,7 @@ void export_names()
 
 void idempotent()
 {
-  const std::vector<std::string> names = {"zout",     "zout.rtf.rtf", "zout.RTF", "zout.txt",
+  const std::vector<std::string> names = {"zout",      "zout.rtf.rtf", "zout.RTF", "zout.txt",
                                           "my.report", "zout.",        ".rtf",     "/tmp/a.b/c"};
   for (const auto& name : names) {
     CHECK(rtf(rtf(name)) == rtf(name));

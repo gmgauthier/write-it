@@ -167,6 +167,15 @@ void builtins()
 
 void applying()
 {
+  // Runs the style makes alike become one run, as a reader would read them
+  // (found by fuzzing).
+  {
+    Document alike = writeit::blank_document("Sans", 11);
+    alike.paragraphs[0].runs = {run("plain "), run("bold", "Sans", 11, true)};
+    CHECK(writeit::apply_style(alike, 0, 0, "Heading 4"));
+    CHECK(alike.paragraphs[0].runs.size() == 1 &&
+          alike.paragraphs[0].runs[0].text == "plain bold" && alike.paragraphs[0].runs[0].bold);
+  }
   Document doc;
   doc.styles = writeit::builtin_styles("Sans", 11);
   Paragraph p = para("plain ");
@@ -825,6 +834,12 @@ void m1_files()
       import(std::string(kHead) + "{\\stylesheet{Normal;}}\\pard\\outlinelevel0 T\\par}");
   CHECK(!own.paragraphs.empty() && own.paragraphs[0].style == "Normal" &&
         own.paragraphs[0].heading == 1);
+  // ...and stays so: it is written with a sheet, even the default one, so
+  // reading it back does not take it for an M1 file (found by fuzzing).
+  const Document own_default =
+      import(std::string(kHead) + "{\\stylesheet}\\pard\\outlinelevel0 T\\par}");
+  CHECK(!own_default.paragraphs.empty() && own_default.paragraphs[0].style == "Normal");
+  CHECK(import(writeit::rtf_export(own_default)) == own_default);
 }
 
 void markdown()

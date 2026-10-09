@@ -218,6 +218,15 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
 {
   for (Run& run : paragraph.runs)
     restyle_run(run, from, to);
+  // Runs the style made alike are one run, as a reader would read them.
+  std::vector<Run> merged;
+  for (Run& run : paragraph.runs) {
+    if (!merged.empty() && same_format(merged.back(), run))
+      merged.back().text += run.text;
+    else
+      merged.push_back(std::move(run));
+  }
+  paragraph.runs = std::move(merged);
   if (paragraph.list.kind == ListKind::None) {
     restyle_indents(paragraph.indents, from.indents, to.indents);
     paragraph.indents = clamp_indents(paragraph.indents);
@@ -785,6 +794,23 @@ void adopt_sheet(Document& doc, const std::string& font, int size)
     }
   }
   doc.styles = builtin_styles(chosen_font, chosen_size);
+}
+
+void adopt_heading_styles(Document& doc, const std::string& font, int size)
+{
+  if (!doc.styles.empty())
+    return;
+  const bool any = std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(),
+                               [](const Paragraph& p) { return p.heading >= 1 && p.heading <= 6; });
+  if (!any)
+    return;
+  adopt_sheet(doc, font, size);
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    const Paragraph& paragraph = doc.paragraphs[i];
+    if (paragraph.heading < 1 || paragraph.heading > 6 || paragraph.style != kNormalStyle)
+      continue;
+    apply_style(doc, i, i, "Heading " + std::to_string(paragraph.heading));
+  }
 }
 
 Document blank_document(const std::string& font, int size)

@@ -137,6 +137,8 @@ void rtf_round_trip()
   body.runs.push_back(bold);
   mixed.paragraphs.push_back(heading);
   mixed.paragraphs.push_back(body);
+  // The heading in its Heading style, as since named styles.
+  writeit::adopt_heading_styles(mixed, "Sans", 11);
   CHECK(import(writeit::rtf_export(mixed)) == mixed);
 
   // The ceiling round-trips.
@@ -260,8 +262,8 @@ writeit::Indents indents(int left, int right, int first)
 
 void dialog_validation()
 {
-  using writeit::Units;
   using writeit::indents_fit;
+  using writeit::Units;
   // Boundary: hanging exactly to the margin is fine, one twip past is not.
   CHECK(indents_fit(indents(720, 0, -720)));
   CHECK(!indents_fit(indents(720, 0, -721)));

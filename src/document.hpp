@@ -196,6 +196,12 @@ bool add_style(Document& doc, const Style& style);
 // of most of its text (font and size when it has none). The editor does this
 // when such a document first takes a style.
 void adopt_sheet(Document& doc, const std::string& font, int size);
+// Headings from before styles (M1 wrote \\outlinelevel on body-size text and
+// showed it scaled): a document without a sheet whose paragraphs have
+// outline levels adopts the built-in sheet and gives each heading paragraph
+// in Normal its Heading 1-6 style, so headings keep their heading size. A
+// document with a sheet, or without headings, is left alone.
+void adopt_heading_styles(Document& doc, const std::string& font, int size);
 
 Document blank_document(const std::string& font, int size);
 Document plain_import(const std::string& text, const std::string& font, int size);

@@ -410,6 +410,9 @@ class Reader {
       resolve_styles();
     finish_paragraph(false);
     merge(doc);
+    // A file from before styles: its headings take Heading 1-6.
+    if (!saw_sheet_)
+      adopt_heading_styles(doc, font_name(0), 11);
     if (doc.paragraphs.empty())
       doc.paragraphs.push_back(Paragraph{});
     return true;
@@ -1420,6 +1423,11 @@ std::string rtf_export(const Document& doc)
     const std::string& name = doc.paragraphs[i].style;
     const Style* style = name == kNormalStyle ? nullptr : find_style(given, name);
     if (style != nullptr && style->name != kNormalStyle)
+      any_style = true;
+    // A heading in Normal needs the sheet too: read without one, it would be
+    // taken for an M1 heading and given its Heading style.
+    const int heading = doc.paragraphs[i].heading;
+    if (heading >= 1 && heading <= 6 && (style == nullptr || style->name == kNormalStyle))
       any_style = true;
   }
   const std::vector<Style> sheet = any_style ? complete_sheet(given) : std::vector<Style>{};

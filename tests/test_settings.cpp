@@ -26,7 +26,7 @@ int main()
   const std::string path = temp_ini();
   CHECK(!path.empty());
   if (path.empty())
-    // View > Page / Draft is not a setting: the Config key list has no view
+  // View > Page / Draft is not a setting: the Config key list has no view
   // key, so every launch opens in Page, the default. Saving writes none.
   {
     writeit::Settings plain;

@@ -98,6 +98,8 @@ void rtf_round_trip()
   heading.heading = 2;
   doc.paragraphs.push_back(heading);
   doc.paragraphs.push_back(para("End", Align::Right));
+  // The heading in its Heading style, as since named styles.
+  writeit::adopt_heading_styles(doc, "Sans", 11);
   writeit::Document back;
   CHECK(writeit::rtf_import(writeit::rtf_export(doc), back));
   CHECK(back == doc);
@@ -169,12 +171,11 @@ void markdown()
   // Markdown has no alignment; export drops it and does not fail.
   writeit::Document doc;
   doc.paragraphs.push_back(para("Centre", Align::Center));
-  CHECK(writeit::markdown_export(doc) == writeit::markdown_export(
-                                             [] {
-                                               writeit::Document plain;
-                                               plain.paragraphs.push_back(para("Centre", Align::Left));
-                                               return plain;
-                                             }()));
+  CHECK(writeit::markdown_export(doc) == writeit::markdown_export([] {
+          writeit::Document plain;
+          plain.paragraphs.push_back(para("Centre", Align::Left));
+          return plain;
+        }()));
 }
 
 }  // namespace
