@@ -289,7 +289,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 173;
+constexpr int kChecks = 179;
 
 int main(int argc, char* argv[])
 {
@@ -309,11 +309,39 @@ int main(int argc, char* argv[])
   Glib::file_set_contents(letter, long_letter());
   const auto ctrl = GDK_CONTROL_MASK;
 
+  // A first launch is at Fit width. The caret stays in view there, and when
+  // a zoom takes the page from Fit width to 200% and back.
   {
     writeit::MainWindow window;
     window.show();
     settle();
-    // A first launch is at Fit width; what follows is written at 100%.
+    MainWindowProbe::open(window, letter);
+    settle();
+    MainWindowProbe::text(window).grab_focus();
+    settle();
+    CHECK(caret_visible(window, "Fit width open"));
+    key(window, GDK_KEY_End, ctrl);
+    CHECK(caret_visible(window, "Fit width Ctrl+End"));
+    MainWindowProbe::zoom(window, 200);
+    settle();
+    CHECK(caret_visible(window, "Fit width to 200% at the end"));
+    MainWindowProbe::zoom(window, 0);
+    settle();
+    CHECK(caret_visible(window, "200% to Fit width at the end"));
+    key(window, GDK_KEY_Home, ctrl);
+    CHECK(caret_visible(window, "Fit width Ctrl+Home"));
+    MainWindowProbe::zoom(window, 200);
+    settle();
+    CHECK(caret_visible(window, "Fit width to 200% at the top"));
+    window.hide();
+    settle();
+  }
+
+  // The rest is written at 100%, the zoom it sets first.
+  {
+    writeit::MainWindow window;
+    window.show();
+    settle();
     MainWindowProbe::zoom(window, 100);
     settle();
     MainWindowProbe::open(window, letter);

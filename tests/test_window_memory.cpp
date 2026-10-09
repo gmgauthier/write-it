@@ -5,7 +5,7 @@
 // setting, is 960 px wide at Fit width, and Fit width follows the window as
 // it is resized. Closing the window saves its size and zoom (Fit width
 // included), the next launch restores them, and a saved size larger than the
-// screen is clamped to it.
+// screen is clamped to it. A corrupt, empty or missing ini is a first launch.
 //
 // Maximising needs a window manager, which xvfb-run does not start; what the
 // window remembers of a maximised state is covered by the settings suite
@@ -137,7 +137,7 @@ std::string ini()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 26;
+constexpr int kChecks = 38;
 
 int main(int argc, char* argv[])
 {
@@ -225,6 +225,26 @@ int main(int argc, char* argv[])
     writeit::MainWindow window;
     window.show();
     settle();
+    Gtk::RadioMenuItem* fit = zoom_item(window, "Fit width");
+    CHECK(fit && fit->get_active());
+    CHECK(fits_width(window));
+    window.close();
+    settle();
+  }
+
+  // A corrupt or empty ini, or one with none of the window's keys, opens as
+  // the first launch does: 960 by 700 at Fit width.
+  for (const char* text :
+       {"\x01\x02 not an ini [ at all\n", "",
+        "[write-it]\nwindow-width=wide\nwindow-height=-1\nzoom=big\n", "[write-it]\nunits=cm\n"}) {
+    Glib::file_set_contents(ini(), text);
+    writeit::MainWindow window;
+    window.show();
+    settle();
+    const std::string size = size_of(window);
+    if (size != "960x700")
+      std::cerr << "corrupt ini: " << size << "\n";
+    CHECK(size == "960x700");
     Gtk::RadioMenuItem* fit = zoom_item(window, "Fit width");
     CHECK(fit && fit->get_active());
     CHECK(fits_width(window));

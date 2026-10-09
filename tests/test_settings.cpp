@@ -6,6 +6,7 @@
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -20,7 +21,7 @@ std::string temp_ini()
 }
 
 // Exactly the checks this suite runs on a working temp directory.
-constexpr int kChecks = 79;
+constexpr int kChecks = 89;
 
 }  // namespace
 
@@ -151,6 +152,37 @@ int main()
   CHECK(!maximized_after("window-maximized=false"));
   CHECK(!maximized_after("window-maximized=perhaps"));
   CHECK(!maximized_after("window-width=900"));
+
+  // A corrupt ini, or a size that is not one, is the first launch's: 960 by
+  // 700, Fit width, not maximised.
+  auto first_launch = [](const writeit::Settings& settings) {
+    return settings.window_width == 960 && settings.window_height == 700 && settings.zoom == 0 &&
+           !settings.window_maximized;
+  };
+  auto after = [&](const std::string& text) {
+    Glib::file_set_contents(path, text);
+    writeit::Settings settings;
+    settings.load_from(path);
+    return settings;
+  };
+  CHECK(first_launch(after("")));
+  CHECK(first_launch(after("this is not an ini file\n\x01\x02\n")));
+  CHECK(first_launch(after("[write-it\nwindow-width=1200\nzoom=150\n")));
+  CHECK(first_launch(after("window-width=1200\nzoom=150\n")));
+  CHECK(first_launch(after("[other]\nwindow-width=1200\nzoom=150\n")));
+  CHECK(
+      first_launch(after("[write-it]\nwindow-width=wide\nwindow-height=tall\nzoom=big\n"
+                         "window-maximized=perhaps\n")));
+  CHECK(first_launch(after("[write-it]\nwindow-width=-5\nwindow-height=0\n")));
+  CHECK(first_launch(after("[write-it]\nwindow-width=100\nwindow-height=100\n")));
+  CHECK(first_launch(after("[write-it]\nwindow-width=99999999999\nwindow-height=1e9\n")));
+  // A missing ini, too.
+  std::remove(path.c_str());
+  {
+    writeit::Settings settings;
+    settings.load_from(path);
+    CHECK(first_launch(settings));
+  }
 
   // The saved size, clamped to the current screen's work area.
   {
