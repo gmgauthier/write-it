@@ -500,7 +500,19 @@ void MainWindow::scroll_to_caret()
     if (want != value)
       adj->set_value(want);
   };
-  reveal(paste_.get_vadjustment(), y, rect.get_height());
+  // On the first line, or the last, all the way: the page's edge and the
+  // gray beyond it show, not a margin short of them.
+  Gdk::Rectangle first;
+  Gdk::Rectangle last;
+  text_.get_iter_location(buffer_->begin(), first);
+  text_.get_iter_location(buffer_->end(), last);
+  auto v = paste_.get_vadjustment();
+  if (rect.get_y() <= first.get_y())
+    v->set_value(v->get_lower());
+  else if (rect.get_y() >= last.get_y())
+    v->set_value(std::max(v->get_lower(), v->get_upper() - v->get_page_size()));
+  else
+    reveal(v, y, rect.get_height());
   reveal(paste_.get_hadjustment(), x, std::max(1, rect.get_width()));
 }
 
