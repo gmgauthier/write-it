@@ -35,6 +35,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool on_delete_event(GdkEventAny* event) override;
 
  private:
+  // tests/test_page_width.cpp drives the real window through View and reads
+  // back what GTK allocated.
+  friend struct MainWindowProbe;
+
   struct Snapshot {
     Document doc;
     int offset = 0;

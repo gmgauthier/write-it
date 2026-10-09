@@ -27,6 +27,19 @@ struct ViewGeometry {
 
 ViewGeometry view_geometry(ViewMode mode, double zoom);
 
+// View > Zoom and the status bar's zoom cell, in percent; 0 is Fit width.
+constexpr int kZoomChoices[] = {50, 75, 100, 150, 200, 0};
+
+// The two widths the window lays out at a zoom and view: the white area
+// across, and the line width text wraps at inside it. Both follow the zoom
+// in either direction and depend on nothing else, whatever came before.
+struct PageWidths {
+  int page = 0;
+  int wrap = 0;
+};
+
+PageWidths page_widths(ViewMode mode, double zoom);
+
 // Twips to screen pixels at a zoom, on the screen page's scale.
 int twips_to_px(int twips, double zoom);
 

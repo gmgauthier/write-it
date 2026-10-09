@@ -40,6 +40,15 @@ ViewGeometry view_geometry(ViewMode mode, double zoom)
   return draft;
 }
 
+PageWidths page_widths(ViewMode mode, double zoom)
+{
+  const ViewGeometry g = view_geometry(mode, zoom);
+  PageWidths widths;
+  widths.page = g.page_width;
+  widths.wrap = std::max(1, g.page_width - g.margin_left - g.margin_right);
+  return widths;
+}
+
 int twips_to_px(int twips, double zoom)
 {
   const double px = static_cast<double>(twips) * kScreenPageWidth * zoom / kScreenPageTwips;

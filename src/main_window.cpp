@@ -12,7 +12,7 @@
 namespace writeit {
 namespace {
 
-constexpr int kZooms[] = {50, 75, 100, 150, 200, 0};
+constexpr const int (&kZooms)[6] = kZoomChoices;
 
 Glib::ustring zoom_label(int zoom)
 {
