@@ -14,6 +14,7 @@
 #include <functional>
 #include <utility>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -264,8 +265,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   // only, through "list-tab" tags the document never sees; brought up to
   // date in an idle after edits, formatting, zoom, and the view.
   void queue_list_tabs();
+  // Notes that [start, end) changed, for the next update_list_tabs().
+  void note_list_tabs(const Gtk::TextIter& start, const Gtk::TextIter& end);
   Glib::RefPtr<Gtk::TextTag> list_tab_tag(int indent);
   void update_list_tabs();
+  // Tags paragraph `index` of tab_lines_, from buffer offset `start` to
+  // `end`, among the existing list-tab tags `old`.
+  Glib::RefPtr<Gtk::TextTag> retab_paragraph(size_t index, int start, int end,
+                                             const std::vector<Glib::RefPtr<Gtk::TextTag>>& old);
   void sync_list_controls();
 
   void build_find();
@@ -395,6 +402,28 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The list-tab idle, likewise; tabbing_ while it retags.
   sigc::connection list_tabs_idle_;
   bool tabbing_ = false;
+  // Paragraphs update_list_tabs() has looked at, for the tests.
+  long list_tabs_evaluated_ = 0;
+  // Calls of update_list_tabs() and update_list_shifts(), for the tests:
+  // none while nothing changes.
+  long list_updates_ = 0;
+  // What update_list_tabs() last saw of each paragraph: its format and its
+  // list number. Typing changes neither, so only the typed-in paragraphs
+  // are looked at again; a new or removed paragraph, or a paragraph format
+  // change, renumbers (a walk of the paragraph tags, not a capture), and
+  // zoom, the view, the margins or a font change look at every paragraph.
+  struct TabLine {
+    ParaFormat format;
+    int number = 0;
+  };
+  std::vector<TabLine> tab_lines_;
+  bool tabs_full_ = true;
+  bool tabs_renumber_ = false;
+  bool tabs_noted_ = false;
+  Glib::RefPtr<Gtk::TextMark> tabs_from_;
+  Glib::RefPtr<Gtk::TextMark> tabs_to_;
+  // Label widths by font, size and text, at the current zoom.
+  std::map<std::string, int> tab_widths_;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;
