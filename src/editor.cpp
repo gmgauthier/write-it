@@ -3,6 +3,7 @@
 #include "main_window.hpp"
 
 #include "filename.hpp"
+#include "open_plan.hpp"
 
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
@@ -295,7 +296,7 @@ bool one_insertion(const Document& before, const Document& after, Insertion& out
 
 }  // namespace
 
-void MainWindow::tell(const char* sentence)
+void MainWindow::tell(const std::string& sentence)
 {
   Gtk::MessageDialog dialog(*this, sentence, false, Gtk::MESSAGE_ERROR, Gtk::BUTTONS_OK, true);
   dialog.set_title("Write-It");
@@ -438,6 +439,7 @@ bool MainWindow::new_document(bool prompt)
   undo_.clear();
   redo_.clear();
   save_path_.clear();
+  source_path_.clear();
   title_name_ = "Untitled";
   typing_ = Run{};
   typing_.font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
@@ -499,14 +501,14 @@ void MainWindow::open_document()
 bool MainWindow::open_path(const std::string& path, OpenKind fallback)
 {
   if (!Glib::file_test(path, Glib::FILE_TEST_EXISTS)) {
-    tell("That file is missing.");
+    tell(missing_message(path));
     return false;
   }
   std::string bytes;
   try {
     bytes = Glib::file_get_contents(path);
   } catch (const Glib::Error&) {
-    tell("That file could not be opened.");
+    tell(unreadable_message(path));
     return false;
   }
   const std::string ext = extension_of(path);
@@ -520,7 +522,7 @@ bool MainWindow::open_path(const std::string& path, OpenKind fallback)
   Document doc;
   if (kind == OpenKind::Rtf) {
     if (!rtf_import(bytes, doc)) {
-      tell("That file could not be opened.");
+      tell(unreadable_message(path));
       return false;
     }
   } else if (kind == OpenKind::Markdown) {
@@ -544,9 +546,9 @@ bool MainWindow::pristine() const
   return save_path_.empty() && save_point_ && !dirty();
 }
 
-void MainWindow::refuse_not_local()
+void MainWindow::refuse_not_local(const std::string& uri)
 {
-  tell("Write-It can only open files on this computer.");
+  tell(not_local_message(uri));
 }
 
 void MainWindow::install_loaded(const Document& doc, const std::string& path, bool keep_path)
@@ -557,10 +559,12 @@ void MainWindow::install_loaded(const Document& doc, const std::string& path, bo
   title_name_ = Glib::path_get_basename(path);
   if (keep_path) {
     save_path_ = path;
+    source_path_.clear();
     save_point_ = true;
     saved_ = capture();
   } else {
     save_path_.clear();
+    source_path_ = path;
     save_point_ = false;
   }
   settings_.last_dir = Glib::path_get_dirname(path);
@@ -609,6 +613,7 @@ bool MainWindow::write_rtf(const std::string& path)
     return false;
   }
   save_path_ = path;
+  source_path_.clear();
   title_name_ = Glib::path_get_basename(path);
   saved_ = capture();
   save_point_ = true;

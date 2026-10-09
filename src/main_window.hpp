@@ -43,8 +43,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   {
     return save_path_;
   }
+  // The .md or .txt this window's document was imported from, or "".
+  const std::string& import_source() const
+  {
+    return source_path_;
+  }
   // A file with no local path, such as an sftp:// URI that is not mounted.
-  void refuse_not_local();
+  void refuse_not_local(const std::string& uri);
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -176,7 +181,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void find_next();
   void replace_once();
   void on_options();
-  void tell(const char* sentence);
+  void tell(const std::string& sentence);
 
   Settings settings_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
@@ -260,6 +265,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::string title_name_ = "Untitled";
   Document saved_;
   bool save_point_ = true;
+  // Where an imported document came from; cleared when it becomes anything
+  // else (New, Close, Save As). Lets a second request for it find this
+  // window, since an import keeps no save path.
+  std::string source_path_;
   bool loading_ = false;
   bool restoring_ = false;
   bool suppress_format_ = false;

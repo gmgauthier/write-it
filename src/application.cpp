@@ -55,7 +55,7 @@ void Application::open_paths(const std::vector<OpenRequest>& requests)
   for (auto* window : get_windows()) {
     if (auto* main = dynamic_cast<MainWindow*>(window)) {
       windows.push_back(main);
-      states.push_back({main->document_path(), main->pristine()});
+      states.push_back({main->document_path(), main->pristine(), main->import_source()});
     }
   }
   const int existing = static_cast<int>(windows.size());
@@ -94,7 +94,7 @@ void Application::open_paths(const std::vector<OpenRequest>& requests)
           failed.push_back(true);
         }
         window->present();
-        window->refuse_not_local();
+        window->refuse_not_local(action.uri);
         break;
       }
     }

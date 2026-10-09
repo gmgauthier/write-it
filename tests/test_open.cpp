@@ -201,8 +201,8 @@ void recent_files()
 
 }  // namespace
 
-// Every check here runs once.
-constexpr int kMinChecks = 47;
+// Exactly the checks this suite runs. Update it with the tests.
+constexpr int kChecks = 60;
 
 int main()
 {
@@ -216,5 +216,5 @@ int main()
   messages();
   failed_windows_close();
   recent_files();
-  return suite_test::done("open", kMinChecks);
+  return suite_test::done("open", kChecks);
 }

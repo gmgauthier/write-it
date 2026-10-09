@@ -18,8 +18,9 @@ std::vector<OpenAction> plan_open(const std::vector<OpenRequest>& requests,
     if (std::find(seen.begin(), seen.end(), path) != seen.end())
       return;
     seen.push_back(path);
-    const auto open = std::find_if(windows.begin(), windows.end(),
-                                   [&](const WindowState& w) { return w.path == path; });
+    const auto open = std::find_if(windows.begin(), windows.end(), [&](const WindowState& w) {
+      return w.path == path || w.source == path;
+    });
     if (open != windows.end()) {
       actions.push_back({OpenStep::Present, static_cast<int>(open - windows.begin()), path});
       return;
@@ -67,19 +68,34 @@ std::vector<bool> close_after_open(int existing_windows, const std::vector<bool>
   return close;
 }
 
-std::string missing_message(const std::string&)
+namespace {
+
+std::string name_of(const std::string& path)
 {
-  return "That file is missing.";
+  const auto slash = path.rfind('/');
+  return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 
-std::string unreadable_message(const std::string&)
+std::string quoted(const std::string& text)
 {
-  return "That file could not be opened.";
+  return "\u201c" + text + "\u201d";
 }
 
-std::string not_local_message(const std::string&)
+}  // namespace
+
+std::string missing_message(const std::string& path)
 {
-  return "Write-It can only open files on this computer.";
+  return "Could not find the file " + quoted(name_of(path)) + ".";
+}
+
+std::string unreadable_message(const std::string& path)
+{
+  return "Could not open the file " + quoted(name_of(path)) + ".";
+}
+
+std::string not_local_message(const std::string& uri)
+{
+  return "Write-It can only open files on this computer: " + uri;
 }
 
 }  // namespace writeit
