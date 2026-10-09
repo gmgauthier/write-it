@@ -7,4 +7,4 @@ Terminal=false
 Categories=GTK;Office;WordProcessor;
 StartupWMClass=write-it
 StartupNotify=true
-MimeType=application/rtf;text/rtf;text/markdown;
+MimeType=application/rtf;text/rtf;text/markdown;text/plain;
