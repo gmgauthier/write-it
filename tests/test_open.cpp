@@ -161,6 +161,9 @@ void recent_files()
 
 }  // namespace
 
+// Every check here runs once.
+constexpr int kMinChecks = 47;
+
 int main()
 {
   one_window_per_file();
@@ -170,5 +173,5 @@ int main()
   missing_files_last();
   failed_windows_close();
   recent_files();
-  return suite_test::done("open");
+  return suite_test::done("open", kMinChecks);
 }
