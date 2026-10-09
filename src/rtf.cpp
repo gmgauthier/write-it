@@ -164,6 +164,7 @@ struct State {
   int heading = 0;
   // Paragraph properties. They belong to the paragraph that the next \par ends.
   Indents indents;
+  Align align = Align::Left;
   bool ignore = false;
   bool in_fonttbl = false;
   bool pending_dest = false;
@@ -198,6 +199,7 @@ class Reader {
         // takes the properties in force inside the group.
         if (stack_.size() == 1) {
           final_indents_ = state_.indents;
+          final_align_ = state_.align;
           closed_ = true;
         }
         if (!stack_.empty()) {
@@ -347,6 +349,20 @@ class Reader {
     if (word == "pard") {
       state_.heading = 0;
       state_.indents = Indents{};
+      state_.align = Align::Left;
+      return;
+    }
+    // There is no justified: \qj (and \qd, distributed) read as left.
+    if (word == "ql" || word == "qj" || word == "qd") {
+      state_.align = Align::Left;
+      return;
+    }
+    if (word == "qc") {
+      state_.align = Align::Center;
+      return;
+    }
+    if (word == "qr") {
+      state_.align = Align::Right;
       return;
     }
     // \lin and \rin are the leading and trailing indents Word 2000 and later
@@ -448,7 +464,9 @@ class Reader {
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
       return;
-    paragraph_.indents = clamp_indents(from_par || !closed_ ? state_.indents : final_indents_);
+    const bool live = from_par || !closed_;
+    paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
+    paragraph_.align = live ? state_.align : final_align_;
     paragraphs_.push_back(paragraph_);
     paragraph_ = Paragraph{};
     paragraph_.heading = state_.heading;
@@ -482,6 +500,7 @@ class Reader {
     for (Paragraph& paragraph : paragraphs_) {
       Paragraph merged;
       merged.heading = paragraph.heading;
+      merged.align = paragraph.align;
       merged.indents = paragraph.indents;
       for (Run& run : paragraph.runs)
         add_run(merged, std::move(run));
@@ -500,6 +519,7 @@ class Reader {
   std::vector<Paragraph> paragraphs_;
   bool saw_par_ = false;
   Indents final_indents_;
+  Align final_align_ = Align::Left;
   bool closed_ = false;
   int lead_ = 0;
 };
@@ -548,6 +568,11 @@ std::string rtf_export(const Document& doc)
       out << "\\ri" << indents.right;
     if (indents.first != 0)
       out << "\\fi" << indents.first;
+    // Left is the default and is not written.
+    if (paragraph.align == Align::Center)
+      out << "\\qc";
+    else if (paragraph.align == Align::Right)
+      out << "\\qr";
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
       out << "\\outlinelevel" << (paragraph.heading - 1);
     bool first = true;

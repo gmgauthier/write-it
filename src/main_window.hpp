@@ -15,6 +15,17 @@
 
 namespace writeit {
 
+// What a paragraph tag carries: the paragraph's indents and alignment.
+struct ParaFormat {
+  Indents indents;
+  Align align = Align::Left;
+};
+
+inline bool operator==(const ParaFormat& a, const ParaFormat& b)
+{
+  return a.indents == b.indents && a.align == b.align;
+}
+
 class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
@@ -114,17 +125,23 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_font_changed();
   void on_size_changed();
 
-  Glib::RefPtr<Gtk::TextTag> para_tag(const Indents& indents);
-  void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents) const;
+  Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
+  void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
   Glib::RefPtr<Gtk::TextTag> para_tag_at(Gtk::TextIter iter) const;
+  ParaFormat para_at(int offset) const;
   Indents indents_at(int offset) const;
-  Indents destination_indents(int start, int end) const;
+  ParaFormat destination_para(int start, int end) const;
   int paragraph_start(int offset) const;
   int paragraph_end(int offset) const;
   bool final_paragraph_empty() const;
   void normalise_paragraphs();
   void on_erase(const Gtk::TextBuffer::iterator& from, const Gtk::TextBuffer::iterator& to);
-  void apply_indents(const Indents& indents);
+  // Edits the format of every paragraph the selection touches, each from
+  // its own current format.
+  void apply_para_edit(const std::function<void(ParaFormat&)>& edit);
+  void apply_align(Align align);
+  void on_align_toggled(Align align);
+  void show_align();
   void on_paragraph();
 
   void build_find();
@@ -184,6 +201,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* italic_item_ = nullptr;
   Gtk::MenuItem* underline_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
+  Gtk::MenuItem* align_left_item_ = nullptr;
+  Gtk::MenuItem* align_center_item_ = nullptr;
+  Gtk::MenuItem* align_right_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
@@ -201,6 +221,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* bold_toggle_ = nullptr;
   Gtk::ToggleToolButton* italic_toggle_ = nullptr;
   Gtk::ToggleToolButton* underline_toggle_ = nullptr;
+  Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
+  Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
+  Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
 
   std::string save_path_;
   std::string title_name_ = "Untitled";
@@ -214,9 +237,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool sizing_ = false;
   double styled_zoom_ = -1;
   Run typing_;
-  // The indents of a last paragraph with no characters, which no tag can hold.
-  Indents pending_indents_;
-  bool pending_indents_set_ = false;
+  // The format of a last paragraph with no characters, which no tag can hold.
+  ParaFormat pending_para_;
+  bool pending_para_set_ = false;
   std::string caret_key_;
   std::vector<Snapshot> undo_;
   std::vector<Snapshot> redo_;
