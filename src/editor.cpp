@@ -2,12 +2,15 @@
 
 #include "main_window.hpp"
 
+#include "filename.hpp"
+
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -17,35 +20,66 @@ namespace {
 constexpr int kFindNext = Gtk::RESPONSE_APPLY;
 constexpr int kFindReplace = Gtk::RESPONSE_YES;
 
-std::string lower_copy(std::string text)
+// Asked about the file a save would really replace, on top of the chooser.
+bool confirm_replace(Gtk::Window& parent, const std::string& path)
 {
-  for (char& c : text)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return text;
+  Gtk::MessageDialog dialog(parent,
+                            "A file named \u201c" + Glib::path_get_basename(path) +
+                                "\u201d already exists. Do you want to replace it?",
+                            false, Gtk::MESSAGE_QUESTION, Gtk::BUTTONS_NONE, true);
+  dialog.set_secondary_text("The file already exists in \u201c" +
+                            Glib::path_get_basename(Glib::path_get_dirname(path)) +
+                            "\u201d. Replacing it will overwrite its contents.");
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_Replace", Gtk::RESPONSE_ACCEPT);
+  dialog.set_default_response(Gtk::RESPONSE_CANCEL);
+  return dialog.run() == Gtk::RESPONSE_ACCEPT;
 }
 
-std::string extension_of(const std::string& path)
+// Says why the chooser's answer can't be saved; the chooser stays open.
+void refuse_save(Gtk::Window& parent, const Glib::ustring& primary, const Glib::ustring& secondary)
 {
-  const std::string base = Glib::path_get_basename(path);
-  const auto dot = base.rfind('.');
-  if (dot == std::string::npos)
-    return {};
-  return lower_copy(base.substr(dot));
+  Gtk::MessageDialog dialog(parent, primary, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+  dialog.set_secondary_text(secondary);
+  dialog.run();
 }
 
-std::string with_extension(std::string name, const char* extension)
+// Runs a save chooser until a file is chosen or the chooser is cancelled.
+// GTK's own overwrite question is off: it asks about the name as typed, but
+// the file written is save_name's, so "zout" would replace zout.rtf without
+// a word. The question here is about the final path. A non-local location
+// (no path) or a final name that is a folder is refused, and the chooser
+// comes back.
+std::optional<std::string> run_save_chooser(Gtk::FileChooserDialog& dialog, const FileType& type)
 {
-  const std::string ext = extension;
-  const std::string lower = lower_copy(name);
-  if (lower.size() >= ext.size() && lower.compare(lower.size() - ext.size(), ext.size(), ext) == 0)
-    return name;
-  const auto dot = name.rfind('.');
-  if (dot != std::string::npos) {
-    const std::string current = lower_copy(name.substr(dot));
-    if (current == ".md" || current == ".markdown" || current == ".txt" || current == ".rtf")
-      return name.substr(0, dot) + ext;
+  dialog.set_do_overwrite_confirmation(false);
+  while (dialog.run() == Gtk::RESPONSE_ACCEPT) {
+    const auto decision = resolve_save(
+        dialog.get_filename(), type,
+        [](const std::string& candidate) {
+          if (Glib::file_test(candidate, Glib::FILE_TEST_IS_DIR))
+            return PathKind::Folder;
+          return Glib::file_test(candidate, Glib::FILE_TEST_EXISTS) ? PathKind::File
+                                                                    : PathKind::Missing;
+        },
+        [&dialog](const std::string& candidate) { return confirm_replace(dialog, candidate); });
+    switch (decision.outcome) {
+      case SaveOutcome::Write:
+        return decision.path;
+      case SaveOutcome::NoPath:
+        refuse_save(dialog, "Write-It can only save to a folder on this computer.",
+                    "Choose a folder on this computer, then save again.");
+        break;
+      case SaveOutcome::Folder:
+        refuse_save(dialog,
+                    "\u201c" + Glib::path_get_basename(decision.path) + "\u201d is a folder.",
+                    "You can\u2019t save over a folder. Type a different file name.");
+        break;
+      case SaveOutcome::Declined:
+        break;
+    }
   }
-  return name + ext;
+  return std::nullopt;
 }
 
 bool known_size(int size)
@@ -504,19 +538,19 @@ bool MainWindow::save_document_as()
   dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
   dialog.add_button("_Save", Gtk::RESPONSE_ACCEPT);
   dialog.set_default_response(Gtk::RESPONSE_ACCEPT);
-  dialog.set_do_overwrite_confirmation(true);
   if (!settings_.last_dir.empty() && Glib::file_test(settings_.last_dir, Glib::FILE_TEST_IS_DIR))
     dialog.set_current_folder(settings_.last_dir);
   auto rtf = Gtk::FileFilter::create();
   rtf->set_name("RTF");
   rtf->add_pattern("*.rtf");
   dialog.add_filter(rtf);
-  const std::string suggested = save_path_.empty() ? with_extension(title_name_, ".rtf")
-                                                   : Glib::path_get_basename(save_path_);
-  dialog.set_current_name(with_extension(suggested, ".rtf"));
-  if (dialog.run() != Gtk::RESPONSE_ACCEPT)
+  const std::string suggested =
+      save_path_.empty() ? title_name_ : Glib::path_get_basename(save_path_);
+  dialog.set_current_name(save_name(suggested, rtf_file()));
+  const auto path = run_save_chooser(dialog, rtf_file());
+  if (!path)
     return false;
-  return write_rtf(with_extension(dialog.get_filename(), ".rtf"));
+  return write_rtf(*path);
 }
 
 bool MainWindow::write_rtf(const std::string& path)
@@ -544,7 +578,6 @@ void MainWindow::export_markdown()
   dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
   dialog.add_button("_Export", Gtk::RESPONSE_ACCEPT);
   dialog.set_default_response(Gtk::RESPONSE_ACCEPT);
-  dialog.set_do_overwrite_confirmation(true);
   if (!settings_.last_dir.empty() && Glib::file_test(settings_.last_dir, Glib::FILE_TEST_IS_DIR))
     dialog.set_current_folder(settings_.last_dir);
   auto markdown = Gtk::FileFilter::create();
@@ -555,10 +588,11 @@ void MainWindow::export_markdown()
   std::string suggested = title_name_ == "Untitled" ? "Untitled" : title_name_;
   if (!save_path_.empty())
     suggested = Glib::path_get_basename(save_path_);
-  dialog.set_current_name(with_extension(suggested, ".md"));
-  if (dialog.run() != Gtk::RESPONSE_ACCEPT)
+  dialog.set_current_name(save_name(suggested, markdown_file()));
+  const auto chosen = run_save_chooser(dialog, markdown_file());
+  if (!chosen)
     return;
-  const std::string path = with_extension(dialog.get_filename(), ".md");
+  const std::string path = *chosen;
   try {
     Glib::file_set_contents(path, markdown_export(capture()));
   } catch (const Glib::Error&) {

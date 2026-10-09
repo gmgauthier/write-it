@@ -35,6 +35,7 @@ executable(
   'src/editor.cpp',
   'src/about_dialog.cpp',
   'src/settings.cpp',
+  'src/filename.cpp',
   'src/document.cpp',
   'src/rtf.cpp',
   'src/units.cpp',
@@ -54,6 +55,14 @@ install_data(
   'data/write-it.css',
   install_dir: get_option('datadir') / 'write-it',
 )
+
+write_it_filename_tests = executable(
+  'write-it-filename-tests',
+  'tests/test_filename.cpp',
+  'src/filename.cpp',
+  include_directories: inc,
+)
+test('filename', write_it_filename_tests)
 
 write_it_settings_tests = executable(
   'write-it-settings-tests',
