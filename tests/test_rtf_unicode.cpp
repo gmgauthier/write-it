@@ -6,7 +6,10 @@
 #include "check.hpp"
 #include "document.hpp"
 
+#include <glib.h>
+
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -91,6 +94,10 @@ bool all_valid(const writeit::Document& doc)
   for (const auto& paragraph : doc.paragraphs) {
     for (const auto& run : paragraph.runs) {
       if (!valid_utf8(run.text) || !valid_utf8(run.font))
+        return false;
+      // What GTK will be handed: GLib's check, which also rejects NUL.
+      if (!g_utf8_validate(run.text.c_str(), static_cast<gssize>(run.text.size()), nullptr) ||
+          !g_utf8_validate(run.font.c_str(), static_cast<gssize>(run.font.size()), nullptr))
         return false;
       if (!no_controls(run.text) || !no_controls(run.font))
         return false;
@@ -224,7 +231,7 @@ void font_table()
   CHECK(font_of("{\\f1\\uc2 \\u26085\\'93\\'fa\\u26412\\'96\\'7bGothic;}") == nihon + "Gothic");
   CHECK(font_of("{\\f1\\uc0 \\u26085\\u26412 Gothic;}") == nihon + "Gothic");
   CHECK(font_of("{\\f1 Caf\\'e9;}") == "Caf\u00e9");
-  CHECK(font_of("{\\f1 \\u55357?\\u56832?Emoji;}") == "\xF0\x9F\x98\x80Emoji");
+  CHECK(font_of("{\\f1 \\u55357?\\u56832?Emoji;}") == "\xF0\x9F\x98\x80" "Emoji");
   CHECK(font_of("{\\f1 \\u9999999999?X;}") == kFffd + "X");
   CHECK(font_of("{\\f1 A\\'00\\u0?B;}") == "AB");
   // Word's font entries carry \\*\\panose and \\falt groups; they are not the name.
@@ -283,7 +290,7 @@ void control_characters()
   CHECK(shape(read_doc("a\\'07b\\'1bc\\'7fd\\'81e")) == "abcde");
   CHECK(shape(read_doc("a\\u0?b")) == "ab");
   // Raw control bytes in the file (not valid RTF) do not get through either.
-  CHECK(shape(read_doc(std::string("a\x01b\x7f") + "c")) == "abc");
+  CHECK(shape(read_doc(std::string("a\x01" "b\x7f") + "c")) == "abc");
   // Paragraph properties carry over the break, as with \line.
   {
     const auto doc = read_doc("\\li720 a\\u10?b");
@@ -342,6 +349,7 @@ void fuzz()
     return (seed >> 16) & 0x7FFF;
   };
   int bad = 0;
+  int raw = 0;
   for (int round = 0; round < 200000; ++round) {
     std::string body;
     const int length = 1 + static_cast<int>(next() % 24);
@@ -351,8 +359,18 @@ void fuzz()
     writeit::rtf_import(kHead + body + "}", doc);
     if (!all_valid(doc))
       ++bad;
+    // Whatever was read, the writer emits no raw control character.
+    for (const char c : writeit::rtf_export(doc)) {
+      const auto b = static_cast<unsigned char>(c);
+      if ((b < 0x20 && b != '\n') || b == 0x7F) {
+        ++raw;
+        break;
+      }
+    }
   }
+  std::printf("fuzz: invalid=%d raw-controls-written=%d of 200000\n", bad, raw);
   CHECK(bad == 0);
+  CHECK(raw == 0);
 }
 
 }  // namespace

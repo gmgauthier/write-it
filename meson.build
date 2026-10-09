@@ -97,5 +97,6 @@ write_it_rtf_unicode_tests = executable(
   'src/document.cpp',
   'src/rtf.cpp',
   include_directories: inc,
+  dependencies: dependency('glib-2.0'),
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
