@@ -78,6 +78,7 @@ write_it_indents_tests = executable(
   'tests/test_indents.cpp',
   'src/document.cpp',
   'src/rtf.cpp',
+  'src/units.cpp',
   include_directories: inc,
 )
 test('indents', write_it_indents_tests)

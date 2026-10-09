@@ -3,7 +3,6 @@
 #include "document.hpp"
 
 #include <algorithm>
-#include <cmath>
 
 namespace writeit {
 namespace {
@@ -156,16 +155,6 @@ Indents clamp_indents(Indents indents)
   indents.right = std::max(0, std::min(kMaxIndent, indents.right));
   indents.first = std::max(-indents.left, std::min(kMaxIndent, indents.first));
   return indents;
-}
-
-int cm_to_twips(double cm)
-{
-  return static_cast<int>(std::lround(cm * 1440.0 / 2.54));
-}
-
-double twips_to_cm(int twips)
-{
-  return static_cast<double>(twips) * 2.54 / 1440.0;
 }
 
 bool operator==(const Document& a, const Document& b)

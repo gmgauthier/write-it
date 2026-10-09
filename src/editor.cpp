@@ -1654,8 +1654,10 @@ void MainWindow::apply_indents(const Indents& raw)
 
 void MainWindow::on_paragraph()
 {
-  // Word 97's Format > Paragraph indentation group. Alignment joins it with
-  // the alignment slice. Spacing waits for 2.0.
+  // Word 97's Format > Paragraph indentation group, in the unit Tools >
+  // Options... chose. Alignment joins it with the alignment slice. Spacing
+  // waits for 2.0.
+  const Units units = settings_.units;
   const Indents current = indents_at(cursor_offset());
   Gtk::Dialog dialog("Paragraph", *this, true);
   dialog.set_resizable(false);
@@ -1674,12 +1676,45 @@ void MainWindow::on_paragraph()
   frame->set_margin_bottom(12);
   frame->set_margin_start(12);
   frame->set_margin_end(12);
-  const double max_cm = std::floor(twips_to_cm(kMaxIndent) * 100.0) / 100.0;
-  auto spin = [max_cm](double value) {
+  const double step = units_step(units);
+  const double max_value = std::floor(twips_to_units(kMaxIndent, units) * 100.0 + 1e-9) / 100.0;
+  // Each field shows its value with the unit's suffix, 0.5" or 1.27 cm, and
+  // reads back a bare number, a suffixed one, or the other unit typed out.
+  auto spin = [units, step, max_value](int twips) {
     auto* button =
-        Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(0, 0, max_cm, 0.1, 1.0), 0.1, 2));
-    button->set_numeric(true);
-    button->set_value(std::round(value * 100.0) / 100.0);
+        Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(0, 0, max_value, step, step * 5),
+                                        step, static_cast<guint>(units_digits(units))));
+    button->set_numeric(false);
+    // Text that is not a measure keeps the old value instead of becoming 0.
+    button->set_update_policy(Gtk::UPDATE_IF_VALID);
+    button->set_width_chars(8);
+    button->signal_output().connect(
+        [button, units] {
+          button->set_text(format_measure(button->get_value(), units));
+          return true;
+        },
+        false);
+    // "input" has no accumulator: the last handler's answer wins, and the
+    // class handler answers "not handled". Connect after it.
+    button->signal_input().connect(
+        [button, units](double* value) {
+          double parsed = 0;
+          if (!parse_measure(button->get_text().raw(), units, parsed))
+            return GTK_INPUT_ERROR;
+          *value = parsed;
+          return 1;
+        },
+        true);
+    // Leaving a field reads what was typed and shows it back in the unit, so
+    // "1 in" becomes 2.54 cm and text that is not a measure reverts.
+    button->signal_focus_out_event().connect(
+        [button, units](GdkEventFocus*) {
+          button->update();
+          button->set_text(format_measure(button->get_value(), units));
+          return false;
+        },
+        false);
+    button->set_value(units_round(twips_to_units(twips, units), units));
     button->set_activates_default(true);
     return button;
   };
@@ -1689,36 +1724,37 @@ void MainWindow::on_paragraph()
     item->set_mnemonic_widget(target);
     return item;
   };
-  auto unit = []() {
-    auto* item = Gtk::manage(new Gtk::Label("cm"));
-    item->set_halign(Gtk::ALIGN_START);
-    return item;
-  };
-  auto* left = spin(twips_to_cm(current.left));
-  auto* right = spin(twips_to_cm(current.right));
+  const int magnitude = current.first < 0 ? -current.first : current.first;
+  auto* left = spin(current.left);
+  auto* right = spin(current.right);
   auto* special = Gtk::manage(new Gtk::ComboBoxText());
   special->append("(none)");
   special->append("First line");
   special->append("Hanging");
-  special->set_active(current.first > 0 ? 1 : current.first < 0 ? 2 : 0);
-  auto* by = spin(twips_to_cm(current.first < 0 ? -current.first : current.first));
+  const int special_was = current.first > 0 ? 1 : current.first < 0 ? 2 : 0;
+  special->set_active(special_was);
+  auto* by = spin(magnitude);
   by->set_sensitive(current.first != 0);
-  special->signal_changed().connect([special, by] {
+  // Word fills in half an inch, or 1.27 cm, when Special turns on at zero.
+  const double default_by = units == Units::Centimetres ? 1.27 : 0.5;
+  special->signal_changed().connect([special, by, default_by] {
     by->set_sensitive(special->get_active_row_number() != 0);
     if (special->get_active_row_number() != 0 && by->get_value() == 0)
-      by->set_value(1.27);
+      by->set_value(default_by);
   });
+  // What each field showed when the dialog opened, to tell an untouched
+  // field from an edited one.
+  const double left_shown = left->get_value();
+  const double right_shown = right->get_value();
+  const double by_shown = by->get_value();
   grid->attach(*label("_Left:", *left), 0, 0, 1, 1);
   grid->attach(*left, 1, 0, 1, 1);
-  grid->attach(*unit(), 2, 0, 1, 1);
   grid->attach(*label("_Right:", *right), 0, 1, 1, 1);
   grid->attach(*right, 1, 1, 1, 1);
-  grid->attach(*unit(), 2, 1, 1, 1);
-  grid->attach(*label("_Special:", *special), 3, 0, 1, 1);
-  grid->attach(*special, 3, 1, 1, 1);
-  grid->attach(*label("B_y:", *by), 4, 0, 1, 1);
-  grid->attach(*by, 4, 1, 1, 1);
-  grid->attach(*unit(), 5, 1, 1, 1);
+  grid->attach(*label("_Special:", *special), 2, 0, 1, 1);
+  grid->attach(*special, 2, 1, 1, 1);
+  grid->attach(*label("B_y:", *by), 3, 0, 1, 1);
+  grid->attach(*by, 3, 1, 1, 1);
   frame->add(*grid);
   dialog.get_content_area()->pack_start(*frame, Gtk::PACK_SHRINK);
   dialog.show_all_children();
@@ -1729,12 +1765,18 @@ void MainWindow::on_paragraph()
   left->update();
   right->update();
   by->update();
+  // An untouched field keeps the file's twips, so OK on an unchanged dialog
+  // changes nothing even where the value on screen is rounded.
   Indents chosen;
-  chosen.left = cm_to_twips(left->get_value());
-  chosen.right = cm_to_twips(right->get_value());
-  const int amount = cm_to_twips(by->get_value());
+  chosen.left = keep_twips(current.left, left_shown, left->get_value(), units);
+  chosen.right = keep_twips(current.right, right_shown, right->get_value(), units);
+  const int amount = keep_twips(magnitude, by_shown, by->get_value(), units);
   const int row = special->get_active_row_number();
   chosen.first = row == 1 ? amount : row == 2 ? -amount : 0;
+  if (chosen == current) {
+    text_.grab_focus();
+    return;
+  }
   apply_indents(chosen);
 }
 
@@ -1923,9 +1965,11 @@ void MainWindow::on_options()
   auto* font_label = Gtk::manage(new Gtk::Label("Default font"));
   auto* size_label = Gtk::manage(new Gtk::Label("Default size"));
   auto* recent_label = Gtk::manage(new Gtk::Label("Recent files"));
+  auto* units_label = Gtk::manage(new Gtk::Label("Measurement units"));
   font_label->set_halign(Gtk::ALIGN_START);
   size_label->set_halign(Gtk::ALIGN_START);
   recent_label->set_halign(Gtk::ALIGN_START);
+  units_label->set_halign(Gtk::ALIGN_START);
   auto* font = Gtk::manage(new Gtk::ComboBoxText());
   auto* size = Gtk::manage(new Gtk::ComboBoxText());
   auto* recent = Gtk::manage(new Gtk::ComboBoxText());
@@ -1937,6 +1981,10 @@ void MainWindow::on_options()
   recent->append("8");
   recent->append("12");
   recent->set_active_text(std::to_string(settings_.recent_count));
+  auto* units = Gtk::manage(new Gtk::ComboBoxText());
+  units->append("in", "Inches");
+  units->append("cm", "Centimetres");
+  units->set_active_id(units_text(settings_.units));
   font->set_size_request(220, -1);
   grid->attach(*font_label, 0, 0, 1, 1);
   grid->attach(*font, 1, 0, 1, 1);
@@ -1944,6 +1992,8 @@ void MainWindow::on_options()
   grid->attach(*size, 1, 1, 1, 1);
   grid->attach(*recent_label, 0, 2, 1, 1);
   grid->attach(*recent, 1, 2, 1, 1);
+  grid->attach(*units_label, 0, 3, 1, 1);
+  grid->attach(*units, 1, 3, 1, 1);
   dialog.get_content_area()->pack_start(*grid, Gtk::PACK_SHRINK);
   dialog.show_all_children();
   if (dialog.run() != Gtk::RESPONSE_OK)
@@ -1965,6 +2015,7 @@ void MainWindow::on_options()
   }
   if (static_cast<int>(settings_.recent.size()) > settings_.recent_count)
     settings_.recent.resize(static_cast<size_t>(settings_.recent_count));
+  settings_.units = units_from_text(units->get_active_id().raw());
   settings_.save();
   rebuild_recent();
   if (save_path_.empty() && save_point_ && !dirty()) {

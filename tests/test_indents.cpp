@@ -5,6 +5,7 @@
 
 #include "check.hpp"
 #include "document.hpp"
+#include "units.hpp"
 
 #include <string>
 
@@ -56,18 +57,20 @@ void model()
   const writeit::Document fresh = writeit::blank_document("Sans", 11);
   CHECK(fresh.paragraphs[0].indents == writeit::Indents{});
 
-  // Centimetres in the dialog, twips in the file. 1 in = 2.54 cm = 1440 twips.
-  CHECK(writeit::cm_to_twips(2.54) == 1440);
-  CHECK(writeit::cm_to_twips(1.27) == 720);
-  CHECK(writeit::cm_to_twips(0) == 0);
-  CHECK(writeit::cm_to_twips(-1.27) == -720);
-  CHECK(writeit::cm_to_twips(1.0) == 567);
-  CHECK(writeit::twips_to_cm(1440) > 2.539 && writeit::twips_to_cm(1440) < 2.541);
-  CHECK(writeit::twips_to_cm(0) == 0.0);
+  // Centimetres via the units module, twips in the file. 1 in = 2.54 cm = 1440 twips.
+  CHECK(writeit::units_to_twips(2.54, writeit::Units::Centimetres) == 1440);
+  CHECK(writeit::units_to_twips(1.27, writeit::Units::Centimetres) == 720);
+  CHECK(writeit::units_to_twips(0, writeit::Units::Centimetres) == 0);
+  CHECK(writeit::units_to_twips(-1.27, writeit::Units::Centimetres) == -720);
+  CHECK(writeit::units_to_twips(1.0, writeit::Units::Centimetres) == 567);
+  CHECK(writeit::twips_to_units(1440, writeit::Units::Centimetres) > 2.539 &&
+        writeit::twips_to_units(1440, writeit::Units::Centimetres) < 2.541);
+  CHECK(writeit::twips_to_units(0, writeit::Units::Centimetres) == 0.0);
   // Two decimals in the dialog survive the trip through twips.
   for (int hundredths = 0; hundredths <= 1500; ++hundredths) {
     const double cm = hundredths / 100.0;
-    const double back = writeit::twips_to_cm(writeit::cm_to_twips(cm));
+    const double back = writeit::twips_to_units(
+        writeit::units_to_twips(cm, writeit::Units::Centimetres), writeit::Units::Centimetres);
     CHECK(back > cm - 0.005 && back < cm + 0.005);
   }
 

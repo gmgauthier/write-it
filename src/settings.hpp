@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "units.hpp"
+
 #include <string>
 #include <vector>
 
@@ -23,6 +25,8 @@ struct Settings {
   int recent_count = 8;
   std::string last_dir;
   std::vector<std::string> recent;
+  // Tools > Options... "Measurement units". Stored as units=in or units=cm.
+  Units units = Units::Inches;
 
   void load();
   void save() const;

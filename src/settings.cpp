@@ -140,6 +140,7 @@ void Settings::load_from(const std::string& path)
     recent = get_list(kf, "recent");
   if (static_cast<int>(recent.size()) > recent_count)
     recent.resize(static_cast<size_t>(recent_count));
+  units = units_from_text(get_str(kf, "units"));
 }
 
 void Settings::save_to(const std::string& path) const
@@ -163,6 +164,7 @@ void Settings::save_to(const std::string& path) const
   kf.set_integer(kGroup, "recent-count", recent_count);
   kf.set_string(kGroup, "last-dir", last_dir);
   kf.set_string_list(kGroup, "recent", recent);
+  kf.set_string(kGroup, "units", units_text(units));
   try {
     Glib::file_set_contents(path, kf.to_data());
   } catch (const Glib::Error&) {

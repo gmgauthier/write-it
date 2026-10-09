@@ -48,9 +48,6 @@ bool operator==(const Document& a, const Document& b);
 // Left and right stay between 0 and kMaxIndent. The first line may hang back
 // to the left margin and no further, and may indent up to kMaxIndent.
 Indents clamp_indents(Indents indents);
-// The Paragraph dialog speaks centimetres. The file speaks twips.
-int cm_to_twips(double cm);
-double twips_to_cm(int twips);
 
 Document blank_document(const std::string& font, int size);
 Document plain_import(const std::string& text, const std::string& font, int size);
