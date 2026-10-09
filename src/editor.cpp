@@ -154,7 +154,7 @@ std::string para_name(const ParaFormat& format)
   for (const int value :
        {indents.left, indents.right, indents.first, static_cast<int>(format.align),
         static_cast<int>(list.kind), list.level, list.has_own ? 1 : 0, list.own.left,
-        list.own.right, list.own.first, list.list}) {
+        list.own.right, list.own.first, list.list, list.start}) {
     name += '\x1f';
     name += std::to_string(value);
   }
@@ -180,7 +180,7 @@ bool parse_para(const std::string& name, ParaFormat& format)
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 11 || values[3] < 0 || values[3] > 2 || values[4] < 0 ||
+  if (values.size() != 12 || values[3] < 0 || values[3] > 2 || values[4] < 0 ||
       values[4] > static_cast<int>(ListKind::Number))
     return false;
   format.indents.left = values[0];
@@ -192,6 +192,7 @@ bool parse_para(const std::string& name, ParaFormat& format)
   format.list.has_own = values[6] != 0;
   format.list.own = Indents{values[7], values[8], values[9]};
   format.list.list = values[10];
+  format.list.start = values[11];
   return true;
 }
 
