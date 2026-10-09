@@ -37,6 +37,7 @@ executable(
   'src/settings.cpp',
   'src/document.cpp',
   'src/rtf.cpp',
+  'src/units.cpp',
   include_directories: inc,
   dependencies: [gtkmm],
   install: true,
@@ -57,6 +58,7 @@ write_it_settings_tests = executable(
   'write-it-settings-tests',
   'tests/test_settings.cpp',
   'src/settings.cpp',
+  'src/units.cpp',
   include_directories: inc,
   dependencies: [glibmm],
 )
@@ -70,3 +72,21 @@ write_it_document_tests = executable(
   include_directories: inc,
 )
 test('document', write_it_document_tests)
+
+write_it_indents_tests = executable(
+  'write-it-indents-tests',
+  'tests/test_indents.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  include_directories: inc,
+)
+test('indents', write_it_indents_tests)
+
+write_it_units_tests = executable(
+  'write-it-units-tests',
+  'tests/test_units.cpp',
+  'src/units.cpp',
+  include_directories: inc,
+)
+test('units', write_it_units_tests)

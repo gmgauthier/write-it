@@ -41,6 +41,7 @@ int main()
   CHECK(fresh.default_size == 11);
   CHECK(fresh.recent_count == 8);
   CHECK(fresh.recent.empty());
+  CHECK(fresh.units == writeit::Units::Inches);
 
   fresh.window_width = 800;
   fresh.window_height = 600;
@@ -53,6 +54,7 @@ int main()
   fresh.recent_count = 4;
   fresh.last_dir = "/tmp";
   fresh.recent = {"/tmp/a.rtf", "/tmp/b.rtf"};
+  fresh.units = writeit::Units::Centimetres;
   fresh.save_to(path);
 
   writeit::Settings loaded;
@@ -70,6 +72,7 @@ int main()
   CHECK(loaded.last_dir == "/tmp");
   CHECK(loaded.recent.size() == 2);
   CHECK(loaded.recent[0] == "/tmp/a.rtf");
+  CHECK(loaded.units == writeit::Units::Centimetres);
 
   const std::string text = Glib::file_get_contents(path);
   CHECK(text.find("window-width=800") != std::string::npos);
@@ -78,6 +81,26 @@ int main()
   CHECK(text.find("toolbars-side-by-side=false") != std::string::npos);
   CHECK(text.find("recent-count=4") != std::string::npos);
   CHECK(text.find("Times New Roman") != std::string::npos);
+  CHECK(text.find("units=cm") != std::string::npos);
+
+  // Measurement units: inches unless the ini says cm. Invalid means inches.
+  auto units_after = [&](const std::string& line) {
+    Glib::file_set_contents(path, "[write-it]\n" + line + "\n");
+    writeit::Settings settings;
+    settings.load_from(path);
+    return settings.units;
+  };
+  CHECK(units_after("units=cm") == writeit::Units::Centimetres);
+  CHECK(units_after("units=in") == writeit::Units::Inches);
+  CHECK(units_after("units=furlongs") == writeit::Units::Inches);
+  CHECK(units_after("units=") == writeit::Units::Inches);
+  CHECK(units_after("window-width=900") == writeit::Units::Inches);
+  {
+    writeit::Settings inches;
+    inches.load_from(path);
+    inches.save_to(path);
+    CHECK(Glib::file_get_contents(path).find("units=in") != std::string::npos);
+  }
 
   return suite_test::done("settings");
 }

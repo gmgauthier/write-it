@@ -31,6 +31,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   enum class OpenKind { Rtf, Markdown, Plain };
 
   static constexpr int kPageW = 540;
+  // The screen page stands for A4, 21 cm across, until Page Setup arrives in M3.
+  static constexpr int kPageTwips = 11906;
   static constexpr int kPageH = 470;
   static constexpr int kUndoCap = 200;
 
@@ -92,6 +94,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void raise_headings();
   void restyle_tags();
   void apply_margins();
+  int margin_x() const;
+  int indent_px(int twips) const;
   double zoom_factor() const;
   Run format_of(const Gtk::TextIter& iter) const;
   int heading_of(const Gtk::TextIter& iter) const;
@@ -109,6 +113,19 @@ class MainWindow : public Gtk::ApplicationWindow {
   void sync_format_controls();
   void on_font_changed();
   void on_size_changed();
+
+  Glib::RefPtr<Gtk::TextTag> para_tag(const Indents& indents);
+  void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents) const;
+  Glib::RefPtr<Gtk::TextTag> para_tag_at(Gtk::TextIter iter) const;
+  Indents indents_at(int offset) const;
+  Indents destination_indents(int start, int end) const;
+  int paragraph_start(int offset) const;
+  int paragraph_end(int offset) const;
+  bool final_paragraph_empty() const;
+  void normalise_paragraphs();
+  void on_erase(const Gtk::TextBuffer::iterator& from, const Gtk::TextBuffer::iterator& to);
+  void apply_indents(const Indents& indents);
+  void on_paragraph();
 
   void build_find();
   void present_find(bool replace);
@@ -166,6 +183,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bold_item_ = nullptr;
   Gtk::MenuItem* italic_item_ = nullptr;
   Gtk::MenuItem* underline_item_ = nullptr;
+  Gtk::MenuItem* paragraph_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
@@ -196,6 +214,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool sizing_ = false;
   double styled_zoom_ = -1;
   Run typing_;
+  // The indents of a last paragraph with no characters, which no tag can hold.
+  Indents pending_indents_;
+  bool pending_indents_set_ = false;
   std::string caret_key_;
   std::vector<Snapshot> undo_;
   std::vector<Snapshot> redo_;

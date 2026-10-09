@@ -209,7 +209,7 @@ void MainWindow::build_menus()
   add_item(*format_menu, "B_ullets", false);
   add_item(*format_menu, "_Numbering", false);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*format_menu, "_Paragraph…", false);
+  paragraph_item_ = add_item(*format_menu, "_Paragraph…", true);
   add_item(*format_menu, "C_olumns…", false);
 
   auto* tools = add_menu("_Tools");
@@ -504,6 +504,34 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   cr->set_source_rgb(0.784, 0.776, 0.769);
   cr->move_to(0, self.get_height() - 0.5);
   cr->line_to(self.get_width(), self.get_height() - 0.5);
+  cr->stroke();
+
+  // The current paragraph's indents, as Word 97 marks them: the first line
+  // hangs from the top edge, the left and right indents stand on the bottom.
+  if (!buffer_)
+    return true;
+  const Indents indents = indents_at(cursor_offset());
+  const int left = origin_x + margin_x();
+  const int right = origin_x + page_w - margin_x();
+  const double h = self.get_height();
+  auto down = [&](double x) {
+    cr->move_to(x - 4, 1);
+    cr->line_to(x + 4, 1);
+    cr->line_to(x, 6);
+    cr->close_path();
+  };
+  auto up = [&](double x) {
+    cr->move_to(x - 4, h - 1);
+    cr->line_to(x + 4, h - 1);
+    cr->line_to(x, h - 6);
+    cr->close_path();
+  };
+  down(left + indent_px(indents.left + indents.first) + 0.5);
+  up(left + indent_px(indents.left) + 0.5);
+  up(right - indent_px(indents.right) + 0.5);
+  cr->set_source_rgb(0.95, 0.95, 0.95);
+  cr->fill_preserve();
+  cr->set_source_rgb(0.25, 0.25, 0.25);
   cr->stroke();
   return true;
 }

@@ -8,9 +8,9 @@ APP_ID: `org.gmgauthier.WriteIt`
 License: The Unlicense (`UNLICENSE`)  
 Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.com/gmgauthier/write-it
 
-## Status (2026-10-08)
+## Status (2026-10-09)
 
-**M1.** Typing, font, size, bold, italic, underline, undo, find and replace, and RTF open and save are in this tree, on the M0 window. Recent files, plain-text import, and Markdown import and export cover headings, paragraphs, bold, and italic. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
+**M1, with M2 under way.** Typing, font, size, bold, italic, underline, undo, find and replace, and RTF open and save are in this tree, on the M0 window. Recent files, plain-text import, and Markdown import and export cover headings, paragraphs, bold, and italic. From M2, paragraph indents (left, right, and first line or hanging) are in: Format → Paragraph… sets them, the ruler marks them, and RTF round-trips them as `\li`, `\ri`, and `\fi`. The dialog speaks the measurement units from Tools → Options…, inches (the default) or centimetres. The file keeps twips. 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. The suite copy is [../RETRO-OFFICE.md](../RETRO-OFFICE.md).
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
@@ -130,7 +130,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 
 The font list and the size list match the other two apps. Sizes are 8, 9, 10, 11, 12, 14, 16, 18, 24, 36. A new document starts at Sans 11.
 
-**Tools.** Spelling… (F7). Options…: default font family, default size, recent-file count (4, 8, or 12), and the dictionary name.
+**Tools.** Spelling… (F7). Options…: default font family, default size, recent-file count (4, 8, or 12), measurement units (inches or centimetres, default inches), and the dictionary name. The units are what the Paragraph dialog shows and accepts. The file always stores twips, so changing units never changes a document.
 
 **Table.** Insert Table…, Insert Row, Insert Column, Delete Row, Delete Column.
 
@@ -156,7 +156,7 @@ The left side is a message (“Saved letter.rtf”) that stays until the next me
 
 `~/.config/write-it/write-it.ini`
 
-Keys: `window-width`, `window-height`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`.
+Keys: `window-width`, `window-height`, `recent`, `recent-count` (4, 8, or 12), `last-dir`, `default-font`, `default-size`, `show-standard-toolbar`, `show-format-toolbar`, `show-statusbar`, `toolbars-side-by-side`, `zoom`, `units` (`in` or `cm`; missing or anything else is `in`).
 
 ## 5. Feature floor
 
