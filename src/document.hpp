@@ -47,6 +47,11 @@ struct ListFormat {
   ListKind kind = ListKind::None;
   // 0 through kListLevels - 1, as RTF's \ilvl.
   int level = 0;
+  // Which numbered list the item counts in, as Word's \ls: a label, not a
+  // count. 0 continues the numbered list above (the first list when none is
+  // above). Items keep counting in their list past plain paragraphs, bullets
+  // and other lists; a new list starts again at 1. Bullets have none.
+  int list = 0;
   // The paragraph's own indents from before it joined the list, which
   // leaving the list gives back. Editing memory, not document content: it is
   // not written to the file and not part of equality. A list item read from
@@ -56,6 +61,9 @@ struct ListFormat {
 };
 
 constexpr int kListLevels = 9;
+// The most numbered lists a document holds; items of later lists join the
+// last one. Below the RTF reader's 4096 list definitions.
+constexpr int kMaxLists = 4000;
 // Word's list indents: half an inch per level, the label hanging a quarter inch.
 constexpr int kListStep = 720;
 constexpr int kListHang = 360;
@@ -99,6 +107,20 @@ Indents list_indents(int level);
 // up per level, a numbered item restarts the levels below it, and a plain
 // paragraph restarts them all. Bullets neither count nor interrupt.
 std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs);
+// Each paragraph's numbered list: 1 for the first list the document
+// numbers, 2 for the next, and so on, in order of first appearance; 0 for a
+// bullet or a plain paragraph. At most kMaxLists.
+std::vector<int> list_ids(const std::vector<Paragraph>& paragraphs);
+// Writes list_ids() back into the paragraphs: the same lists, labelled 1 up.
+void canonical_lists(std::vector<Paragraph>& paragraphs);
+// Word's Restart Numbering: the numbered item at `index` and the rest of its
+// list become a new list, starting again at 1. False, changing nothing,
+// when the item is not numbered or its list already starts there.
+bool restart_numbering(std::vector<Paragraph>& paragraphs, size_t index);
+// Word's Continue Previous List: the numbered item at `index` and the rest
+// of its list join the nearest numbered list above that is another list.
+// False, changing nothing, when there is none.
+bool continue_numbering(std::vector<Paragraph>& paragraphs, size_t index);
 // The label in front of an item: a bullet by level, or "1.", "a.", "i." by
 // level for a number. Empty for no list.
 std::string list_label(const ListFormat& list, int number);
