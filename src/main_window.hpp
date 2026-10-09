@@ -3,6 +3,7 @@
 #pragma once
 
 #include "document.hpp"
+#include "page_text.hpp"
 #include "settings.hpp"
 #include "view.hpp"
 
@@ -55,6 +56,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool on_delete_event(GdkEventAny* event) override;
 
  private:
+  // The window tests in tests/ drive the real window and read back what GTK
+  // made of it.
+  friend struct MainWindowProbe;
+
   struct Snapshot {
     Document doc;
     int offset = 0;
@@ -76,6 +81,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_page_size();
   void set_zoom(int zoom);
   void sync_zoom_checks();
+  void queue_page_status();
+  void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
   bool on_context(GdkEventButton* event);
@@ -171,6 +178,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void show_align();
   void on_paragraph();
   void toggle_list_kind(ListKind kind);
+  // Tags the paragraph that starts at `start` with `format`, or holds the
+  // format aside for the empty last paragraph.
+  void tag_paragraph(int start, const ParaFormat& format);
+  // The caret's paragraph, counted in '\n' as capture() counts them.
+  size_t caret_paragraph() const;
+  // Restart Numbering (true) or Continue Previous List (false) at the
+  // caret's item, as one undo step. False when it changes nothing.
+  bool renumber_list(bool restart);
+  // Shows the right-click menu's numbering items on a numbered item.
+  void sync_context_numbering();
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -199,7 +216,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ScrolledWindow paste_;
   Gtk::Box board_{Gtk::ORIENTATION_VERTICAL};
   Gtk::EventBox page_;
-  Gtk::TextView text_;
+  PageText text_;
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   Gtk::Box status_{Gtk::ORIENTATION_HORIZONTAL};
   Gtk::Label message_;
@@ -242,6 +259,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
   Gtk::MenuItem* context_paste_ = nullptr;
+  Gtk::SeparatorMenuItem* context_numbering_rule_ = nullptr;
+  Gtk::MenuItem* context_restart_ = nullptr;
+  Gtk::MenuItem* context_continue_ = nullptr;
   std::vector<Gtk::MenuItem*> recent_items_;
 
   Gtk::ToolButton* new_tool_ = nullptr;
@@ -275,6 +295,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  bool page_status_queued_ = false;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
