@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <map>
 #include <iterator>
 
@@ -465,6 +466,15 @@ int list_label_x(Align align, int hang_x, int text_x, int label_width, int space
   const int width = std::max(0, label_width);
   const int before = std::max(std::max(0, space), width + std::max(0, gap));
   return std::max(0, text_x - before);
+}
+
+int list_centre_from(Align align, int hang_x, int label_width, int space, int gap)
+{
+  if (align != Align::Center)
+    return -1;
+  const long long before = std::max<long long>(
+      std::max(0, space), static_cast<long long>(std::max(0, label_width)) + std::max(0, gap));
+  return static_cast<int>(std::min<long long>(std::max(0, hang_x) + before, INT_MAX));
 }
 
 int list_text_start(const Indents& raw)

@@ -32,6 +32,7 @@ inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
+  ~MainWindow() override;
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -174,6 +175,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   // a plain paragraph.
   bool list_label_place(const Paragraph& paragraph, int offset, int number,
                         Glib::RefPtr<Pango::Layout>& layout, int& x, Gdk::Rectangle& where);
+  // The label's layout and pixel width, and a space's width in its font.
+  Glib::RefPtr<Pango::Layout> list_label_layout(const Paragraph& paragraph, int offset, int number,
+                                                int& width, int& gap);
+  // A centred list item whose text must be centred from somewhere other
+  // than its left indent (list_centre_from()) gets a screen-only
+  // "list-shift" tag carrying that left margin, one tag per margin in use,
+  // so label and first line centre as one unit. Recomputed in an idle after
+  // any text or format change, renumbering, zoom, or view switch; capture()
+  // and so RTF, undo, the dirty check, and document comparison never see it.
+  void queue_list_shifts();
+  void update_list_shifts();
+  Glib::RefPtr<Gtk::TextTag> list_shift_tag(int left_margin);
   void sync_list_controls();
 
   void build_find();
@@ -275,6 +288,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool pending_insert_ = false;
   bool sizing_ = false;
   bool page_status_queued_ = false;
+  bool list_shifts_queued_ = false;
+  bool shifting_ = false;
+  sigc::connection list_shifts_idle_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

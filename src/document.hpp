@@ -137,9 +137,17 @@ std::string list_label(const ListFormat& list, int number);
 // (list_text_start()) and the right indent. With the label `space` before
 // the text, label and text are centred together, as one unit, between the
 // first-line indent and the right indent, as in Word 97, and a
-// right-aligned item's label and text end at the right indent. A label
-// wider than `space` pushes the unit left of centre by half the excess.
+// right-aligned item's label and text end at the right indent.
 int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap);
+// Where a centred list item's text must be centred from, in pixels, so its
+// label and first line centre as one unit between the first-line indent
+// (`hang_x`) and the right indent, as in Word 97: the label's room before
+// the text past the first-line indent. GTK centres every line of a
+// paragraph between its left margin and the right indent (Pango ignores the
+// first-line indent there), so the editor sets this as the paragraph's left
+// margin on screen only, never in the document; wrapped lines move with it.
+// -1 for anything not centred.
+int list_centre_from(Align align, int hang_x, int label_width, int space, int gap);
 // Where a list item's first line of text starts, in twips from the page
 // margin: the left indent when the label hangs in front of it, else a
 // standard hang past the label (left + first + kListHang), as when the
