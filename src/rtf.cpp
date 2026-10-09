@@ -1036,8 +1036,11 @@ class Reader {
       e.right = param;
     } else if (word == "fi" && has_param) {
       e.first = param;
-    } else if (word == "ql" || word == "qj" || word == "qd") {
+    } else if (word == "ql" || word == "qd") {
+      // \qd, distributed, reads as left, as in a paragraph.
       e.align = Align::Left;
+    } else if (word == "qj") {
+      e.align = Align::Justify;
     } else if (word == "qc") {
       e.align = Align::Center;
     } else if (word == "qr") {
@@ -1605,6 +1608,8 @@ std::string rtf_export(const Document& doc)
         out << "\\qc";
       else if (style.align == Align::Right)
         out << "\\qr";
+      else if (style.align == Align::Justify)
+        out << "\\qj";
       else if (up && up->align != Align::Left)
         out << "\\ql";
       if (style.heading >= 1 && style.heading <= 6)

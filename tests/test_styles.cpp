@@ -871,7 +871,58 @@ void markdown()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 540;
+// A Justified style keeps its alignment through RTF, and so do the styles
+// built on it, as Word writes and reads \qj in a style sheet entry.
+void justified_styles()
+{
+  Document doc = writeit::blank_document("Sans", 11);
+  Style normal = doc.styles.front();
+  normal.align = Align::Justify;
+  CHECK(writeit::update_style(doc, "Normal", normal));
+  CHECK(writeit::find_style(doc.styles, "Heading 1")->align == Align::Justify);
+  doc.paragraphs.push_back(para("Heading"));
+  CHECK(writeit::apply_style(doc, 1, 1, "Heading 1"));
+  // A Left style on a Justified base, and a Justified one on a Left base.
+  Style left = normal;
+  left.name = "Flush";
+  left.based_on = "Normal";
+  left.align = Align::Left;
+  CHECK(writeit::add_style(doc, left));
+  Style spread = left;
+  spread.name = "Spread";
+  spread.based_on = "Flush";
+  spread.align = Align::Justify;
+  CHECK(writeit::add_style(doc, spread));
+  const std::string rtf = writeit::rtf_export(doc);
+  // Normal's entry, and Heading 1's on it, say \qj; Flush says \ql.
+  CHECK(contains(rtf, "{\\snext0\\qj"));
+  const size_t h1 = rtf.find(" Heading 1;}");
+  const size_t h1_start = rtf.rfind('{', h1);
+  CHECK(h1 != std::string::npos && rtf.substr(h1_start, h1 - h1_start).find("\\qj") !=
+                                       std::string::npos);
+  const size_t flush = rtf.find(" Flush;}");
+  CHECK(flush != std::string::npos &&
+        rtf.substr(rtf.rfind('{', flush), flush - rtf.rfind('{', flush)).find("\\ql") !=
+            std::string::npos);
+  const Document back = import(rtf);
+  CHECK(back == doc);
+  for (const char* name : {"Normal", "Heading 1", "Heading 6", "Block Text", "Spread"}) {
+    const Style* s = writeit::find_style(back.styles, name);
+    CHECK(s != nullptr && s->align == Align::Justify);
+  }
+  CHECK(writeit::find_style(back.styles, "Flush")->align == Align::Left);
+  // A hand-written entry: \qj is Justify, \qd (distributed) is left.
+  const Document hand = import(
+      "{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}{\\stylesheet{\\snext0\\f0\\fs22 Normal;}"
+      "{\\s1\\sbasedon0\\snext1\\qj\\f0\\fs22 Wide;}{\\s2\\sbasedon0\\snext2\\qd\\f0\\fs22 Far;}}"
+      "\\pard\\s1\\qj\\f0\\fs22 One\\par}");
+  const Style* wide = writeit::find_style(hand.styles, "Wide");
+  const Style* far = writeit::find_style(hand.styles, "Far");
+  CHECK(wide != nullptr && wide->align == Align::Justify);
+  CHECK(far != nullptr && far->align == Align::Left);
+}
+
+constexpr int kChecks = 559;
 
 int main()
 {
@@ -885,5 +936,6 @@ int main()
   rtf_hostile();
   markdown();
   m1_files();
+  justified_styles();
   return suite_test::done("styles", kChecks);
 }
