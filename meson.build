@@ -265,6 +265,15 @@ write_it_window_width_tests = executable(
 )
 test('window-width', write_it_window_width_tests, timeout: 60)
 
+# The real window under a display: a closed window leaves nothing on the
+# clipboard, which outlives it (run under ASan to see a use after free).
+write_it_window_lifetime_tests = executable(
+  'write-it-window-lifetime-tests',
+  'tests/test_window_lifetime.cpp',
+  dependencies: [writeit_dep],
+)
+test('window-lifetime', write_it_window_lifetime_tests, timeout: 60)
+
 # The real window under a display: what overflows the toolbars at 960 px and
 # at the narrowest reaches the overflow menus with its label, and does there
 # what its button or box does.
