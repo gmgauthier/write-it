@@ -206,6 +206,33 @@ test(
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
 
+write_it_page_count_tests = executable(
+  'write-it-page-count-tests',
+  'tests/test_page_count.cpp',
+  'src/view.cpp',
+  include_directories: inc,
+)
+test('page-count', write_it_page_count_tests)
+
+# The real window under a display: the status bar's page cell and zoom cell.
+write_it_status_bar_tests = executable(
+  'write-it-status-bar-tests',
+  'tests/test_status_bar.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('status-bar', write_it_status_bar_tests, timeout: 120)
+
 # The real window under a display: View > Zoom and View > Page / Draft, and
 # the width GTK allocates and wraps at after each change.
 write_it_page_width_tests = executable(
@@ -225,3 +252,24 @@ write_it_page_width_tests = executable(
   dependencies: [gtkmm],
 )
 test('page-width', write_it_page_width_tests, timeout: 120)
+
+# The real window under a display: every way the caret moves (Ctrl+End,
+# arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
+# pasteboard scrolls to keep it in view.
+write_it_caret_scroll_tests = executable(
+  'write-it-caret-scroll-tests',
+  'tests/test_caret_scroll.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)

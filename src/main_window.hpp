@@ -32,6 +32,7 @@ inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 class MainWindow : public Gtk::ApplicationWindow {
  public:
   MainWindow();
+  ~MainWindow() override;
 
  protected:
   bool on_delete_event(GdkEventAny* event) override;
@@ -61,7 +62,22 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_toolbar_row();
   void apply_page_size();
   void set_zoom(int zoom);
+  // The text view sits on the page inside the pasteboard's scroller, so
+  // GTK's own scroll-to-caret has nothing to scroll. These scroll the
+  // pasteboard instead: follow_caret() after the caret moves or the text
+  // changes, scroll_to_caret() again whenever the layout settles, until the
+  // wheel or a scrollbar takes the view somewhere else.
+  void follow_caret();
+  void scroll_to_caret();
+  // Page Down and Page Up, with or without Shift. For the same reason GTK
+  // would take the whole buffer as one page; these move the caret, and the
+  // pasteboard, by the pasteboard's visible height and keep the caret's x.
+  static void on_move_cursor(GtkTextView* view, GtkMovementStep step, gint count, gboolean extend,
+                             gpointer self);
+  bool page_caret(int count, bool extend);
   void sync_zoom_checks();
+  void queue_page_status();
+  void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
   bool on_context(GdkEventButton* event);
@@ -154,6 +170,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void show_align();
   void on_paragraph();
   void toggle_list_kind(ListKind kind);
+  // Tags the paragraph that starts at `start` with `format`, or holds the
+  // format aside for the empty last paragraph.
+  void tag_paragraph(int start, const ParaFormat& format);
+  // The caret's paragraph, counted in '\n' as capture() counts them.
+  size_t caret_paragraph() const;
+  // Restart Numbering (true) or Continue Previous List (false) at the
+  // caret's item, as one undo step. False when it changes nothing.
+  bool renumber_list(bool restart);
+  // Shows the right-click menu's numbering items on a numbered item.
+  void sync_context_numbering();
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -225,6 +251,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
   Gtk::MenuItem* context_paste_ = nullptr;
+  Gtk::SeparatorMenuItem* context_numbering_rule_ = nullptr;
+  Gtk::MenuItem* context_restart_ = nullptr;
+  Gtk::MenuItem* context_continue_ = nullptr;
   std::vector<Gtk::MenuItem*> recent_items_;
 
   Gtk::ToolButton* new_tool_ = nullptr;
@@ -254,6 +283,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  bool follow_caret_ = false;
+  // The idle follow_caret() queues; one at a time, and gone with the window.
+  sigc::connection caret_idle_;
+  // The status bar's page count idle, likewise.
+  sigc::connection page_status_idle_;
   double styled_zoom_ = -1;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;

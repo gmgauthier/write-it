@@ -35,6 +35,12 @@ void framed(Gtk::Box& row, Gtk::Widget& child, bool expand)
 
 }  // namespace
 
+MainWindow::~MainWindow()
+{
+  caret_idle_.disconnect();
+  page_status_idle_.disconnect();
+}
+
 MainWindow::MainWindow()
 {
   settings_.load();
@@ -246,7 +252,20 @@ void MainWindow::build_menus()
   context_.append(*context_cut_);
   context_.append(*context_copy_);
   context_.append(*context_paste_);
+  // This app's own items, after a separator: Word's numbering commands,
+  // shown on a numbered item.
+  context_numbering_rule_ = Gtk::manage(new Gtk::SeparatorMenuItem());
+  context_restart_ = Gtk::manage(new Gtk::MenuItem("_Restart Numbering", true));
+  context_continue_ = Gtk::manage(new Gtk::MenuItem("C_ontinue Previous List", true));
+  context_restart_->signal_activate().connect([this] { renumber_list(true); });
+  context_continue_->signal_activate().connect([this] { renumber_list(false); });
+  context_.append(*context_numbering_rule_);
+  context_.append(*context_restart_);
+  context_.append(*context_continue_);
   context_.show_all();
+  context_numbering_rule_->hide();
+  context_restart_->hide();
+  context_continue_->hide();
 }
 
 Gtk::ToolButton* MainWindow::add_tool(Gtk::Toolbar& bar, const char* icon, const char* tip,
@@ -376,6 +395,144 @@ void MainWindow::build_page()
       apply_page_size();
     ruler_.queue_draw();
   });
+
+  // Keep the caret in view. Any move of the insert mark, and any edit (the
+  // caret rides along with typing without a mark-set), asks to follow it;
+  // each later layout (the page growing, a zoom, a view switch, a resize)
+  // scrolls to it again. The wheel and the scrollbars let it go.
+  buffer_->signal_mark_set().connect(
+      [this](const Gtk::TextBuffer::iterator&, const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
+        if (mark == buffer_->get_insert())
+          follow_caret();
+      });
+  buffer_->signal_changed().connect([this] { follow_caret(); });
+  text_.signal_size_allocate().connect([this](Gtk::Allocation&) { scroll_to_caret(); });
+  g_signal_connect(text_.gobj(), "move-cursor", G_CALLBACK(&MainWindow::on_move_cursor), this);
+  paste_.get_vadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
+  paste_.get_hadjustment()->signal_changed().connect([this] { scroll_to_caret(); });
+  paste_.signal_scroll_event().connect(
+      [this](GdkEventScroll*) {
+        follow_caret_ = false;
+        return false;
+      },
+      false);
+  for (Gtk::Scrollbar* bar : {paste_.get_vscrollbar(), paste_.get_hscrollbar()}) {
+    if (!bar)
+      continue;
+    bar->add_events(Gdk::BUTTON_PRESS_MASK);
+    bar->signal_button_press_event().connect(
+        [this](GdkEventButton*) {
+          follow_caret_ = false;
+          return false;
+        },
+        false);
+  }
+}
+
+void MainWindow::on_move_cursor(GtkTextView* view, GtkMovementStep step, gint count,
+                                gboolean extend, gpointer self)
+{
+  if (step != GTK_MOVEMENT_PAGES)
+    return;
+  if (static_cast<MainWindow*>(self)->page_caret(count, extend != FALSE))
+    g_signal_stop_emission_by_name(view, "move-cursor");
+}
+
+bool MainWindow::page_caret(int count, bool extend)
+{
+  auto adj = paste_.get_vadjustment();
+  const double page = adj->get_page_size();
+  if (!buffer_ || page <= 0 || count == 0)
+    return false;
+  Gdk::Rectangle caret;
+  Gdk::Rectangle first;
+  Gdk::Rectangle last;
+  text_.get_iter_location(buffer_->get_insert()->get_iter(), caret);
+  text_.get_iter_location(buffer_->begin(), first);
+  text_.get_iter_location(buffer_->end(), last);
+  // A screen on, aimed at the middle of the line there, and no further
+  // than the first or the last line.
+  const double step = page * count;
+  const int y = static_cast<int>(
+      std::max<double>(first.get_y(), std::min<double>(last.get_y(), caret.get_y() + step)));
+  Gtk::TextIter target;
+  int trailing = 0;
+  text_.get_iter_at_position(target, trailing, caret.get_x(), y + caret.get_height() / 2);
+  // The character boundary nearest the caret's x.
+  if (trailing > 0 && !target.ends_line())
+    target.forward_chars(trailing);
+  // The pasteboard goes the same screen, so the caret keeps its place on it.
+  adj->set_value(
+      std::max(adj->get_lower(), std::min(adj->get_value() + step, adj->get_upper() - page)));
+  if (extend)
+    buffer_->move_mark(buffer_->get_insert(), target);
+  else
+    buffer_->place_cursor(target);
+  return true;
+}
+
+void MainWindow::follow_caret()
+{
+  follow_caret_ = true;
+  // Opening a file or an undo rebuilds the buffer in many edits; the idle
+  // below scrolls once, after the last of them.
+  if (!loading_ && !restoring_)
+    scroll_to_caret();
+  // The layout may not have caught up with the move yet; look again once
+  // the main loop is idle.
+  if (caret_idle_.connected())
+    return;
+  caret_idle_ = Glib::signal_idle().connect([this] {
+    scroll_to_caret();
+    return false;
+  });
+}
+
+void MainWindow::scroll_to_caret()
+{
+  if (!follow_caret_ || !buffer_ || !text_.get_realized())
+    return;
+  Gdk::Rectangle rect;
+  text_.get_iter_location(buffer_->get_insert()->get_iter(), rect);
+  int wx = 0;
+  int wy = 0;
+  text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(), rect.get_y(), wx, wy);
+  int x = 0;
+  int y = 0;
+  if (!text_.translate_coordinates(board_, wx, wy, x, y))
+    return;
+  // Bring [from, from + size) inside the adjustment's page, with a little
+  // room either side when the page has it.
+  auto reveal = [](const Glib::RefPtr<Gtk::Adjustment>& adj, double from, double size) {
+    const double page = adj->get_page_size();
+    if (page <= 0)
+      return;
+    const double pad = page >= size + 2 * 18 ? 18 : 0;
+    const double value = adj->get_value();
+    double want = value;
+    if (from - pad < value)
+      want = from - pad;
+    else if (from + size + pad > value + page)
+      want = from + size + pad - page;
+    want = std::max(adj->get_lower(), std::min(want, adj->get_upper() - page));
+    if (want != value)
+      adj->set_value(want);
+  };
+  // On the first line, or the last, all the way: the page's edge and the
+  // gray beyond it show, not a margin short of them.
+  Gdk::Rectangle first;
+  Gdk::Rectangle last;
+  text_.get_iter_location(buffer_->begin(), first);
+  text_.get_iter_location(buffer_->end(), last);
+  auto v = paste_.get_vadjustment();
+  if (rect.get_y() <= first.get_y())
+    v->set_value(v->get_lower());
+  else if (rect.get_y() >= last.get_y())
+    v->set_value(std::max(v->get_lower(), v->get_upper() - v->get_page_size()));
+  else
+    reveal(v, y, rect.get_height());
+  // Vertical only for now. Sideways following waits until the window can
+  // be narrow enough to test it (#16).
 }
 
 void MainWindow::build_status()
@@ -384,8 +541,13 @@ void MainWindow::build_status()
   message_.set_halign(Gtk::ALIGN_START);
   message_.set_hexpand(true);
   message_.set_ellipsize(Pango::ELLIPSIZE_END);
-  page_label_.set_text("Page 1 of 1");
+  page_label_.set_text(page_label(PageCount{}));
   zoom_cell_.add(zoom_label_);
+  // No window of its own: popup_at_widget() places the menu from the
+  // widget's allocation, which is in its parent's window, and an event box
+  // with a visible window counted the offset twice, sending the menu to the
+  // corner of the screen.
+  zoom_cell_.set_visible_window(false);
   zoom_cell_.add_events(Gdk::BUTTON_PRESS_MASK);
   zoom_cell_.signal_button_press_event().connect(
       [this](GdkEventButton* event) {
@@ -396,6 +558,9 @@ void MainWindow::build_status()
         return true;
       },
       false);
+  // Popup menus are not the window's children, so show_all_children() never
+  // reaches them; without this the zoom cell popped an empty menu.
+  zoom_popup_.show_all();
   framed(status_, message_, true);
   framed(status_, page_label_, false);
   framed(status_, zoom_cell_, false);
@@ -470,6 +635,35 @@ void MainWindow::apply_page_size()
   if (current_w != width || current_h != height)
     page_.set_size_request(width, height);
   sizing_ = false;
+  queue_page_status();
+}
+
+void MainWindow::queue_page_status()
+{
+  if (page_status_idle_.connected())
+    return;
+  // After GtkTextView's own validation idle, so the line heights are real.
+  page_status_idle_ = Glib::signal_idle().connect(
+      [this] {
+        update_page_status();
+        return false;
+      },
+      Glib::PRIORITY_DEFAULT_IDLE);
+}
+
+// "Page n of m", approximate until M3: see page_count() in view.hpp.
+void MainWindow::update_page_status()
+{
+  if (!buffer_)
+    return;
+  int end_y = 0;
+  int end_h = 0;
+  text_.get_line_yrange(buffer_->end(), end_y, end_h);
+  Gdk::Rectangle caret;
+  text_.get_iter_location(buffer_->get_iter_at_mark(buffer_->get_insert()), caret);
+  const Glib::ustring label = page_label(page_count(end_y + end_h, caret.get_y(), zoom_factor()));
+  if (page_label_.get_text() != label)
+    page_label_.set_text(label);
 }
 
 void MainWindow::set_zoom(int zoom)
@@ -574,6 +768,7 @@ bool MainWindow::on_context(GdkEventButton* event)
       buffer_->place_cursor(where);
     update_actions();
   }
+  sync_context_numbering();
   context_.popup_at_pointer(reinterpret_cast<GdkEvent*>(event));
   return true;
 }
