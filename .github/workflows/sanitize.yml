@@ -13,8 +13,9 @@ jobs:
     name: ASan and UBSan (debian:trixie)
     runs-on: ubuntu-24.04
     # The same container and packages as build.yml's debian:trixie job.
+    # Pulled from the AWS public ECR mirror of Docker Hub library images.
     container:
-      image: debian:trixie
+      image: public.ecr.aws/docker/library/debian:trixie
     env:
       DEBIAN_FRONTEND: noninteractive
       # smoke-open and desktop-file must run here, not skip.
