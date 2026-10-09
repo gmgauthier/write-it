@@ -262,8 +262,8 @@ writeit::Indents indents(int left, int right, int first)
 
 void dialog_validation()
 {
-  using writeit::indents_fit;
   using writeit::Units;
+  using writeit::indents_fit;
   // Boundary: hanging exactly to the margin is fine, one twip past is not.
   CHECK(indents_fit(indents(720, 0, -720)));
   CHECK(!indents_fit(indents(720, 0, -721)));
@@ -294,6 +294,9 @@ void dialog_validation()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 1594;
+
 int main()
 {
   model();
@@ -302,5 +305,5 @@ int main()
   rtf_read();
   markdown();
   dialog_validation();
-  return suite_test::done("indents");
+  return suite_test::done("indents", kChecks);
 }

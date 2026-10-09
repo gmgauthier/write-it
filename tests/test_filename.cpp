@@ -107,7 +107,7 @@ void export_names()
 
 void idempotent()
 {
-  const std::vector<std::string> names = {"zout",      "zout.rtf.rtf", "zout.RTF", "zout.txt",
+  const std::vector<std::string> names = {"zout",     "zout.rtf.rtf", "zout.RTF", "zout.txt",
                                           "my.report", "zout.",        ".rtf",     "/tmp/a.b/c"};
   for (const auto& name : names) {
     CHECK(rtf(rtf(name)) == rtf(name));
@@ -270,6 +270,9 @@ void folder_named_like_the_file()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 162;
+
 int main()
 {
   save_as_names();
@@ -280,5 +283,5 @@ int main()
   overwrite_order();
   no_local_path();
   folder_named_like_the_file();
-  return suite_test::done("filename");
+  return suite_test::done("filename", kChecks);
 }

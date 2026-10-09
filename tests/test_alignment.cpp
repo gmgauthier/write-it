@@ -171,14 +171,18 @@ void markdown()
   // Markdown has no alignment; export drops it and does not fail.
   writeit::Document doc;
   doc.paragraphs.push_back(para("Centre", Align::Center));
-  CHECK(writeit::markdown_export(doc) == writeit::markdown_export([] {
-          writeit::Document plain;
-          plain.paragraphs.push_back(para("Centre", Align::Left));
-          return plain;
-        }()));
+  CHECK(writeit::markdown_export(doc) == writeit::markdown_export(
+                                             [] {
+                                               writeit::Document plain;
+                                               plain.paragraphs.push_back(para("Centre", Align::Left));
+                                               return plain;
+                                             }()));
 }
 
 }  // namespace
+
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 71;
 
 int main()
 {
@@ -187,5 +191,5 @@ int main()
   rtf_round_trip();
   rtf_read();
   markdown();
-  return suite_test::done("alignment");
+  return suite_test::done("alignment", kChecks);
 }

@@ -5,8 +5,7 @@
 
 namespace {
 
-writeit::Run run(const char* text, const char* font, int size, bool bold, bool italic,
-                 bool underline)
+writeit::Run run(const char* text, const char* font, int size, bool bold, bool italic, bool underline)
 {
   writeit::Run item;
   item.text = text;
@@ -19,6 +18,9 @@ writeit::Run run(const char* text, const char* font, int size, bool bold, bool i
 }
 
 }  // namespace
+
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 43;
 
 int main()
 {
@@ -83,8 +85,7 @@ int main()
   styled.paragraphs[1].runs[1].underline = true;
   styled.paragraphs[1].runs[1].size = 24;
   styled.paragraphs[1].runs[1].font = "Times New Roman";
-  const writeit::Document again =
-      writeit::markdown_import(writeit::markdown_export(styled), "Sans", 11);
+  const writeit::Document again = writeit::markdown_import(writeit::markdown_export(styled), "Sans", 11);
   CHECK(again.paragraphs[1].runs[1].text == "bold");
   CHECK(again.paragraphs[1].runs[1].bold);
   CHECK(!again.paragraphs[1].runs[1].underline);
@@ -112,5 +113,5 @@ int main()
   CHECK(heading_rtf.paragraphs[0].heading == 2);
   CHECK(heading_rtf.paragraphs[0].runs[0].text == "Section");
 
-  return suite_test::done("document");
+  return suite_test::done("document", kChecks);
 }

@@ -10,8 +10,8 @@
 
 namespace {
 
-using writeit::view_geometry;
 using writeit::ViewMode;
+using writeit::view_geometry;
 
 const double kZooms[] = {0.5, 0.75, 1.0, 1.5, 2.0, 1.7333, 0.2222, 3.1};
 
@@ -91,11 +91,14 @@ void mode_names()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 63;
+
 int main()
 {
   page();
   draft();
   indents_scale();
   mode_names();
-  return suite_test::done("view");
+  return suite_test::done("view", kChecks);
 }

@@ -870,6 +870,9 @@ void markdown()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 540;
+
 int main()
 {
   builtins();
@@ -882,5 +885,5 @@ int main()
   rtf_hostile();
   markdown();
   m1_files();
-  return suite_test::done("styles");
+  return suite_test::done("styles", kChecks);
 }

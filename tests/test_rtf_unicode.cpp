@@ -109,8 +109,8 @@ bool all_valid(const writeit::Document& doc)
 writeit::Document read_doc(const std::string& body, const std::string& fonts = "")
 {
   writeit::Document doc;
-  const std::string head =
-      "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Sans;}" + fonts + "}\\pard ";
+  const std::string head = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Sans;}" + fonts +
+                           "}\\pard ";
   CHECK(writeit::rtf_import(head + body + "}", doc));
   CHECK(all_valid(doc));
   return doc;
@@ -179,33 +179,25 @@ void raw_bytes()
 {
   // Bytes outside ASCII in the file itself are not valid RTF, but they must
   // not get through as broken UTF-8 either.
-  CHECK(read("a\xED\xA0\x80"
-             "b")
-            .find('b') != std::string::npos);  // encoded surrogate
-  CHECK(read("a\xFF"
-             "b")
-            .find('b') != std::string::npos);
+  CHECK(read("a\xED\xA0\x80" "b").find('b') != std::string::npos);  // encoded surrogate
+  CHECK(read("a\xFF" "b").find('b') != std::string::npos);
   CHECK(read("a\xE2\x82").find('a') != std::string::npos);  // truncated
-  CHECK(read("a\xC0\xAF"
-             "b")
-            .find('b') != std::string::npos);  // overlong
-  CHECK(read("a\xF4\x90\x80\x80"
-             "b")
-            .find('b') != std::string::npos);  // past U+10FFFF
-  CHECK(read("caf\xC3\xA9") == "caf\u00e9");   // valid UTF-8 passes through
+  CHECK(read("a\xC0\xAF" "b").find('b') != std::string::npos);  // overlong
+  CHECK(read("a\xF4\x90\x80\x80" "b").find('b') != std::string::npos);  // past U+10FFFF
+  CHECK(read("caf\xC3\xA9") == "caf\u00e9");  // valid UTF-8 passes through
 }
 
 // Bug Basher on #5: \'hh reads up to two real hex digits and nothing more.
 void hex_escapes()
 {
-  CHECK(read("a\\'00b") == "ab");        // NUL never reaches the text
-  CHECK(read("a\\'zzb") == "azzb");      // no digits: dropped, zz kept
-  CHECK(read("a\\' b") == "a b");        // no 0x0B, and the space and b kept
-  CHECK(read("a\\'4g") == "ag");         // one digit: 0x04, a control, dropped
-  CHECK(read("a\\'e9b") == "a\u00e9b");  // two digits, as before
+  CHECK(read("a\\'00b") == "ab");      // NUL never reaches the text
+  CHECK(read("a\\'zzb") == "azzb");    // no digits: dropped, zz kept
+  CHECK(read("a\\' b") == "a b");      // no 0x0B, and the space and b kept
+  CHECK(read("a\\'4g") == "ag");       // one digit: 0x04, a control, dropped
+  CHECK(read("a\\'e9b") == "a\u00e9b"); // two digits, as before
   CHECK(read("a\\'E9b") == "a\u00e9b");
-  CHECK(read("a\\'e9fb") == "a\u00e9fb");  // a third hex digit is text
-  CHECK(read("a\\'4") == "a");             // at the very end
+  CHECK(read("a\\'e9fb") == "a\u00e9fb"); // a third hex digit is text
+  CHECK(read("a\\'4") == "a");          // at the very end
   CHECK(read("a\\'") == "a");
   // The brace after a short escape is not eaten, so nesting stays right.
   {
@@ -220,7 +212,7 @@ void hex_escapes()
     }
   }
   CHECK(read("{\\b a\\'}c") == "ac");
-  CHECK(read("a\\'\\'41b") == "aAb");  // a bare \' then a real one
+  CHECK(read("a\\'\\'41b") == "aAb"); // a bare \' then a real one
   // \'hh is one fallback character, even when short.
   CHECK(read("\\u233\\'4x") == "\u00e9x");
 }
@@ -239,16 +231,13 @@ void font_table()
   CHECK(font_of("{\\f1\\uc2 \\u26085\\'93\\'fa\\u26412\\'96\\'7bGothic;}") == nihon + "Gothic");
   CHECK(font_of("{\\f1\\uc0 \\u26085\\u26412 Gothic;}") == nihon + "Gothic");
   CHECK(font_of("{\\f1 Caf\\'e9;}") == "Caf\u00e9");
-  CHECK(font_of("{\\f1 \\u55357?\\u56832?Emoji;}") ==
-        "\xF0\x9F\x98\x80"
-        "Emoji");
+  CHECK(font_of("{\\f1 \\u55357?\\u56832?Emoji;}") == "\xF0\x9F\x98\x80" "Emoji");
   CHECK(font_of("{\\f1 \\u9999999999?X;}") == kFffd + "X");
   CHECK(font_of("{\\f1 A\\'00\\u0?B;}") == "AB");
   // Word's font entries carry \\*\\panose and \\falt groups; they are not the name.
   CHECK(font_of("{\\f1\\froman\\fcharset0\\fprq2{\\*\\panose 02020603050405020304}Times New "
                 "Roman;}") == "Times New Roman");
-  CHECK(font_of("{\\f1 MS Mincho{\\*\\falt \\'82\\'6c\\'82\\'72 \\'96\\'be\\'92\\'a9};}") ==
-        "MS Mincho");
+  CHECK(font_of("{\\f1 MS Mincho{\\*\\falt \\'82\\'6c\\'82\\'72 \\'96\\'be\\'92\\'a9};}") == "MS Mincho");
   // Font numbers are not indices: Word's theme fonts are \\f31500 and up, and a
   // huge number must not allocate a table that size.
   CHECK(read_doc("\\f31507 x", "{\\f31507 Theme;}").paragraphs[0].runs[0].font == "Theme");
@@ -301,9 +290,7 @@ void control_characters()
   CHECK(shape(read_doc("a\\'07b\\'1bc\\'7fd\\'81e")) == "abcde");
   CHECK(shape(read_doc("a\\u0?b")) == "ab");
   // Raw control bytes in the file (not valid RTF) do not get through either.
-  CHECK(shape(read_doc(std::string("a\x01"
-                                   "b\x7f") +
-                       "c")) == "abc");
+  CHECK(shape(read_doc(std::string("a\x01" "b\x7f") + "c")) == "abc");
   // Paragraph properties carry over the break, as with \line.
   {
     const auto doc = read_doc("\\li720 a\\u10?b");
@@ -325,11 +312,7 @@ void writer_controls()
   writeit::Document doc;
   writeit::Paragraph paragraph;
   writeit::Run run;
-  run.text = std::string(
-                 "a\nb\r\nc\rd\te\x01"
-                 "f\x7f"
-                 "g\x1b") +
-             "h";
+  run.text = std::string("a\nb\r\nc\rd\te\x01" "f\x7f" "g\x1b") + "h";
   run.font = std::string("Odd\x02") + "Font";
   paragraph.runs.push_back(run);
   doc.paragraphs.push_back(paragraph);
@@ -355,21 +338,10 @@ void writer_controls()
 void fuzz()
 {
   // Deterministic, offline: a small LCG over RTF-ish tokens and raw bytes.
-  const char* tokens[] = {"\\u",    "\\uc",     "-",
-                          "0",      "1",        "9",
-                          "5",      "6",        "?",
-                          " ",      "{",        "}",
-                          "\\'",    "e9",       "3f",
-                          "\\par ", "a",        "\\",
-                          "55357",  "56832",    "65535",
-                          "\\tab",  "\xED\xA0", "\xFF",
-                          "\xC3",   "\x80",     "\\*",
-                          "\\f",    "x",        "\xF0\x9F",
-                          "\\'",    "0",        "a",
-                          "d",      "z",        "13",
-                          "10",     "\x01",     "{\\fonttbl{\\f1 ",
-                          ";}}",    "\\'0",     "\\'00",
-                          "\x7f"};
+  const char* tokens[] = {"\\u",  "\\uc", "-",     "0",    "1",     "9",   "5",      "6",
+                          "?",    " ",    "{",     "}",    "\\'",   "e9",  "3f",     "\\par ",
+                          "a",    "\\",   "55357", "56832", "65535", "\\tab", "\xED\xA0", "\xFF",
+                          "\xC3", "\x80", "\\*",   "\\f",  "x",     "\xF0\x9F", "\\'", "0", "a", "d", "z", "13", "10", "\x01", "{\\fonttbl{\\f1 ", ";}}", "\\'0", "\\'00", "\x7f"};
   const size_t count = sizeof(tokens) / sizeof(tokens[0]);
   uint32_t seed = 12345;
   auto next = [&]() {
@@ -403,6 +375,9 @@ void fuzz()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 245;
+
 int main()
 {
   scalar_values();
@@ -414,5 +389,5 @@ int main()
   control_characters();
   writer_controls();
   fuzz();
-  return suite_test::done("rtf-unicode");
+  return suite_test::done("rtf-unicode", kChecks);
 }
