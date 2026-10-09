@@ -252,3 +252,24 @@ write_it_page_width_tests = executable(
   dependencies: [gtkmm],
 )
 test('page-width', write_it_page_width_tests, timeout: 120)
+
+# The real window under a display: every way the caret moves (Ctrl+End,
+# arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
+# pasteboard scrolls to keep it in view.
+write_it_caret_scroll_tests = executable(
+  'write-it-caret-scroll-tests',
+  'tests/test_caret_scroll.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('caret-scroll', write_it_caret_scroll_tests, timeout: 120)
