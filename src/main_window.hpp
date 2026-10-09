@@ -89,6 +89,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_chrome();
   void apply_toolbar_row();
   void apply_page_size();
+  // apply_page_size() once the current layout is done.
+  void queue_page_size();
   void set_zoom(int zoom);
   // The text view sits on the page inside the pasteboard's scroller, so
   // GTK's own scroll-to-caret has nothing to scroll. These scroll the
@@ -231,6 +233,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   void queue_list_shifts();
   void update_list_shifts();
   Glib::RefPtr<Gtk::TextTag> list_shift_tag(int left_margin);
+  // Word 97 moves a left-aligned or justified list item's text to the next
+  // default tab stop when its label reaches where the text starts. On screen
+  // only, through "list-tab" tags the document never sees; brought up to
+  // date in an idle after edits, formatting, zoom, and the view.
+  void queue_list_tabs();
+  Glib::RefPtr<Gtk::TextTag> list_tab_tag(int indent);
+  void update_list_tabs();
   void sync_list_controls();
 
   void build_find();
@@ -241,6 +250,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void tell(const std::string& sentence);
 
   Settings settings_;
+  // The size, while not maximised, and the maximised state, saved on close.
+  WindowMemory window_memory_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
   bool suppress_zoom_ = false;
 
@@ -340,6 +351,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool in_user_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
+  // The idle that sizes the page again after a layout: to a new pasteboard
+  // size (Fit width, Draft) or to text that rewrapped to another height.
+  // One at a time, and gone with the window.
+  sigc::connection page_idle_;
+  // The text wants more height than the page gave it; the idle resizes.
+  bool grow_page_ = false;
   bool follow_caret_ = false;
   // The idle follow_caret() queues; one at a time, and gone with the window.
   sigc::connection caret_idle_;
@@ -348,6 +365,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;
+  // The list-tab idle, likewise; tabbing_ while it retags.
+  sigc::connection list_tabs_idle_;
+  bool tabbing_ = false;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;

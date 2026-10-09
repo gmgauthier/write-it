@@ -52,6 +52,10 @@ struct ListFormat {
   // above). Items keep counting in their list past plain paragraphs, bullets
   // and other lists; a new list starts again at 1. Bullets have none.
   int list = 0;
+  // The number the item's list level starts at, as Word's \levelstartat: 0
+  // through kMaxListStart. A level takes its first item's start, at the
+  // start of the list and again under each new parent. Bullets have none.
+  int start = 1;
   // The paragraph's own indents from before it joined the list, which
   // leaving the list gives back. Editing memory, not document content: it is
   // not written to the file and not part of equality. A list item read from
@@ -64,9 +68,13 @@ constexpr int kListLevels = 9;
 // The most numbered lists a document holds; items of later lists join the
 // last one. Below the RTF reader's 4096 list definitions.
 constexpr int kMaxLists = 4000;
+// Word's largest \levelstartat.
+constexpr int kMaxListStart = 32767;
 // Word's list indents: half an inch per level, the label hanging a quarter inch.
 constexpr int kListStep = 720;
 constexpr int kListHang = 360;
+// Word 97's default tab stops: every half inch from the left margin.
+constexpr int kDefaultTab = 720;
 
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.

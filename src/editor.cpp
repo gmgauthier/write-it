@@ -98,6 +98,15 @@ bool is_list_shift(const std::string& name)
   return name.compare(0, kListShiftPrefix.size(), kListShiftPrefix) == 0;
 }
 
+// The screen-only tags that move a list item's text past a wide label: see
+// MainWindow::update_list_tabs().
+const std::string kListTabPrefix = std::string("list-tab") + '\x1f';
+
+bool is_list_tab(const std::string& name)
+{
+  return name.compare(0, kListTabPrefix.size(), kListTabPrefix) == 0;
+}
+
 template <class Tag>
 std::string tag_name(const Glib::RefPtr<Tag>& tag)
 {
@@ -151,7 +160,7 @@ std::string para_name(const ParaFormat& format)
   for (const int value :
        {indents.left, indents.right, indents.first, static_cast<int>(format.align),
         static_cast<int>(list.kind), list.level, list.has_own ? 1 : 0, list.own.left,
-        list.own.right, list.own.first, list.list}) {
+        list.own.right, list.own.first, list.list, list.start}) {
     name += '\x1f';
     name += std::to_string(value);
   }
@@ -177,7 +186,7 @@ bool parse_para(const std::string& name, ParaFormat& format)
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 11 || values[3] < 0 || values[3] > static_cast<int>(Align::Justify) ||
+  if (values.size() != 12 || values[3] < 0 || values[3] > static_cast<int>(Align::Justify) ||
       values[4] < 0 || values[4] > static_cast<int>(ListKind::Number))
     return false;
   format.indents.left = values[0];
@@ -189,6 +198,7 @@ bool parse_para(const std::string& name, ParaFormat& format)
   format.list.has_own = values[6] != 0;
   format.list.own = Indents{values[7], values[8], values[9]};
   format.list.list = values[10];
+  format.list.start = values[11];
   return true;
 }
 
@@ -308,15 +318,25 @@ void MainWindow::build_editor()
   text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
   // The status bar's page cell follows the text and the caret.
   buffer_->signal_changed().connect([this] { queue_page_status(); });
-  // Centred list items follow their label's width: see update_list_shifts().
-  buffer_->signal_changed().connect([this] { queue_list_shifts(); });
-  auto shift_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
+  // Centred list items follow their label's width (update_list_shifts()), and
+  // wide labels push left-aligned and justified text on (update_list_tabs()).
+  buffer_->signal_changed().connect([this] {
+    queue_list_shifts();
+    queue_list_tabs();
+  });
+  // Neither pass's own tags change what either pass computes.
+  auto lists_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
                              const Gtk::TextIter&) {
-    if (!shifting_ && !is_list_shift(tag_name(tag)))
-      queue_list_shifts();
+    if (shifting_ || tabbing_)
+      return;
+    const std::string name = tag_name(tag);
+    if (is_list_shift(name) || is_list_tab(name))
+      return;
+    queue_list_shifts();
+    queue_list_tabs();
   };
-  buffer_->signal_apply_tag().connect(shift_on_tag);
-  buffer_->signal_remove_tag().connect(shift_on_tag);
+  buffer_->signal_apply_tag().connect(lists_on_tag);
+  buffer_->signal_remove_tag().connect(lists_on_tag);
   buffer_->signal_mark_set().connect(
       [this](const Gtk::TextBuffer::iterator&, const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
         if (mark == buffer_->get_insert())
@@ -1185,8 +1205,9 @@ void MainWindow::restyle_tags()
     if (parse_para(tag_name(tag), format))
       style_para_tag(tag, format);
   });
-  // Zoom, the view, and the margins all move list labels and their room.
+  // Zoom, the view, and the margins move labels, their room, and tab stops.
   queue_list_shifts();
+  queue_list_tabs();
   caret_key_.clear();
   update_caret_font();
 }
@@ -2250,6 +2271,121 @@ void MainWindow::update_list_shifts()
     raise_headings();
   }
   shifting_ = false;
+}
+
+void MainWindow::queue_list_tabs()
+{
+  if (list_tabs_idle_.connected() || !buffer_)
+    return;
+  // Before GTK lays the text out again and redraws it.
+  list_tabs_idle_ = Glib::signal_idle().connect(
+      [this] {
+        update_list_tabs();
+        return false;
+      },
+      Glib::PRIORITY_HIGH_IDLE + 10);
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::list_tab_tag(int indent)
+{
+  const Glib::ustring name = kListTabPrefix + std::to_string(indent);
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    tag->property_indent() = indent;
+    table->add(tag);
+  }
+  return tag;
+}
+
+void MainWindow::update_list_tabs()
+{
+  if (!buffer_)
+    return;
+  auto table = buffer_->get_tag_table();
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old;
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_list_tab(tag_name(tag)))
+      old.push_back(tag);
+  });
+  const Document doc = capture();
+  auto tabbed = [](const Paragraph& p) {
+    return clamp_list(p.list).kind != ListKind::None &&
+           (p.align == Align::Left || p.align == Align::Justify);
+  };
+  if (old.empty() && std::none_of(doc.paragraphs.begin(), doc.paragraphs.end(), tabbed))
+    return;
+  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  const int total = buffer_->get_char_count();
+  tabbing_ = true;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> used;
+  int offset = 0;
+  for (size_t i = 0; i < doc.paragraphs.size() && offset < total; ++i) {
+    const Paragraph& paragraph = doc.paragraphs[i];
+    int length = 0;
+    for (const Run& run : paragraph.runs)
+      length += static_cast<int>(Glib::ustring(run.text).length());
+    const int end = std::min(total, offset + length + 1);
+    Glib::RefPtr<Gtk::TextTag> want;
+    if (tabbed(paragraph)) {
+      // The label in the paragraph's first font, as drawn.
+      int width = 0;
+      int gap = 0;
+      list_label_layout(paragraph, offset, numbers[i], width, gap);
+      const Indents indents = clamp_indents(paragraph.indents);
+      const int text_twips = list_text_start(indents);
+      // As Word's tab after the label: the text stays put while the label
+      // ends before it, at least a pixel clear.
+      const int label_end = margin_left() + indent_px(indents.left + indents.first) + width + 1;
+      if (label_end > margin_left() + indent_px(text_twips)) {
+        // The first half-inch stop from the left margin that clears it.
+        int stop = text_twips - ((text_twips % kDefaultTab) + kDefaultTab) % kDefaultTab;
+        while (margin_left() + indent_px(stop) < label_end && stop < 2 * kMaxIndent)
+          stop += kDefaultTab;
+        // Relative to the paragraph tag's left margin, as its indent is.
+        want = list_tab_tag(margin_left() + indent_px(stop) -
+                            std::max(0, margin_left() + indent_px(indents.left)));
+      }
+    }
+    const auto s = buffer_->get_iter_at_offset(offset);
+    const auto e = buffer_->get_iter_at_offset(end);
+    for (const auto& tag : old) {
+      auto it = s;
+      if (tag != want && (s.has_tag(tag) || (it.forward_to_tag_toggle(tag) && it.compare(e) < 0)))
+        buffer_->remove_tag(tag, buffer_->get_iter_at_offset(offset),
+                            buffer_->get_iter_at_offset(end));
+    }
+    if (want) {
+      auto it = s;
+      if (!s.has_tag(want) || (it.forward_to_tag_toggle(want) && it.compare(e) < 0))
+        buffer_->apply_tag(want, buffer_->get_iter_at_offset(offset),
+                           buffer_->get_iter_at_offset(end));
+      if (std::find(used.begin(), used.end(), want) == used.end())
+        used.push_back(want);
+    }
+    offset += length + 1;
+  }
+  // Tags no paragraph needs go, so the table holds one per indent in use.
+  for (const auto& tag : old)
+    if (std::find(used.begin(), used.end(), tag) == used.end())
+      table->remove(tag);
+  // A tab outranks every paragraph tag's indent. Raising a tag relays out
+  // the text, so only when a paragraph tag sits above one.
+  int top_para = -1;
+  ParaFormat ignored;
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (parse_para(tag_name(tag), ignored))
+      top_para = std::max(top_para, tag->get_priority());
+  });
+  if (std::any_of(used.begin(), used.end(), [&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+        return tag->get_priority() < top_para;
+      })) {
+    for (const auto& tag : used)
+      tag->set_priority(table->get_size() - 1);
+    raise_headings();
+  }
+  tabbing_ = false;
 }
 
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
