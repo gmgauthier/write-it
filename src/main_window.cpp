@@ -38,6 +38,7 @@ void framed(Gtk::Box& row, Gtk::Widget& child, bool expand)
 MainWindow::~MainWindow()
 {
   caret_idle_.disconnect();
+  page_status_idle_.disconnect();
 }
 
 MainWindow::MainWindow()
@@ -626,17 +627,20 @@ void MainWindow::apply_page_size()
 
 void MainWindow::queue_page_status()
 {
-  if (page_status_queued_)
+  if (page_status_idle_.connected())
     return;
-  page_status_queued_ = true;
   // After GtkTextView's own validation idle, so the line heights are real.
-  Glib::signal_idle().connect_once([this] { update_page_status(); }, Glib::PRIORITY_DEFAULT_IDLE);
+  page_status_idle_ = Glib::signal_idle().connect(
+      [this] {
+        update_page_status();
+        return false;
+      },
+      Glib::PRIORITY_DEFAULT_IDLE);
 }
 
 // "Page n of m", approximate until M3: see page_count() in view.hpp.
 void MainWindow::update_page_status()
 {
-  page_status_queued_ = false;
   if (!buffer_)
     return;
   int end_y = 0;
