@@ -1,0 +1,28 @@
+# LeakSanitizer suppressions for the sanitize CI job (.github/workflows/sanitize.yml).
+#
+# System libraries only. Every entry names a shared library that write-it
+# links against, never a write-it function, file or test. Do not add an
+# entry that matches write-it's own code (writeit::, src/, tests/, a
+# write-it-* executable): a leak in write-it must fail the job.
+#
+# Each entry is here because a window suite aborts without it, from memory
+# the library allocates and keeps for the life of the process:
+#
+#   libfontconfig  Pango's font map caches fontconfig patterns and font sets
+#                  (pango_font_map_list_families -> FcFontSetList), first
+#                  reached from MainWindow::fill_font_combo. Never freed.
+#   libGLX_mesa    GDK probes GLX once in gtk_init (epoxy_glx_version).
+#   libglib        GTK's file chooser, run by Save As in toolbar-overflow and
+#                  import-clean: GFiles from its async enumeration, and the
+#                  GError it drops for a cancelled GTask.
+#
+# How a match works: LSan suppresses a leak if any frame of its allocation
+# stack matches. CI uses ASan's fast unwinder, which stops at the first
+# library built without frame pointers, so a leak allocated by fontconfig or
+# glib shows only that library's frame. So libglib also hides glib memory
+# (g_strdup, g_malloc) that write-it itself fails to free. Memory write-it
+# allocates with new or malloc is never hidden. To see every frame, run once
+# with ASAN_OPTIONS=...:fast_unwind_on_malloc=0 (slow: minutes per suite).
+leak:libfontconfig.so
+leak:libGLX_mesa.so
+leak:libglib-2.0.so
