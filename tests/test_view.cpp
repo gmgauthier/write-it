@@ -17,7 +17,7 @@ const double kZooms[] = {0.5, 0.75, 1.0, 1.5, 2.0, 1.7333, 0.2222, 3.1};
 
 int text_width(const writeit::ViewGeometry& g)
 {
-  return g.page_width - 2 * g.margin_x;
+  return g.page_width - g.margin_left - g.margin_right;
 }
 
 void page()
@@ -26,7 +26,8 @@ void page()
   const auto g = view_geometry(ViewMode::Page, 1.0);
   CHECK(g.page_width == 540);
   CHECK(g.page_height == 470);
-  CHECK(g.margin_x == 42);
+  CHECK(g.margin_left == 42);
+  CHECK(g.margin_right == 42);
   CHECK(g.margin_y == 36);
   CHECK(g.gap == 18);
   CHECK(g.chrome);
@@ -34,10 +35,11 @@ void page()
   const auto half = view_geometry(ViewMode::Page, 0.5);
   CHECK(half.page_width == 270);
   CHECK(half.page_height == 235);
-  CHECK(half.margin_x == 21);
+  CHECK(half.margin_left == 21);
+  CHECK(half.margin_right == 21);
   CHECK(half.margin_y == 18);
   const auto tiny = view_geometry(ViewMode::Page, 0.1);
-  CHECK(tiny.margin_x == 8);
+  CHECK(tiny.margin_left == 8);
   CHECK(tiny.margin_y == 8);
   CHECK(view_geometry(ViewMode::Page, 2.0).page_width == 1080);
 }
@@ -50,17 +52,22 @@ void draft()
   CHECK(g.gap == 0);
   // No page height: the text runs on, as long as it is.
   CHECK(g.page_height == 0);
-  CHECK(g.margin_x < view_geometry(ViewMode::Page, 1.0).margin_x);
+  // A small gutter on the left in place of the page margin.
+  CHECK(g.margin_left < view_geometry(ViewMode::Page, 1.0).margin_left);
   CHECK(g.margin_y < view_geometry(ViewMode::Page, 1.0).margin_y);
-  CHECK(g.margin_x > 0);
+  CHECK(g.margin_left > 0);
   CHECK(g.margin_y > 0);
   for (double z : kZooms) {
     const auto p = view_geometry(ViewMode::Page, z);
     const auto d = view_geometry(ViewMode::Draft, z);
     // The same wrap width at every zoom, so Draft breaks lines where Page does.
     CHECK(text_width(d) == text_width(p));
-    CHECK(d.page_width < p.page_width);
-    CHECK(d.page_width >= 1);
+    // The white area keeps Page's width: a GtkTextView will not shrink below
+    // the lines it has laid out, so Draft keeps the width and moves the text
+    // left instead.
+    CHECK(d.page_width == p.page_width);
+    CHECK(d.margin_left < p.margin_left);
+    CHECK(d.margin_right > p.margin_right);
   }
 }
 
