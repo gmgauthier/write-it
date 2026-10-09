@@ -292,6 +292,9 @@ void dialog_validation()
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 1594;
+
 int main()
 {
   model();
@@ -300,5 +303,5 @@ int main()
   rtf_read();
   markdown();
   dialog_validation();
-  return suite_test::done("indents");
+  return suite_test::done("indents", kChecks);
 }
