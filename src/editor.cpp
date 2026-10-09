@@ -4,6 +4,7 @@
 
 #include "filename.hpp"
 #include "font_sizes.hpp"
+#include "open_plan.hpp"
 
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
@@ -294,7 +295,7 @@ bool one_insertion(const Document& before, const Document& after, Insertion& out
 
 }  // namespace
 
-void MainWindow::tell(const char* sentence)
+void MainWindow::tell(const std::string& sentence)
 {
   Gtk::MessageDialog dialog(*this, sentence, false, Gtk::MESSAGE_ERROR, Gtk::BUTTONS_OK, true);
   dialog.set_title("Write-It");
@@ -459,6 +460,7 @@ bool MainWindow::new_document(bool prompt)
   undo_.clear();
   redo_.clear();
   save_path_.clear();
+  source_path_.clear();
   title_name_ = "Untitled";
   typing_ = Run{};
   typing_.font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
@@ -517,18 +519,22 @@ void MainWindow::open_document()
   open_path(dialog.get_filename(), fallback);
 }
 
-void MainWindow::open_path(const std::string& path, OpenKind fallback)
+bool MainWindow::open_path(const std::string& path, OpenKind fallback)
 {
   if (!Glib::file_test(path, Glib::FILE_TEST_EXISTS)) {
-    tell("That file is missing.");
-    return;
+    tell(missing_message(path));
+    return false;
   }
+  // Already open, under this name or another (a link, a ".." path): that
+  // window comes forward instead of a second copy here.
+  if (open_elsewhere_ && open_elsewhere_(path))
+    return true;
   std::string bytes;
   try {
     bytes = Glib::file_get_contents(path);
   } catch (const Glib::Error&) {
-    tell("That file could not be opened.");
-    return;
+    tell(unreadable_message(path));
+    return false;
   }
   const std::string ext = extension_of(path);
   OpenKind kind = fallback;
@@ -541,8 +547,8 @@ void MainWindow::open_path(const std::string& path, OpenKind fallback)
   Document doc;
   if (kind == OpenKind::Rtf) {
     if (!rtf_import(bytes, doc)) {
-      tell("That file could not be opened.");
-      return;
+      tell(unreadable_message(path));
+      return false;
     }
   } else if (kind == OpenKind::Markdown) {
     doc = markdown_import(bytes, typing_.font, typing_.size);
@@ -550,8 +556,26 @@ void MainWindow::open_path(const std::string& path, OpenKind fallback)
     doc = plain_import(bytes, typing_.font, typing_.size);
   }
   if (!confirm_discard_or_save())
-    return;
+    return false;
   install_loaded(doc, path, kind == OpenKind::Rtf);
+  return true;
+}
+
+bool MainWindow::open_file(const std::string& path)
+{
+  return open_path(path, OpenKind::Rtf);
+}
+
+bool MainWindow::pristine() const
+{
+  // An unedited import is not pristine: it has a file behind it
+  // (source_path_), so another file must not be loaded over it.
+  return save_path_.empty() && source_path_.empty() && save_point_ && !dirty();
+}
+
+void MainWindow::refuse_not_local(const std::string& uri)
+{
+  tell(not_local_message(uri));
 }
 
 void MainWindow::install_loaded(const Document& doc, const std::string& path, bool keep_path)
@@ -562,8 +586,10 @@ void MainWindow::install_loaded(const Document& doc, const std::string& path, bo
   title_name_ = Glib::path_get_basename(path);
   // An opened file is unmodified until it is edited, as in Word 97, RTF or
   // not. A .md or .txt is not RTF, so it keeps no save path: Save goes
-  // through Save As, which offers the name with .rtf.
+  // through Save As, which offers the name with .rtf. It keeps where it came
+  // from instead, so a second request for that file finds this window.
   save_path_ = keep_path ? path : std::string();
+  source_path_ = keep_path ? std::string() : path;
   save_point_ = true;
   saved_ = capture();
   settings_.last_dir = Glib::path_get_dirname(path);
@@ -612,6 +638,7 @@ bool MainWindow::write_rtf(const std::string& path)
     return false;
   }
   save_path_ = path;
+  source_path_.clear();
   title_name_ = Glib::path_get_basename(path);
   saved_ = capture();
   save_point_ = true;
@@ -675,13 +702,18 @@ bool MainWindow::confirm_discard_or_save()
 
 void MainWindow::remember_path(const std::string& path)
 {
-  auto& recent = settings_.recent;
-  recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
-  recent.insert(recent.begin(), path);
-  if (static_cast<int>(recent.size()) > settings_.recent_count)
-    recent.resize(static_cast<size_t>(settings_.recent_count));
+  // Other windows may have added files since this one read the ini.
+  reload_recent();
+  settings_.recent = push_recent(settings_.recent, path, settings_.recent_count);
   settings_.save();
   rebuild_recent();
+}
+
+void MainWindow::reload_recent()
+{
+  Settings disk;
+  disk.load();
+  settings_.recent = disk.recent;
 }
 
 void MainWindow::rebuild_recent()
@@ -2674,6 +2706,7 @@ void MainWindow::on_options()
       settings_.recent_count = count;
   } catch (const std::exception&) {
   }
+  reload_recent();
   if (static_cast<int>(settings_.recent.size()) > settings_.recent_count)
     settings_.recent.resize(static_cast<size_t>(settings_.recent_count));
   settings_.units = units_from_text(units->get_active_id().raw());
