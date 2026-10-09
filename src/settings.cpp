@@ -171,4 +171,9 @@ void Settings::save_to(const std::string& path) const
   }
 }
 
+std::vector<std::string> push_recent(std::vector<std::string> recent, const std::string&, int)
+{
+  return recent;
+}
+
 }  // namespace writeit

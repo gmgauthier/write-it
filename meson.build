@@ -27,7 +27,7 @@ configure_file(
 
 inc = include_directories('.', 'src')
 
-executable(
+write_it_exe = executable(
   'write-it',
   'src/main.cpp',
   'src/application.cpp',
@@ -36,6 +36,7 @@ executable(
   'src/about_dialog.cpp',
   'src/settings.cpp',
   'src/filename.cpp',
+  'src/open_plan.cpp',
   'src/document.cpp',
   'src/rtf.cpp',
   'src/units.cpp',
@@ -55,6 +56,17 @@ install_data(
   'data/write-it.css',
   install_dir: get_option('datadir') / 'write-it',
 )
+
+write_it_open_tests = executable(
+  'write-it-open-tests',
+  'tests/test_open.cpp',
+  'src/open_plan.cpp',
+  'src/settings.cpp',
+  'src/units.cpp',
+  include_directories: inc,
+  dependencies: [glibmm],
+)
+test('open', write_it_open_tests)
 
 write_it_filename_tests = executable(
   'write-it-filename-tests',
@@ -136,3 +148,19 @@ write_it_rtf_unicode_tests = executable(
   dependencies: dependency('glib-2.0'),
 )
 test('rtf-unicode', write_it_rtf_unicode_tests)
+
+# Launches the program with files under the suite's X display; see the script.
+test(
+  'smoke-open',
+  find_program('tests/smoke_open.sh'),
+  args: [write_it_exe.full_path()],
+  depends: write_it_exe,
+  timeout: 180,
+  is_parallel: false,
+)
+
+test(
+  'desktop-file',
+  find_program('tests/desktop_file.sh'),
+  args: [meson.current_source_dir() / 'data' / 'write-it.desktop'],
+)
