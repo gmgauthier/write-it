@@ -793,6 +793,9 @@ class Reader {
         override_.has_id = true;
       } else if (word == "ls" && has_param) {
         override_.ls = param;
+      } else if (word == "listoverridestartat") {
+        // The override starts its list's numbers again: a list of its own.
+        override_.restarts = true;
       }
     }
   }
@@ -808,29 +811,61 @@ class Reader {
       lists_[building_.id] = building_;
     if (closing.in_override && !state_.in_override && override_.has_id && override_.ls > 0 &&
         (overrides_.size() < kMaxListDefs || overrides_.count(override_.ls) != 0))
-      overrides_[override_.ls] = override_.list_id;
+      overrides_[override_.ls] = override_;
   }
 
   // \ls through the override and list tables, then Word 97's \pn. An \ls
   // that names nothing is still a list item: it becomes a bullet.
-  ListFormat resolve(const ListMarks& marks) const
+  //
+  // A numbered item counts in the \listid its \ls points at, as in Word: two
+  // overrides of one list are one list, unless an override starts the
+  // numbers again (\listoverridestartat). Word 6/95's \pn numbers are one
+  // list. merge() relabels the lists 1 up with canonical_lists().
+  ListFormat resolve(const ListMarks& marks)
   {
     const int level = std::max(0, std::min(kListLevels - 1, marks.ilvl));
     if (marks.ls > 0) {
       const auto over = overrides_.find(marks.ls);
       if (over != overrides_.end()) {
-        const auto list = lists_.find(over->second);
+        const auto list = lists_.find(over->second.list_id);
         if (list != lists_.end()) {
           const ListDef& def = list->second;
           const size_t at = def.simple ? 0 : static_cast<size_t>(level);
-          return ListFormat{def.kinds[at], level};
+          ListFormat format{def.kinds[at], level};
+          if (format.kind == ListKind::Number)
+            format.list =
+                over->second.restarts ? label_for(1, marks.ls) : label_for(0, over->second.list_id);
+          return format;
         }
       }
       if (marks.pn.kind != ListKind::None)
-        return clamp_list(marks.pn);
+        return pn_list(marks.pn);
       return ListFormat{ListKind::Bullet, level};
     }
-    return clamp_list(marks.pn);
+    return pn_list(marks.pn);
+  }
+
+  ListFormat pn_list(const ListFormat& pn)
+  {
+    ListFormat format = clamp_list(pn);
+    if (format.kind == ListKind::Number)
+      format.list = label_for(2, 0);
+    return format;
+  }
+
+  // A list label for a source of lists (0 a \listid, 1 a restarting \ls,
+  // 2 Word 6/95's \pn) and its number there. Labels start at 1; 0 would mean
+  // "continue the list above". The tables hold at most kMaxListDefs entries,
+  // so the labels stay few.
+  int label_for(int source, int number)
+  {
+    const auto key = std::make_pair(source, number);
+    const auto found = labels_.find(key);
+    if (found != labels_.end())
+      return found->second;
+    const int label = static_cast<int>(labels_.size()) + 1;
+    labels_.emplace(key, label);
+    return label;
   }
 
   void add_text(const std::string& utf8)
@@ -911,6 +946,7 @@ class Reader {
       }
       doc.paragraphs.push_back(std::move(merged));
     }
+    canonical_lists(doc.paragraphs);
   }
 
   // One \list from the list table: the kind of each of its nine levels.
@@ -929,6 +965,7 @@ class Reader {
     int list_id = 0;
     bool has_id = false;
     int ls = 0;
+    bool restarts = false;
   };
   // Enough for any real document; a hostile one cannot grow the maps further.
   static constexpr size_t kMaxListDefs = 4096;
@@ -948,7 +985,8 @@ class Reader {
   ListMarks final_marks_;
   std::vector<ListMarks> marks_;
   std::map<int, ListDef> lists_;
-  std::map<int, int> overrides_;
+  std::map<int, Override> overrides_;
+  std::map<std::pair<int, int>, int> labels_;
   ListDef building_;
   Override override_;
   bool closed_ = false;
@@ -1030,35 +1068,26 @@ std::string rtf_export(const Document& doc)
   if (fonts.empty())
     fonts.push_back("Sans");
 
-  // Lists. \ls1 is every bullet. Each run of list paragraphs between plain
-  // ones that holds a number gets its own numbered list, \ls2 and up, so
-  // Word and LibreOffice restart the numbers where list_numbers() does.
+  // Lists. \ls1 is every bullet. Each numbered list (list_ids()) is its own
+  // Word list, \ls2 and up, so Word and LibreOffice count on past plain
+  // paragraphs and bullets, and start again at a new list, as Write-It does.
   std::vector<ListFormat> lists;
   std::vector<int> overrides(doc.paragraphs.size(), 0);
+  const std::vector<int> ids = list_ids(doc.paragraphs);
   int numbered = 0;
   bool any_list = false;
-  {
-    // The numbered list of the current run of list paragraphs, 0 until the
-    // run has a number.
-    int block = 0;
-    for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
-      const ListFormat list = clamp_list(doc.paragraphs[i].list);
-      lists.push_back(list);
-      if (list.kind == ListKind::None) {
-        block = 0;
-        continue;
-      }
-      any_list = true;
-      if (list.kind == ListKind::Bullet) {
-        overrides[i] = 1;
-        continue;
-      }
-      if (block == 0) {
-        ++numbered;
-        block = numbered + 1;
-      }
-      overrides[i] = block;
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    const ListFormat list = clamp_list(doc.paragraphs[i].list);
+    lists.push_back(list);
+    if (list.kind == ListKind::None)
+      continue;
+    any_list = true;
+    if (list.kind == ListKind::Bullet) {
+      overrides[i] = 1;
+      continue;
     }
+    numbered = std::max(numbered, ids[i]);
+    overrides[i] = ids[i] + 1;
   }
   const std::vector<int> numbers = list_numbers(doc.paragraphs);
 
