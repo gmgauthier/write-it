@@ -540,14 +540,12 @@ void MainWindow::install_loaded(const Document& doc, const std::string& path, bo
   redo_.clear();
   replace_buffer(doc, 0);
   title_name_ = Glib::path_get_basename(path);
-  if (keep_path) {
-    save_path_ = path;
-    save_point_ = true;
-    saved_ = capture();
-  } else {
-    save_path_.clear();
-    save_point_ = false;
-  }
+  // An opened file is unmodified until it is edited, as in Word 97, RTF or
+  // not. A .md or .txt is not RTF, so it keeps no save path: Save goes
+  // through Save As, which offers the name with .rtf.
+  save_path_ = keep_path ? path : std::string();
+  save_point_ = true;
+  saved_ = capture();
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
   message_.set_text(Glib::ustring("Opened ") + title_name_);

@@ -76,6 +76,27 @@ write_it_settings_tests = executable(
 )
 test('settings', write_it_settings_tests)
 
+# Opening a .txt or .md in the real window, under a display: unmodified until
+# edited, and Save still goes through Save As.
+write_it_import_clean_tests = executable(
+  'write-it-import-clean-tests',
+  'tests/test_import_clean.cpp',
+  'src/main_window.cpp',
+  'src/editor.cpp',
+  'src/about_dialog.cpp',
+  'src/settings.cpp',
+  'src/filename.cpp',
+  'src/document.cpp',
+  'src/rtf.cpp',
+  'src/units.cpp',
+  'src/view.cpp',
+  'src/page_text.cpp',
+  'src/font_sizes.cpp',
+  include_directories: inc,
+  dependencies: [gtkmm],
+)
+test('import-clean', write_it_import_clean_tests, timeout: 60)
+
 # check.hpp's guard. A suite that runs one check too few or too many, or
 # names no count, fails; done() without a count does not compile.
 check_guard = executable('check-guard', 'tests/check_guard.cpp', include_directories: inc)
