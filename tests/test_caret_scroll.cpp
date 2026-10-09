@@ -216,6 +216,28 @@ void page_key(writeit::MainWindow& window, guint keyval, bool shift, const char*
   CHECK(caret_offset(window) != bound_offset(window) || !shift);
 }
 
+// Whether the pasteboard is scrolled to its very top, or its very bottom.
+bool at_top(writeit::MainWindow& window, const char* where)
+{
+  auto v = MainWindowProbe::scroller(window).get_vadjustment();
+  const bool ok = std::abs(v->get_value() - v->get_lower()) < 0.5;
+  if (!ok)
+    std::cerr << where << ": scrolled to " << v->get_value() << ", the top is " << v->get_lower()
+              << "\n";
+  return ok;
+}
+
+bool at_bottom(writeit::MainWindow& window, const char* where)
+{
+  auto v = MainWindowProbe::scroller(window).get_vadjustment();
+  const double bottom = v->get_upper() - v->get_page_size();
+  const bool ok = std::abs(v->get_value() - bottom) < 0.5;
+  if (!ok)
+    std::cerr << where << ": scrolled to " << v->get_value() << ", the bottom is " << bottom
+              << "\n";
+  return ok;
+}
+
 int char_count(writeit::MainWindow& window)
 {
   return MainWindowProbe::buffer(window)->get_char_count();
@@ -237,7 +259,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 159;
+constexpr int kChecks = 167;
 
 int main(int argc, char* argv[])
 {
@@ -368,6 +390,24 @@ int main(int argc, char* argv[])
     page_key(window, GDK_KEY_Page_Up, false, "Page Up again");
     CHECK(caret_line(window) > 0);
     CHECK(std::abs(before_up - vvalue(window) - page_size(window)) <= 2 * 21);
+
+    // On the first line the pasteboard goes all the way to the top, so the
+    // page's top edge and the gray above it show; on the last line, all the
+    // way to the bottom. In Page and in Draft.
+    for (ViewMode mode : {ViewMode::Page, ViewMode::Draft}) {
+      MainWindowProbe::view(window, mode);
+      settle();
+      const bool page = mode == ViewMode::Page;
+      key(window, GDK_KEY_End, ctrl);
+      CHECK(at_bottom(window, page ? "Page Ctrl+End" : "Draft Ctrl+End"));
+      key(window, GDK_KEY_Home);
+      CHECK(at_bottom(window, page ? "Page Home on the last line" : "Draft Home on the last line"));
+      key(window, GDK_KEY_Home, ctrl);
+      CHECK(at_top(window, page ? "Page Ctrl+Home" : "Draft Ctrl+Home"));
+      key(window, GDK_KEY_End);
+      CHECK(at_top(window, page ? "Page End on the first line" : "Draft End on the first line"));
+    }
+    MainWindowProbe::view(window, ViewMode::Page);
     window.hide();
     settle();
   }
