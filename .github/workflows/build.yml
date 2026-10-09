@@ -1,0 +1,62 @@
+name: build
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: build and test (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Devuan Excalibur is the target. Debian trixie is the base it is built on.
+        image:
+          - devuan/devuan:excalibur
+          - debian:trixie
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git \
+            meson ninja-build g++ pkg-config \
+            libgtkmm-3.0-dev \
+            xvfb xauth
+
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          cat /etc/os-release
+          meson --version
+          g++ --version | head -n 1
+          pkg-config --modversion gtkmm-3.0
+
+      - name: Configure
+        run: meson setup build
+
+      - name: Compile
+        run: meson compile -C build
+
+      # The suite is headless. xvfb-run supplies a display so a test that
+      # opens a GTK widget still runs on a runner with no X server.
+      - name: Test
+        run: xvfb-run -a meson test -C build --print-errorlogs
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlog-${{ strategy.job-index }}
+          path: build/meson-logs/testlog.txt
+          if-no-files-found: ignore
