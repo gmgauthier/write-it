@@ -213,7 +213,7 @@ void MainWindow::build_menus()
   align_center_item_ = add_item(*format_menu, "_Center", true);
   align_right_item_ = add_item(*format_menu, "Align _Right", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*format_menu, "_Style…", false);
+  style_item_ = add_item(*format_menu, "_Style…", true);
   bullets_item_ = add_item(*format_menu, "Bull_ets", true);
   numbering_item_ = add_item(*format_menu, "_Numbering", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
@@ -296,9 +296,6 @@ void MainWindow::build_toolbars()
   for (const char* size : {"8", "9", "10", "11", "12", "14", "16", "18", "24", "36"})
     size_combo_.append(size);
   size_combo_.set_active_text("11");
-  style_combo_.append("Body text");
-  style_combo_.set_active(0);
-  style_combo_.set_sensitive(false);
   style_combo_.set_size_request(110, -1);
   style_combo_.set_tooltip_text("Style");
 

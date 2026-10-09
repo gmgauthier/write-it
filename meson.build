@@ -33,6 +33,7 @@ executable(
   'src/application.cpp',
   'src/main_window.cpp',
   'src/editor.cpp',
+  'src/styles.cpp',
   'src/about_dialog.cpp',
   'src/settings.cpp',
   'src/filename.cpp',

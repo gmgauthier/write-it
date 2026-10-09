@@ -16,16 +16,23 @@
 
 namespace writeit {
 
-// What a paragraph tag carries: the paragraph's indents, alignment, and list.
+// What a paragraph tag carries: the paragraph's indents, alignment, list,
+// and style.
 struct ParaFormat {
   Indents indents;
   Align align = Align::Left;
   ListFormat list;
+  std::string style = kNormalStyle;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
-  return a.indents == b.indents && a.align == b.align && a.list == b.list;
+  return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style;
+}
+
+inline ParaFormat para_format(const Paragraph& paragraph)
+{
+  return ParaFormat{paragraph.indents, paragraph.align, paragraph.list, paragraph.style};
 }
 
 class MainWindow : public Gtk::ApplicationWindow {
@@ -148,6 +155,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_align_toggled(Align align);
   void show_align();
   void on_paragraph();
+  // Named styles (styles.cpp).
+  std::vector<Style> sheet() const;
+  void fill_style_combo();
+  void show_style();
+  void on_style_chosen();
+  void apply_named_style(const std::string& name);
+  void apply_next_style();
+  void on_style_dialog();
+  int paragraph_index(int offset) const;
+  // One undo step from `before` to `after`, keeping the selection.
+  void commit_document(const Document& before, const Document& after);
   void toggle_list_kind(ListKind kind);
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
@@ -213,6 +231,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bullets_item_ = nullptr;
   Gtk::MenuItem* numbering_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
+  Gtk::MenuItem* style_item_ = nullptr;
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
@@ -263,6 +282,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<Snapshot> undo_;
   std::vector<Snapshot> redo_;
   gint64 last_typed_us_ = 0;
+  // The document's style sheet; empty for the default, as in Document.
+  std::vector<Style> styles_;
+  // Enter at the end of a paragraph: the new one takes the next style.
+  bool next_style_pending_ = false;
+  int next_style_from_ = -1;
   Glib::RefPtr<Gtk::TextMark> insert_start_;
   Glib::RefPtr<Gtk::TextMark> insert_end_;
 
