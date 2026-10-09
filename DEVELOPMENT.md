@@ -6,7 +6,7 @@ Display name: **Write-It**
 Binary / repo / package: `write-it`  
 APP_ID: `org.gmgauthier.WriteIt`  
 License: The Unlicense (`UNLICENSE`)  
-Repos: https://gitea.scriptorium/gmgauthier/write-it (origin), https://github.com/gmgauthier/write-it
+Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs, reviews, and CI run. https://gitea.scriptorium/gmgauthier/write-it and the working copy on plato are downstream mirrors: SysAdmin pushes `master`, milestone branches, and tags from GitHub to them, never the other way.
 
 ## Status (2026-10-09)
 
