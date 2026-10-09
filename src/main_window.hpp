@@ -164,6 +164,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   int margin_right() const;
   int indent_px(int twips) const;
   double zoom_factor() const;
+  // What apply_page_size() sizes the page's height to now, and whether the
+  // page's size request differs from it.
+  int page_height() const;
+  bool page_height_stale() const;
   Run format_of(const Gtk::TextIter& iter) const;
   int heading_of(const Gtk::TextIter& iter) const;
   int heading_near(int offset) const;

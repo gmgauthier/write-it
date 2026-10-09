@@ -24,10 +24,11 @@ int text_width(const writeit::ViewGeometry& g)
 
 void page()
 {
-  // Page keeps the geometry M0 and M1 drew.
+  // Page keeps the width M0 and M1 drew. Its least height is A4's, 29.7 cm
+  // to the 540 px of 21 cm (16838 twips to 11906).
   const auto g = view_geometry(ViewMode::Page, 1.0);
   CHECK(g.page_width == 540);
-  CHECK(g.page_height == 470);
+  CHECK(g.page_height == 764);
   CHECK(g.margin_left == 42);
   CHECK(g.margin_right == 42);
   CHECK(g.margin_y == 36);
@@ -36,7 +37,7 @@ void page()
   CHECK(g.centred);
   const auto half = view_geometry(ViewMode::Page, 0.5);
   CHECK(half.page_width == 270);
-  CHECK(half.page_height == 235);
+  CHECK(half.page_height == 382);
   CHECK(half.margin_left == 21);
   CHECK(half.margin_right == 21);
   CHECK(half.margin_y == 18);
