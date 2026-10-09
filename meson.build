@@ -253,6 +253,15 @@ write_it_page_width_tests = executable(
 )
 test('page-width', write_it_page_width_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: where list labels land beside centred,
+# right-aligned and left-aligned text, with a non-standard hang.
+write_it_list_labels_tests = executable(
+  'write-it-list-labels-tests',
+  'tests/test_list_labels.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-labels', write_it_list_labels_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: every way the caret moves (Ctrl+End,
 # arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
 # pasteboard scrolls to keep it in view.
@@ -298,6 +307,15 @@ write_it_toolbar_overflow_tests = executable(
   dependencies: [writeit_dep],
 )
 test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: a list label wider than its hang moves a
+# left-aligned or justified item's text to the next default tab stop.
+write_it_list_tabs_tests = executable(
+  'write-it-list-tabs-tests',
+  'tests/test_list_tabs.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-tabs', write_it_list_tabs_tests, timeout: 120, is_parallel: false)
 
 # The real application under a display: a file already open, asked for by a
 # symlink, a hard link or a ".." path, from Application::open or File > Open.

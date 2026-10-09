@@ -216,6 +216,30 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  // A list item's label, for the paragraph that starts at buffer `offset`:
+  // its layout, its buffer x, and the first character's location. False for
+  // a plain paragraph.
+  bool list_label_place(const Paragraph& paragraph, int offset, int number,
+                        Glib::RefPtr<Pango::Layout>& layout, int& x, Gdk::Rectangle& where);
+  // The label's layout and pixel width, and a space's width in its font.
+  Glib::RefPtr<Pango::Layout> list_label_layout(const Paragraph& paragraph, int offset, int number,
+                                                int& width, int& gap);
+  // A centred list item whose text must be centred from somewhere other
+  // than its left indent (list_centre_from()) gets a screen-only
+  // "list-shift" tag carrying that left margin, one tag per margin in use,
+  // so label and first line centre as one unit. Recomputed in an idle after
+  // any text or format change, renumbering, zoom, or view switch; capture()
+  // and so RTF, undo, the dirty check, and document comparison never see it.
+  void queue_list_shifts();
+  void update_list_shifts();
+  Glib::RefPtr<Gtk::TextTag> list_shift_tag(int left_margin);
+  // Word 97 moves a left-aligned or justified list item's text to the next
+  // default tab stop when its label reaches where the text starts. On screen
+  // only, through "list-tab" tags the document never sees; brought up to
+  // date in an idle after edits, formatting, zoom, and the view.
+  void queue_list_tabs();
+  Glib::RefPtr<Gtk::TextTag> list_tab_tag(int indent);
+  void update_list_tabs();
   void sync_list_controls();
 
   void build_find();
@@ -338,6 +362,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection caret_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  bool list_shifts_queued_ = false;
+  bool shifting_ = false;
+  sigc::connection list_shifts_idle_;
+  // The list-tab idle, likewise; tabbing_ while it retags.
+  sigc::connection list_tabs_idle_;
+  bool tabbing_ = false;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
   double styled_zoom_ = -1;

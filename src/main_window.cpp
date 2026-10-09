@@ -173,6 +173,8 @@ MainWindow::~MainWindow()
   page_idle_.disconnect();
   caret_idle_.disconnect();
   page_status_idle_.disconnect();
+  list_shifts_idle_.disconnect();
+  list_tabs_idle_.disconnect();
   clipboard_owner_.disconnect();
 }
 

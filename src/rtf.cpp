@@ -773,6 +773,9 @@ class Reader {
       pn = ListFormat{};
     } else if (word == "pnlvl" && has_param) {
       pn = clamp_list(ListFormat{ListKind::Number, param - 1});
+    } else if (word == "pnstart" && has_param) {
+      // Word 6/95's start-at, clamped by clamp_list().
+      pn.start = param;
     }
   }
 
@@ -784,6 +787,9 @@ class Reader {
         building_.has_id = true;
       } else if (word == "listsimple") {
         building_.simple = !has_param || param != 0;
+      } else if (word == "levelstartat" && has_param && building_.levels >= 1 &&
+                 building_.levels <= kListLevels) {
+        building_.starts[static_cast<size_t>(building_.levels - 1)] = clamp_start(param);
       } else if ((word == "levelnfc" || word == "levelnfcn") && has_param &&
                  building_.levels >= 1 && building_.levels <= kListLevels) {
         // 23 is a bullet and 255 no number at all; the rest are numbers.
@@ -801,6 +807,13 @@ class Reader {
       } else if (word == "listoverridestartat") {
         // The override starts its list's numbers again: a list of its own.
         override_.restarts = true;
+      } else if (word == "lfolevel") {
+        // One per level, in order.
+        if (override_.lfo < kListLevels + 1)
+          ++override_.lfo;
+      } else if (word == "levelstartat" && has_param && override_.lfo >= 1 &&
+                 override_.lfo <= kListLevels) {
+        override_.starts[static_cast<size_t>(override_.lfo - 1)] = clamp_start(param);
       }
     }
   }
@@ -837,9 +850,13 @@ class Reader {
           const ListDef& def = list->second;
           const size_t at = def.simple ? 0 : static_cast<size_t>(level);
           ListFormat format{def.kinds[at], level};
-          if (format.kind == ListKind::Number)
-            format.list =
-                over->second.restarts ? label_for(1, marks.ls) : label_for(0, over->second.list_id);
+          if (format.kind == ListKind::Number) {
+            const Override& o = over->second;
+            format.list = o.restarts ? label_for(1, marks.ls) : label_for(0, o.list_id);
+            // A restarting override's own start for the level, else the list's.
+            const size_t lvl = static_cast<size_t>(level);
+            format.start = o.restarts && o.starts[lvl] >= 0 ? o.starts[lvl] : def.starts[at];
+          }
           return format;
         }
       }
@@ -961,16 +978,32 @@ class Reader {
       all.fill(ListKind::Number);  // \levelnfc0, RTF's default
       return all;
     }();
+    std::array<int, kListLevels> starts = [] {
+      std::array<int, kListLevels> all{};
+      all.fill(1);  // \levelstartat1, RTF's default
+      return all;
+    }();
     int levels = 0;
     bool simple = false;
     int id = 0;
     bool has_id = false;
   };
+  static int clamp_start(int start)
+  {
+    return std::max(0, std::min(kMaxListStart, start));
+  }
   struct Override {
     int list_id = 0;
     bool has_id = false;
     int ls = 0;
     bool restarts = false;
+    // Each \lfolevel's \levelstartat, -1 for none: 0 is a start.
+    std::array<int, kListLevels> starts = [] {
+      std::array<int, kListLevels> all{};
+      all.fill(-1);
+      return all;
+    }();
+    int lfo = 0;
   };
   // Enough for any real document; a hostile one cannot grow the maps further.
   static constexpr size_t kMaxListDefs = 4096;
@@ -1027,14 +1060,16 @@ std::string label_rtf(const std::string& label)
 
 // One \list for the list table: nine levels of one kind of list, each
 // with Word's indents.
-void write_list(std::ostringstream& out, ListKind kind, int id)
+void write_list(std::ostringstream& out, ListKind kind, int id,
+                const std::array<int, kListLevels>& starts)
 {
   out << "{\\list\\listtemplateid" << id;
   for (int level = 0; level < kListLevels; ++level) {
     const int nfc = level_nfc(kind, level);
     const Indents indents = list_indents(level);
     out << "{\\listlevel\\levelnfc" << nfc << "\\levelnfcn" << nfc
-        << "\\leveljc0\\leveljcn0\\levelfollow0\\levelstartat1\\levelspace0\\levelindent0";
+        << "\\leveljc0\\leveljcn0\\levelfollow0\\levelstartat" << starts[static_cast<size_t>(level)]
+        << "\\levelspace0\\levelindent0";
     if (kind == ListKind::Bullet)
       out << "{\\leveltext\\'01" << label_rtf(list_label(ListFormat{kind, level}, 0)) << ";}"
           << "{\\levelnumbers;}";
@@ -1094,6 +1129,22 @@ std::string rtf_export(const Document& doc)
     numbered = std::max(numbered, ids[i]);
     overrides[i] = ids[i] + 1;
   }
+  // Each list level's start, its first item's, as list_numbers() counts.
+  std::array<int, kListLevels> ones{};
+  ones.fill(1);
+  std::vector<std::array<int, kListLevels>> starts(static_cast<size_t>(numbered) + 1, ones);
+  std::vector<std::array<bool, kListLevels>> started(static_cast<size_t>(numbered) + 1,
+                                                     std::array<bool, kListLevels>{});
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    if (lists[i].kind != ListKind::Number)
+      continue;
+    const size_t id = static_cast<size_t>(ids[i]);
+    const size_t level = static_cast<size_t>(lists[i].level);
+    if (!started[id][level]) {
+      started[id][level] = true;
+      starts[id][level] = lists[i].start;
+    }
+  }
   const std::vector<int> numbers = list_numbers(doc.paragraphs);
 
   std::ostringstream out;
@@ -1105,9 +1156,9 @@ std::string rtf_export(const Document& doc)
   out << "}\n";
   if (any_list) {
     out << "{\\*\\listtable";
-    write_list(out, ListKind::Bullet, 1);
+    write_list(out, ListKind::Bullet, 1, ones);
     for (int n = 0; n < numbered; ++n)
-      write_list(out, ListKind::Number, n + 2);
+      write_list(out, ListKind::Number, n + 2, starts[static_cast<size_t>(n) + 1]);
     out << "}\n{\\*\\listoverridetable";
     for (int n = 1; n <= numbered + 1; ++n)
       out << "{\\listoverride\\listid" << n << "\\listoverridecount0\\ls" << n << "}";

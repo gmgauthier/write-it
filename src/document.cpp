@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <map>
 #include <iterator>
 
@@ -149,7 +150,8 @@ bool operator!=(const Indents& a, const Indents& b)
 
 bool operator==(const ListFormat& a, const ListFormat& b)
 {
-  return a.kind == b.kind && a.level == b.level && (a.kind != ListKind::Number || a.list == b.list);
+  return a.kind == b.kind && a.level == b.level &&
+         (a.kind != ListKind::Number || (a.list == b.list && a.start == b.start));
 }
 
 bool operator!=(const ListFormat& a, const ListFormat& b)
@@ -183,6 +185,7 @@ ListFormat clamp_list(ListFormat list)
   list.level = std::max(0, std::min(kListLevels - 1, list.level));
   if (list.kind != ListKind::Number || list.list < 0)
     list.list = 0;
+  list.start = list.kind == ListKind::Number ? std::max(0, std::min(kMaxListStart, list.start)) : 1;
   list.own = list.has_own ? clamp_indents(list.own) : Indents{};
   return list;
 }
@@ -196,13 +199,44 @@ Indents list_indents(int level)
   return indents;
 }
 
+namespace {
+
+// The start of each list level, by (list id, level): its first item's.
+std::map<std::pair<int, int>, int> level_starts(const std::vector<Paragraph>& paragraphs,
+                                                const std::vector<int>& ids)
+{
+  std::map<std::pair<int, int>, int> starts;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const ListFormat list = clamp_list(paragraphs[i].list);
+    if (list.kind == ListKind::Number)
+      starts.emplace(std::make_pair(ids[i], list.level), list.start);
+  }
+  return starts;
+}
+
+}  // namespace
+
+namespace {
+
+// list_numbers()' counters before a level has counted.
+const std::array<int, kListLevels> kNotCounted = [] {
+  std::array<int, kListLevels> all{};
+  all.fill(-1);
+  return all;
+}();
+
+}  // namespace
+
 std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
 {
   std::vector<int> numbers;
   numbers.reserve(paragraphs.size());
   // One set of level counters per list. Plain paragraphs and bullets leave
   // them alone, so a list counts on past them.
+  // Each level starts at its first item's start, which may be 0; -1 marks a
+  // level that has not counted yet under its current parent.
   const std::vector<int> ids = list_ids(paragraphs);
+  const auto starts = level_starts(paragraphs, ids);
   std::vector<std::array<int, kListLevels>> counters;
   for (size_t i = 0; i < paragraphs.size(); ++i) {
     const ListFormat list = clamp_list(paragraphs[i].list);
@@ -212,13 +246,16 @@ std::vector<int> list_numbers(const std::vector<Paragraph>& paragraphs)
     }
     const size_t id = static_cast<size_t>(ids[i]);
     if (counters.size() <= id)
-      counters.resize(id + 1, std::array<int, kListLevels>{});
+      counters.resize(id + 1, kNotCounted);
     std::array<int, kListLevels>& count = counters[id];
+    int& here = count[static_cast<size_t>(list.level)];
+    if (here < 0)
+      here = starts.at(std::make_pair(ids[i], list.level));
     // Paragraph counts cannot reach INT_MAX, but stay defined if they did.
-    if (count[static_cast<size_t>(list.level)] < 2000000000)
-      ++count[static_cast<size_t>(list.level)];
+    else if (here < 2000000000)
+      ++here;
     for (int deeper = list.level + 1; deeper < kListLevels; ++deeper)
-      count[static_cast<size_t>(deeper)] = 0;
+      count[static_cast<size_t>(deeper)] = -1;
     numbers.push_back(count[static_cast<size_t>(list.level)]);
   }
   return numbers;
@@ -291,6 +328,15 @@ bool restart_numbering(std::vector<Paragraph>& paragraphs, size_t index)
       ids.begin() + static_cast<std::ptrdiff_t>(index);
   if (starts_here || newest >= kMaxLists)
     return false;
+  // The new list starts where the old one did, level by level.
+  const auto starts = level_starts(paragraphs, ids);
+  for (size_t i = index; i < paragraphs.size(); ++i) {
+    if (ids[i] != ids[index])
+      continue;
+    const auto found = starts.find(std::make_pair(ids[i], clamp_list(paragraphs[i].list).level));
+    if (found != starts.end())
+      paragraphs[i].list.start = found->second;
+  }
   move_rest_of_list(paragraphs, ids, index, newest + 1);
   return true;
 }
@@ -319,10 +365,14 @@ std::string list_label(const ListFormat& raw, int number)
     static const char* const kBullets[] = {"\xE2\x80\xA2", "\xE2\x97\xA6", "\xE2\x96\xAA"};
     return kBullets[list.level % 3];
   }
-  number = std::max(1, number);
+  // Letters and roman numerals have no zero: a level that starts at 0
+  // (Word's \levelstartat0) shows 0 in any style.
+  number = std::max(0, number);
   const int style = list.level % 3;
   std::string text;
-  if (style == 1) {
+  if (number == 0) {
+    text = "0";
+  } else if (style == 1) {
     // a ... z, aa, ab ...: bijective base 26, as Word letters.
     unsigned value = static_cast<unsigned>(number);
     while (value > 0) {
@@ -363,11 +413,13 @@ void join_list(Paragraph& paragraph, ListKind kind)
     paragraph.list = clamp_list(paragraph.list);
     paragraph.list.kind = kind;
     paragraph.list.list = 0;
+    paragraph.list.start = 1;
     return;
   }
   paragraph.list.kind = kind;
   paragraph.list.level = 0;
   paragraph.list.list = 0;
+  paragraph.list.start = 1;
   paragraph.list.has_own = true;
   paragraph.list.own = clamp_indents(paragraph.indents);
   Indents indents = paragraph.indents;
@@ -453,7 +505,41 @@ bool operator==(const Document& a, const Document& b)
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
-  return !numbered || list_ids(a.paragraphs) == list_ids(b.paragraphs);
+  // And the numbers they show, which is where the starts matter.
+  return !numbered || (list_ids(a.paragraphs) == list_ids(b.paragraphs) &&
+                       list_numbers(a.paragraphs) == list_numbers(b.paragraphs));
+}
+
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap)
+{
+  // Only centred and right-aligned text moves; anything else, Justify when
+  // it lands included, starts at the indent like Left.
+  if (align != Align::Center && align != Align::Right)
+    return hang_x;
+  const int width = std::max(0, label_width);
+  const int before = std::max(std::max(0, space), width + std::max(0, gap));
+  return std::max(0, text_x - before);
+}
+
+int list_centre_from(Align align, int hang_x, int label_width, int space, int gap)
+{
+  if (align != Align::Center)
+    return -1;
+  const long long before = std::max<long long>(
+      std::max(0, space), static_cast<long long>(std::max(0, label_width)) + std::max(0, gap));
+  return static_cast<int>(std::min<long long>(std::max(0, hang_x) + before, INT_MAX));
+}
+
+int list_text_start(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return std::max(indents.left, indents.left + indents.first + kListHang);
+}
+
+int list_label_space(const Indents& raw)
+{
+  const Indents indents = clamp_indents(raw);
+  return list_text_start(indents) - (indents.left + indents.first);
 }
 
 Document blank_document(const std::string& font, int size)

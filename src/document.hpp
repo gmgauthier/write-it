@@ -52,6 +52,10 @@ struct ListFormat {
   // above). Items keep counting in their list past plain paragraphs, bullets
   // and other lists; a new list starts again at 1. Bullets have none.
   int list = 0;
+  // The number the item's list level starts at, as Word's \levelstartat: 0
+  // through kMaxListStart. A level takes its first item's start, at the
+  // start of the list and again under each new parent. Bullets have none.
+  int start = 1;
   // The paragraph's own indents from before it joined the list, which
   // leaving the list gives back. Editing memory, not document content: it is
   // not written to the file and not part of equality. A list item read from
@@ -64,9 +68,13 @@ constexpr int kListLevels = 9;
 // The most numbered lists a document holds; items of later lists join the
 // last one. Below the RTF reader's 4096 list definitions.
 constexpr int kMaxLists = 4000;
+// Word's largest \levelstartat.
+constexpr int kMaxListStart = 32767;
 // Word's list indents: half an inch per level, the label hanging a quarter inch.
 constexpr int kListStep = 720;
 constexpr int kListHang = 360;
+// Word 97's default tab stops: every half inch from the left margin.
+constexpr int kDefaultTab = 720;
 
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.
@@ -124,6 +132,39 @@ bool continue_numbering(std::vector<Paragraph>& paragraphs, size_t index);
 // The label in front of an item: a bullet by level, or "1.", "a.", "i." by
 // level for a number. Empty for no list.
 std::string list_label(const ListFormat& list, int number);
+// Where a list item's label starts, in pixels, in the coordinates of the
+// arguments. Left-aligned items, and any alignment but Center and Right
+// (justified text starts at the indent too), keep it at the first-line
+// indent (`hang_x`, left + first) as before. Centred and right-aligned text
+// moves away from the indent, so the label sits just before the first
+// line's text (`text_x`): `space` before it, the paragraph's own room for
+// the label (list_label_space() in pixels), or the label's width and `gap`
+// when the label is wider than that. Never left of 0.
+//
+// GTK centres a list item's first line between where its text starts
+// (list_text_start()) and the right indent. With the label `space` before
+// the text, label and text are centred together, as one unit, between the
+// first-line indent and the right indent, as in Word 97, and a
+// right-aligned item's label and text end at the right indent.
+int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap);
+// Where a centred list item's text must be centred from, in pixels, so its
+// label and first line centre as one unit between the first-line indent
+// (`hang_x`) and the right indent, as in Word 97: the label's room before
+// the text past the first-line indent. GTK centres every line of a
+// paragraph between its left margin and the right indent (Pango ignores the
+// first-line indent there), so the editor sets this as the paragraph's left
+// margin on screen only, never in the document; wrapped lines move with it.
+// -1 for anything not centred.
+int list_centre_from(Align align, int hang_x, int label_width, int space, int gap);
+// Where a list item's first line of text starts, in twips from the page
+// margin: the left indent when the label hangs in front of it, else a
+// standard hang past the label (left + first + kListHang), as when the
+// first line does not hang or hangs less than that.
+int list_text_start(const Indents& indents);
+// The room between where a list item's label starts and where its text
+// does, in twips: the paragraph's own hang (list_text_start minus left +
+// first), at least the standard hang.
+int list_label_space(const Indents& indents);
 // Format > Bullets and Format > Numbering on the selected paragraphs. When
 // every one already has `kind` the list comes off; otherwise every one takes
 // it. A paragraph joining a list hangs its label in front of its text; one
