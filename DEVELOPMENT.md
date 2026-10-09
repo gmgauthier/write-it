@@ -81,7 +81,7 @@ Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Sa
 
 The menus are File, Edit, View, Insert, Format, Tools, Table, Help. Mnemonics: **F**ile, **E**dit, **V**iew, **I**nsert, F**o**rmat, **T**ools, T**a**ble, **H**elp. A menu item that opens a dialog ends with `…`. Accelerators are visible in the menu.
 
-**File.** Open’s filter lists RTF, Markdown, and plain text. Save writes RTF. Export writes Markdown.
+**File.** Open’s filter lists RTF, Markdown, and plain text. Save writes RTF. Export writes Markdown. Save As adds `.rtf`, and Export adds `.md`, to a typed name unless it already ends in one of theirs, in any case (Export also keeps `.markdown`). Another document extension (`.rtf`, `.md`, `.markdown`, `.txt`) is replaced, not kept, and any other dot is part of the name: `my.report` saves as `my.report.rtf`. The replace question is asked about the file actually written.
 
 | Item | Keys | What it does |
 |---|---|---|
