@@ -165,7 +165,7 @@ void mode_names()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 63;
+constexpr int kChecks = 318;
 
 int main()
 {

@@ -136,6 +136,9 @@ void go(writeit::MainWindow& window, ViewMode mode, int percent)
 
 }  // namespace
 
+// Exactly the checks this suite runs, loops included. Update it with the tests.
+constexpr int kChecks = 904;
+
 int main(int argc, char* argv[])
 {
   // A private config folder, so the test never touches the user's ini.
@@ -193,5 +196,5 @@ int main(int argc, char* argv[])
   g_remove(ini.c_str());
   g_rmdir(Glib::build_filename(home, "write-it").c_str());
   g_rmdir(home.c_str());
-  return suite_test::done("page-width");
+  return suite_test::done("page-width", kChecks);
 }
