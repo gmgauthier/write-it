@@ -233,7 +233,11 @@ void page_key(writeit::MainWindow& window, guint keyval, bool shift, const char*
     std::cerr << where << ": caret moved " << moved << " px, a screen is " << page_size(window)
               << ", now on line " << caret_line(window) << "\n";
   CHECK(far);
-  CHECK(std::abs(after.get_x() - before.get_x()) <= 2);
+  const bool kept_x = std::abs(after.get_x() - before.get_x()) <= 2;
+  if (!kept_x)
+    std::cerr << where << ": caret x " << before.get_x() << " -> " << after.get_x() << ", line "
+              << caret_line(window) << "\n";
+  CHECK(kept_x);
   CHECK(caret_visible(window, where));
   if (shift)
     CHECK(bound_offset(window) == anchor);
@@ -276,7 +280,7 @@ std::string long_letter()
   rtf +=
       "Dear Mrs Hart, thank you for the letter about the parish fete, the bunting, the "
       "raffle and the tombola stall\\par ";
-  for (int i = 1; i <= 120; ++i)
+  for (int i = 1; i <= 200; ++i)
     rtf += "Paragraph " + std::to_string(i) + " of the long letter.\\par ";
   rtf += "Yours sincerely, Greg.}";
   return rtf;
