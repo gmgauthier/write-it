@@ -49,13 +49,14 @@ struct MainWindowProbe {
   {
     return w.margin_left() + w.indent_px(twips);
   }
-  // The pixel width of `text` in Sans 11 at the window's zoom, as the label.
-  static int width(MainWindow& w, const char* text)
+  // The pixel width of `text` in Sans `size` at the window's zoom, as the
+  // label.
+  static int width(MainWindow& w, const char* text, int size = 11)
   {
     auto layout = w.text_.create_pango_layout(text);
     Pango::FontDescription desc;
     desc.set_family("Sans");
-    desc.set_size(static_cast<int>(11 * w.zoom_factor() * PANGO_SCALE));
+    desc.set_size(static_cast<int>(size * w.zoom_factor() * PANGO_SCALE));
     layout->set_font_description(desc);
     int width = 0;
     int height = 0;
@@ -139,11 +140,12 @@ constexpr int kNarrow = 1;   // left-aligned, "1."
 constexpr int kJustify = 2;  // justified, "32767."
 constexpr int kRoomy = 3;    // left-aligned, "32767." with a 1" hang
 
-writeit::Paragraph numbered(const char* text, int list, int start)
+writeit::Paragraph numbered(const char* text, int list, int start, int size = 11)
 {
   writeit::Paragraph paragraph;
   writeit::Run run;
   run.text = text;
+  run.size = size;
   paragraph.runs.push_back(run);
   paragraph.list.kind = writeit::ListKind::Number;
   paragraph.list.list = list;
@@ -213,29 +215,31 @@ void expect(writeit::MainWindow& w, int percent)
 
 // Where paragraph `line` of a standard first-level list item, labelled
 // `label`, must start: at the hang, or at the next stop clear of the label.
-int want_x(writeit::MainWindow& w, const std::string& label)
+int want_x(writeit::MainWindow& w, const std::string& label, int size = 11)
 {
-  // Widths by zoom and label: measuring 2000 labels each time is slow
+  // Widths by zoom, size and label: measuring 2000 labels each time is slow
   // under ASan.
   static std::map<std::pair<int, std::string>, int> widths;
-  const auto key = std::make_pair(MainWindowProbe::px(w, 1440), label);
+  const auto key =
+      std::make_pair(MainWindowProbe::px(w, 1440), std::to_string(size) + ' ' + label);
   auto known = widths.find(key);
   if (known == widths.end())
-    known = widths.emplace(key, MainWindowProbe::width(w, label.c_str())).first;
+    known = widths.emplace(key, MainWindowProbe::width(w, label.c_str(), size)).first;
   const writeit::Indents in = writeit::list_indents(0);
   const int end = MainWindowProbe::px(w, in.left + in.first) + known->second + 1;
   const int hang = MainWindowProbe::px(w, in.left);
   return end <= hang ? hang : next_stop(w, end);
 }
 
-// Every item of the long list sits where its label puts it.
-bool all_placed(writeit::MainWindow& w, int items)
+// Every item of a list from the top, numbered from 1 in Sans `size`, sits
+// where its label puts it.
+bool all_placed(writeit::MainWindow& w, int items, int size = 11)
 {
   for (int i = 0; i < items; ++i) {
     const std::string label = std::to_string(i + 1) + ".";
-    if (MainWindowProbe::text_x(w, i) != want_x(w, label)) {
+    if (MainWindowProbe::text_x(w, i) != want_x(w, label, size)) {
       std::cout << "  item " << i << " at " << MainWindowProbe::text_x(w, i) << ", want "
-                << want_x(w, label) << "\n";
+                << want_x(w, label, size) << "\n";
       return false;
     }
   }
@@ -344,15 +348,105 @@ void crossing(const std::string& home)
   g_remove(path.c_str());
 }
 
+// A Sans size at which items labelled `before` and `after` sit at different
+// places under the font in use, so a renumber from one to the other must
+// move the text. 0 if none.
+int boundary_size(writeit::MainWindow& w, const std::string& before, const std::string& after)
+{
+  for (int size = 8; size <= 72; ++size)
+    if (want_x(w, before, size) != want_x(w, after, size))
+      return size;
+  return 0;
+}
+
+// Opens `items` numbered items from 1 in Sans `size`, then a plain paragraph.
+void open_list(writeit::MainWindow& w, const std::string& path, int items, int size)
+{
+  writeit::Document doc;
+  for (int i = 0; i < items; ++i)
+    doc.paragraphs.push_back(numbered("Item", 1, 1, size));
+  writeit::Paragraph end;
+  writeit::Run run;
+  run.text = "End";
+  end.runs.push_back(run);
+  doc.paragraphs.push_back(end);
+  Glib::file_set_contents(path, writeit::rtf_export(doc));
+  MainWindowProbe::open(w, path);
+  settle();
+}
+
+// Renumbers past the edit, not only at the end of the list: Enter in the
+// middle of 12 items moves item 9 to 10, and 99 to 100 items by Enter goes
+// back by undo and by deleting an item whole. The size puts the two labels
+// at different places whatever Sans resolves to.
+void hundred(const std::string& home)
+{
+  const std::string path = Glib::build_filename(home, "hundred.rtf");
+  writeit::MainWindow window;
+  window.show();
+  settle();
+
+  int size = boundary_size(window, "9.", "10.");
+  std::cout << "  9./10. differ at Sans " << size << "\n";
+  CHECK(size > 0);
+  open_list(window, path, 12, size);
+  CHECK(all_placed(window, 12, size));
+  MainWindowProbe::enter_at_end(window, 3);
+  MainWindowProbe::type_at_end(window, 4, "New");
+  settle();
+  CHECK(all_placed(window, 13, size));
+  MainWindowProbe::undo(window);
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, 12, size));
+
+  size = boundary_size(window, "99.", "100.");
+  std::cout << "  99./100. differ at Sans " << size << "\n";
+  CHECK(size > 0);
+  open_list(window, path, 99, size);
+  CHECK(all_placed(window, 99, size));
+  MainWindowProbe::enter_at_end(window, 49);
+  MainWindowProbe::type_at_end(window, 50, "New");
+  settle();
+  CHECK(all_placed(window, 100, size));
+  MainWindowProbe::undo(window);
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, 99, size));
+  MainWindowProbe::enter_at_end(window, 98);
+  MainWindowProbe::type_at_end(window, 99, "New");
+  settle();
+  CHECK(all_placed(window, 100, size));
+  MainWindowProbe::delete_items(window, 9, 9);
+  settle();
+  CHECK(all_placed(window, 99, size));
+  window.hide();
+  settle();
+  g_remove(path.c_str());
+}
+
 // A long list: typing in one item looks again at that item only, not the
 // whole document, while Enter (which renumbers the items below), undo and
 // zoom still leave every item's text in the right place.
 void long_list(const std::string& home)
 {
   constexpr int kItems = 2000;
+  // After the list, another list and plain paragraphs, so a renumber of the
+  // first list is told apart from a look at the whole document.
+  constexpr int kOthers = 1000;
+  constexpr int kParagraphs = kItems + kOthers;
   writeit::Document doc;
   for (int i = 0; i < kItems; ++i)
     doc.paragraphs.push_back(numbered("Item", 1, 1));
+  for (int i = 0; i < kOthers / 2; ++i)
+    doc.paragraphs.push_back(numbered("Other", 2, 1));
+  for (int i = 0; i < kOthers / 2; ++i) {
+    writeit::Paragraph plain;
+    writeit::Run run;
+    run.text = "Plain";
+    plain.runs.push_back(run);
+    doc.paragraphs.push_back(plain);
+  }
   const std::string path = Glib::build_filename(home, "long.rtf");
   Glib::file_set_contents(path, writeit::rtf_export(doc));
   writeit::MainWindow window;
@@ -374,10 +468,28 @@ void long_list(const std::string& home)
   CHECK(all_placed(window, kItems));
 
   // Enter after item 9 makes a new item 10: it and every item below move
-  // to their new numbers' places.
+  // to their new numbers' places. Their labels change, some across a digit
+  // boundary, so that list's items may be looked at again, but not the
+  // other list or the plain paragraphs below it.
+  long before = MainWindowProbe::evaluated(window);
   MainWindowProbe::enter_at_end(window, 8);
   settle();
+  long looked = MainWindowProbe::evaluated(window) - before;
+  std::cout << "  Enter after item 9: " << looked << " of " << kParagraphs + 1 << " paragraphs\n";
+  CHECK(looked <= kItems + 3 && looked < kParagraphs);
   CHECK(all_placed(window, kItems + 1));
+  // Undo puts the whole document back, so looks at all of it again.
+  MainWindowProbe::undo(window);
+  settle();
+  CHECK(all_placed(window, kItems));
+  // Deleting an item whole renumbers as Enter does, in place.
+  before = MainWindowProbe::evaluated(window);
+  MainWindowProbe::delete_items(window, 8, 8);
+  settle();
+  looked = MainWindowProbe::evaluated(window) - before;
+  std::cout << "  deleting item 9: " << looked << " of " << kParagraphs - 1 << " paragraphs\n";
+  CHECK(looked <= kItems + 3 && looked < kParagraphs - 1);
+  CHECK(all_placed(window, kItems - 1));
   MainWindowProbe::undo(window);
   settle();
   CHECK(all_placed(window, kItems));
@@ -395,7 +507,7 @@ void long_list(const std::string& home)
 
 }  // namespace
 
-constexpr int kChecks = 60;
+constexpr int kChecks = 74;
 
 int main(int argc, char* argv[])
 {
@@ -445,6 +557,7 @@ int main(int argc, char* argv[])
   }
 
   crossing(home);
+  hundred(home);
   long_list(home);
 
   g_remove(path.c_str());
