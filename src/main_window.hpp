@@ -445,6 +445,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::map<std::string, int> tab_widths_;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
+  // How deep update_actions() is right now, and the deepest it has been:
+  // the window tests read these to see that it never runs inside itself.
+  int actions_depth_ = 0;
+  int actions_depth_peak_ = 0;
   // The buffer's mark-set. A window closed with text selected gives up the
   // selection as its text view unrealizes, which moves the marks after the
   // menus are gone: the destructor cuts it first.

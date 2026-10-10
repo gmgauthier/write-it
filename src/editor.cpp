@@ -1069,6 +1069,8 @@ void MainWindow::update_title()
 
 void MainWindow::update_actions()
 {
+  ++actions_depth_;
+  actions_depth_peak_ = std::max(actions_depth_peak_, actions_depth_);
   const bool selection = buffer_ && buffer_->get_has_selection();
   const bool any_text = buffer_ && buffer_->get_char_count() > 0;
   const bool can_undo = !undo_.empty();
@@ -1096,6 +1098,7 @@ void MainWindow::update_actions()
   sens(context_paste_, can_paste);
   sens(select_all_item_, any_text);
   sens(recent_item_, !settings_.recent.empty());
+  --actions_depth_;
 }
 
 int MainWindow::cursor_offset() const
