@@ -44,7 +44,9 @@ writeit_core_sources = files(
   'src/main_window.cpp',
   'src/narrow_combo.cpp',
   'src/open_plan.cpp',
+  'src/page.cpp',
   'src/page_text.cpp',
+  'src/page_ui.cpp',
   'src/para_check.cpp',
   'src/rtf.cpp',
   'src/settings.cpp',
@@ -171,6 +173,21 @@ write_it_document_tests = executable(
   dependencies: [writeit_dep],
 )
 test('document', write_it_document_tests)
+
+write_it_page_tests = executable(
+  'write-it-page-tests',
+  'tests/test_page.cpp',
+  dependencies: [writeit_dep],
+)
+test('page', write_it_page_tests)
+
+# Page commands in the real window. Dialogs are not opened.
+write_it_page_ui_tests = executable(
+  'write-it-page-ui-tests',
+  'tests/test_page_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-ui', write_it_page_ui_tests, timeout: 60, is_parallel: false)
 
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',

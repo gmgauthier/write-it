@@ -30,9 +30,8 @@ MeasureCheck check_measure(const std::string& text, Units units, double& value);
 // Empty for Ok.
 std::string measure_message(MeasureCheck check, Units units);
 
-// The least width the indents must leave for text, as Word 97 keeps some:
-// a quarter inch, 0.64 cm. At 50% that is still 8 px of wrap.
-constexpr int kMinTextTwips = 360;
+// The least width the indents must leave for text is kMinTextTwips (document.hpp):
+// a quarter inch, 0.64 cm, as Word 97 keeps some. At 50% that is still 8 px of wrap.
 
 enum class ParaField { None, Left, Right, By };
 

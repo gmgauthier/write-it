@@ -7,6 +7,7 @@
 #include <cctype>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -236,21 +237,29 @@ uint32_t cp1252(unsigned char byte)
 
 bool skip_destination(const std::string& word)
 {
-  return word == "stylesheet" || word == "info" || word == "colortbl" || word == "pict" ||
-         word == "object" || word == "footer" || word == "footerf" || word == "header" ||
-         word == "headerf" || word == "footnote" || word == "fldinst" || word == "fldrslt" ||
+  // pict, header, footer, footnote, and shppict are read. The first-page,
+  // left, and right stories are not, and nonshppict is the metafile fallback
+  // beside a real picture.
+  return word == "stylesheet" || word == "info" || word == "colortbl" || word == "object" ||
+         word == "footerf" || word == "footerl" || word == "footerr" || word == "headerf" ||
+         word == "headerl" || word == "headerr" || word == "fldinst" || word == "fldrslt" ||
          word == "field" || word == "xmlnstbl" || word == "generator" || word == "listtable" ||
          word == "listoverridetable" || word == "rsidtbl" || word == "themedata" ||
          word == "latentstyles" || word == "colorschememapping" || word == "datastore" ||
          word == "nonshppict" || word == "shppict" || word == "background" || word == "pntext" ||
-         word == "listtext" || word == "revtbl" || word == "xmlopen" || word == "xmlclose";
+         word == "listtext" || word == "revtbl" || word == "xmlopen" || word == "xmlclose" ||
+         word == "ftnsep" || word == "ftnsepc" || word == "aftnsep";
 }
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  if (run.text.empty())
+  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0;
+  if (!held)
     return;
-  if (!paragraph.runs.empty() && same_format(paragraph.runs.back(), run))
+  const bool sticky = !run.image.has_value() && run.note == 0 && !paragraph.runs.empty() &&
+                      !paragraph.runs.back().image.has_value() && paragraph.runs.back().note == 0 &&
+                      same_format(paragraph.runs.back(), run);
+  if (sticky)
     paragraph.runs.back().text += run.text;
   else
     paragraph.runs.push_back(std::move(run));
@@ -266,6 +275,10 @@ struct ListMarks {
 
 // Which list table a group is inside.
 enum class ListTable { None, Lists, Overrides };
+
+// Where text is being read. Copied with the group, so } returns to the story
+// outside it. Pict collects hex instead of characters.
+enum class Story { Body, Header, Footer, Note, Pict };
 
 struct State {
   int font = 0;
@@ -295,6 +308,9 @@ struct State {
   bool font_skip = false;
   bool pending_dest = false;
   int uc = 1;
+  Story story = Story::Body;
+  // \intbl, cleared by \pard. Row tracking itself lives on the reader.
+  bool intbl = false;
 };
 
 // One {\s...} entry of the style sheet as read: only what it sets.
@@ -389,6 +405,11 @@ class Reader {
           closed_ = true;
         }
         if (!stack_.empty()) {
+          // Leave a picture, header, footer, or footnote before the group's
+          // state is restored, so the bytes and the paragraphs land in the
+          // story that owned them.
+          if (stack_.back().story != state_.story)
+            leave_story(stack_.back().story);
           const State closing = state_;
           state_ = stack_.back();
           stack_.pop_back();
@@ -409,6 +430,8 @@ class Reader {
       commit_style();
     if (saw_sheet_ && !sheet_resolved_)
       resolve_styles();
+    if (state_.story != Story::Body)
+      leave_story(Story::Body);
     finish_paragraph(false);
     merge(doc);
     // A file from before styles: its headings take Heading 1-6.
@@ -539,6 +562,28 @@ class Reader {
       }
       if (list_destination(word))
         return;
+      if (word == "pict") {
+        enter_pict();
+        return;
+      }
+      if (word == "header") {
+        enter_story(Story::Header);
+        return;
+      }
+      if (word == "footer") {
+        enter_story(Story::Footer);
+        return;
+      }
+      if (word == "footnote") {
+        if (notes_.size() < static_cast<size_t>(kMaxNotes)) {
+          notes_.emplace_back();
+          note_marks_.emplace_back();
+          enter_story(Story::Note);
+        } else {
+          state_.ignore = true;
+        }
+        return;
+      }
       if (skip_destination(word)) {
         state_.ignore = true;
         return;
@@ -579,6 +624,17 @@ class Reader {
     }
     if (state_.ignore || state_.in_fonttbl)
       return;
+    if (state_.story == Story::Pict) {
+      if (word == "pngblip")
+        pict_type_ = "png";
+      else if (word == "jpegblip")
+        pict_type_ = "jpeg";
+      else if (word == "picwgoal" && has_param)
+        pict_w_ = param;
+      else if (word == "pichgoal" && has_param)
+        pict_h_ = param;
+      return;
+    }
     if (word == "par" || word == "line") {
       // A paragraph with text took its level from its runs. An empty one
       // takes the level in force at its own \par, not the one left over
@@ -603,6 +659,7 @@ class Reader {
       state_.indents = normal.indents;
       state_.align = normal.align;
       state_.marks = ListMarks{};
+      state_.intbl = false;
       return;
     }
     if (word == "s") {
@@ -701,6 +758,78 @@ class Reader {
       state_.underline = false;
       return;
     }
+    if (word == "paperw" && has_param) {
+      page_.paper_width = param;
+      return;
+    }
+    if (word == "paperh" && has_param) {
+      page_.paper_height = param;
+      return;
+    }
+    if (word == "pgwsxn" && has_param) {
+      page_.paper_width = param;
+      return;
+    }
+    if (word == "pghsxn" && has_param) {
+      page_.paper_height = param;
+      return;
+    }
+    if ((word == "margl" || word == "marglsxn") && has_param) {
+      page_.margin_left = param;
+      return;
+    }
+    if ((word == "margr" || word == "margrsxn") && has_param) {
+      page_.margin_right = param;
+      return;
+    }
+    if ((word == "margt" || word == "margtsxn") && has_param) {
+      page_.margin_top = param;
+      return;
+    }
+    if ((word == "margb" || word == "margbsxn") && has_param) {
+      page_.margin_bottom = param;
+      return;
+    }
+    if (word == "landscape") {
+      page_.landscape = !has_param || param != 0;
+      return;
+    }
+    if (word == "cols" && has_param) {
+      page_.columns = param;
+      return;
+    }
+    if (word == "colsx" && has_param) {
+      page_.column_gap = param;
+      return;
+    }
+    if (word == "page") {
+      // A break before the paragraph that follows. Mid-paragraph, the text
+      // so far stays and the rest starts the next paragraph.
+      if (!paragraph_.runs.empty())
+        finish_paragraph(true);
+      paragraph_.page_break = true;
+      return;
+    }
+    if (word == "trowd") {
+      begin_row();
+      return;
+    }
+    if (word == "cellx" && has_param) {
+      cell_rights_.push_back(param);
+      return;
+    }
+    if (word == "intbl") {
+      state_.intbl = true;
+      return;
+    }
+    if (word == "cell") {
+      close_cell();
+      return;
+    }
+    if (word == "row") {
+      end_row();
+      return;
+    }
   }
 
   // \uN is a UTF-16 code unit written as a signed 16-bit number, though
@@ -751,6 +880,15 @@ class Reader {
   // no control characters at all.
   void put(uint32_t cp)
   {
+    if (state_.story == Story::Pict) {
+      // Hex, and nothing else. Newlines never arrive here: the reader skips
+      // them before decoding. A long picture stops growing at the byte cap.
+      if (pict_hex_.size() >= kMaxImageBytes * 2)
+        return;
+      if (cp < 128 && std::isxdigit(static_cast<unsigned char>(cp)))
+        pict_hex_.push_back(static_cast<char>(cp));
+      return;
+    }
     if (!sink_open())
       return;
     if (state_.in_style) {
@@ -1309,10 +1447,231 @@ class Reader {
     add_run(paragraph_, std::move(run));
   }
 
+  void enter_story(Story story)
+  {
+    // Park the body paragraph so a header or a footnote does not swallow the
+    // sentence it sits in. A nested group in the same story does not park again.
+    if (state_.story == Story::Body && !parked_live_) {
+      parked_ = std::move(paragraph_);
+      paragraph_ = Paragraph{};
+      paragraph_.heading = parked_.heading;
+      parked_char_ = char_seen_;
+      char_seen_ = false;
+      parked_live_ = true;
+    }
+    state_.story = story;
+    state_.ignore = false;
+  }
+
+  void enter_pict()
+  {
+    state_.story = Story::Pict;
+    state_.ignore = false;
+    pict_hex_.clear();
+    pict_type_.clear();
+    pict_w_ = 0;
+    pict_h_ = 0;
+  }
+
+  void finish_pict()
+  {
+    auto nibble = [](char c) -> int {
+      if (c >= '0' && c <= '9')
+        return c - '0';
+      if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+      if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+      return -1;
+    };
+    std::string bytes;
+    bytes.reserve(pict_hex_.size() / 2);
+    for (size_t i = 0; i + 1 < pict_hex_.size(); i += 2) {
+      const int hi = nibble(pict_hex_[i]);
+      const int lo = nibble(pict_hex_[i + 1]);
+      if (hi < 0 || lo < 0)
+        continue;
+      bytes.push_back(static_cast<char>((hi << 4) | lo));
+    }
+    pict_hex_.clear();
+    if (bytes.empty())
+      return;
+    Run run = char_run();
+    run.text.clear();
+    Image image;
+    image.data = std::move(bytes);
+    image.type = pict_type_.empty() ? image_type_of(image.data) : pict_type_;
+    image.width = std::max(0, pict_w_);
+    image.height = std::max(0, pict_h_);
+    run.image = std::move(image);
+    add_run(paragraph_, std::move(run));
+    pict_type_.clear();
+    pict_w_ = 0;
+    pict_h_ = 0;
+  }
+
+  void finish_story_paragraph(bool from_par)
+  {
+    std::vector<Paragraph>* dest = nullptr;
+    std::vector<ListMarks>* marks = nullptr;
+    if (state_.story == Story::Header) {
+      dest = &header_;
+      marks = &header_marks_;
+    } else if (state_.story == Story::Footer) {
+      dest = &footer_;
+      marks = &footer_marks_;
+    } else if (state_.story == Story::Note && !notes_.empty() && !note_marks_.empty()) {
+      dest = &notes_.back();
+      marks = &note_marks_.back();
+    }
+    if (dest == nullptr)
+      return;
+    if (!from_par && paragraph_.runs.empty())
+      return;
+    if (paragraph_.runs.empty() && char_seen_)
+      paragraph_.mark = char_run();
+    char_seen_ = false;
+    paragraph_.indents = clamp_indents(state_.indents);
+    paragraph_.align = state_.align;
+    paragraph_.style = style_name(state_.style);
+    paragraph_.heading = state_.heading;
+    dest->push_back(paragraph_);
+    marks->push_back(state_.marks);
+    paragraph_ = Paragraph{};
+    paragraph_.heading = state_.heading;
+  }
+
+  // The reference mark is the digits just before {\footnote}. They often share
+  // a run with the sentence, because \super is not a format this reader keeps.
+  // Split that tail off so the sentence stays ordinary text.
+  bool take_note(std::vector<Run>& runs, int index, const std::string& label)
+  {
+    if (runs.empty())
+      return false;
+    Run& run = runs.back();
+    if (run.image || run.note != 0)
+      return false;
+    if (run.text == label) {
+      run.note = index;
+      return true;
+    }
+    if (run.text.size() > label.size() &&
+        run.text.compare(run.text.size() - label.size(), label.size(), label) == 0) {
+      Run marker = run;
+      marker.text = label;
+      marker.note = index;
+      run.text.resize(run.text.size() - label.size());
+      runs.push_back(std::move(marker));
+      return true;
+    }
+    return false;
+  }
+
+  void attach_note(int index)
+  {
+    if (index <= 0)
+      return;
+    const std::string label = std::to_string(index);
+    if (take_note(paragraph_.runs, index, label))
+      return;
+    if (!paragraphs_.empty() && take_note(paragraphs_.back().runs, index, label))
+      return;
+    Run run = char_run();
+    run.text = label;
+    run.note = index;
+    add_run(paragraph_, std::move(run));
+  }
+
+  // `parent` is the story outside the group being closed.
+  void leave_story(Story parent)
+  {
+    const Story leaving = state_.story;
+    if (leaving == Story::Pict)
+      finish_pict();
+    else
+      finish_story_paragraph(false);
+    if (parent == Story::Body && parked_live_) {
+      paragraph_ = std::move(parked_);
+      parked_ = Paragraph{};
+      parked_live_ = false;
+      char_seen_ = parked_char_;
+    }
+    if (leaving == Story::Note && parent == Story::Body)
+      attach_note(static_cast<int>(notes_.size()));
+    state_.story = parent;
+  }
+
+  void begin_row()
+  {
+    int previous = 0;
+    if (!paragraphs_.empty())
+      previous = paragraphs_.back().cell.table;
+    if (previous == 0 || previous != table_seq_) {
+      ++table_seq_;
+      table_row_ = 0;
+    }
+    cell_rights_.clear();
+    table_col_ = 0;
+    row_open_ = true;
+    row_start_ = paragraphs_.size();
+  }
+
+  void close_cell()
+  {
+    if (!row_open_)
+      return;
+    paragraph_.cell.table = table_seq_;
+    paragraph_.cell.row = table_row_;
+    paragraph_.cell.column = table_col_;
+    finish_paragraph(true);
+    ++table_col_;
+  }
+
+  void end_row()
+  {
+    if (!row_open_)
+      return;
+    // \cell already closed its cell and left an empty paragraph. \row finishes
+    // a cell only when the file left text in it and never wrote \cell.
+    if (!paragraph_.runs.empty()) {
+      paragraph_.cell.table = table_seq_;
+      paragraph_.cell.row = table_row_;
+      paragraph_.cell.column = table_col_;
+      finish_paragraph(true);
+      ++table_col_;
+    }
+    std::vector<int> widths;
+    int edge = 0;
+    for (int right : cell_rights_) {
+      widths.push_back(std::max(0, right - edge));
+      edge = right;
+    }
+    const int columns = std::max(table_col_, static_cast<int>(widths.size()));
+    for (size_t i = row_start_; i < paragraphs_.size(); ++i) {
+      paragraphs_[i].cell.columns = std::max(1, columns);
+      paragraphs_[i].cell.widths = widths;
+      paragraphs_[i].cell.rows = table_row_ + 1;
+    }
+    row_open_ = false;
+    state_.intbl = false;
+    ++table_row_;
+  }
+
   void finish_paragraph(bool from_par)
   {
     flush_lead();
     after_cr_ = false;
+    if (state_.story == Story::Pict)
+      return;
+    if (state_.story != Story::Body) {
+      finish_story_paragraph(from_par);
+      return;
+    }
+    if (row_open_) {
+      paragraph_.cell.table = table_seq_;
+      paragraph_.cell.row = table_row_;
+      paragraph_.cell.column = table_col_;
+    }
     if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty())
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
@@ -1365,6 +1724,8 @@ class Reader {
       merged.style = paragraph.style;
       merged.align = paragraph.align;
       merged.indents = paragraph.indents;
+      merged.page_break = paragraph.page_break;
+      merged.cell = paragraph.cell;
       merged.list = resolve(marks_[i]);
       // A list item with no indents of its own, as hand-written RTF often
       // has, takes the list's indents for its level so the label can hang.
@@ -1386,6 +1747,50 @@ class Reader {
       doc.paragraphs.push_back(std::move(merged));
     }
     canonical_lists(doc.paragraphs);
+    std::map<int, int> table_rows;
+    for (const Paragraph& paragraph : doc.paragraphs) {
+      if (paragraph.cell.table != 0)
+        table_rows[paragraph.cell.table] =
+            std::max(table_rows[paragraph.cell.table], paragraph.cell.row);
+    }
+    for (Paragraph& paragraph : doc.paragraphs) {
+      if (paragraph.cell.table != 0)
+        paragraph.cell.rows = table_rows[paragraph.cell.table] + 1;
+    }
+    auto take_story = [&](std::vector<Paragraph>& source, std::vector<ListMarks>& marks) {
+      std::vector<Paragraph> out;
+      for (size_t n = 0; n < source.size(); ++n) {
+        Paragraph merged;
+        merged.heading = source[n].heading;
+        merged.style = source[n].style;
+        merged.align = source[n].align;
+        merged.indents = source[n].indents;
+        merged.page_break = source[n].page_break;
+        merged.list = n < marks.size() ? resolve(marks[n]) : ListFormat{};
+        for (Run& run : source[n].runs) {
+          run.text = clean_text(run.text, true);
+          run.font = clean_text(run.font, false);
+          if (run.image)
+            run.image->alt = clean_text(run.image->alt, true);
+          add_run(merged, std::move(run));
+        }
+        if (merged.runs.empty() && source[n].mark) {
+          merged.mark = source[n].mark;
+          merged.mark->font = clean_text(merged.mark->font, false);
+        }
+        out.push_back(std::move(merged));
+      }
+      canonical_lists(out);
+      return out;
+    };
+    doc.header = take_story(header_, header_marks_);
+    doc.footer = take_story(footer_, footer_marks_);
+    doc.notes.clear();
+    for (size_t n = 0; n < notes_.size() && n < note_marks_.size(); ++n)
+      doc.notes.push_back(take_story(notes_[n], note_marks_[n]));
+    if (page_.landscape && page_.paper_width < page_.paper_height)
+      std::swap(page_.paper_width, page_.paper_height);
+    doc.page = clamp_page(page_);
   }
 
   // One \list from the list table: the kind of each of its nine levels.
@@ -1434,7 +1839,28 @@ class Reader {
   std::string font_chars_;
   Paragraph paragraph_;
   std::vector<Paragraph> paragraphs_;
+  // The body paragraph parked while a header, footer, or footnote is read.
+  Paragraph parked_;
+  bool parked_live_ = false;
+  bool parked_char_ = false;
   bool saw_par_ = false;
+  PageSetup page_;
+  std::vector<Paragraph> header_;
+  std::vector<Paragraph> footer_;
+  std::vector<ListMarks> header_marks_;
+  std::vector<ListMarks> footer_marks_;
+  std::vector<std::vector<Paragraph>> notes_;
+  std::vector<std::vector<ListMarks>> note_marks_;
+  std::string pict_hex_;
+  std::string pict_type_;
+  int pict_w_ = 0;
+  int pict_h_ = 0;
+  int table_seq_ = 0;
+  int table_row_ = 0;
+  int table_col_ = 0;
+  bool row_open_ = false;
+  size_t row_start_ = 0;
+  std::vector<int> cell_rights_;
   // A character control word since the last paragraph ended: an empty
   // paragraph with one has a format of its own (Paragraph::mark).
   bool char_seen_ = false;
@@ -1521,6 +1947,21 @@ bool rtf_import(const std::string& text, Document& doc)
   return reader.parse(doc);
 }
 
+std::string pict_bytes(const std::string& data)
+{
+  static const char* kDigits = "0123456789abcdef";
+  std::string out;
+  out.reserve(data.size() * 2 + data.size() / 32);
+  for (size_t i = 0; i < data.size(); ++i) {
+    const auto byte = static_cast<unsigned char>(data[i]);
+    out.push_back(kDigits[byte >> 4]);
+    out.push_back(kDigits[byte & 0x0F]);
+    if ((i + 1) % 32 == 0)
+      out.push_back('\n');
+  }
+  return out;
+}
+
 std::string rtf_export(const Document& doc)
 {
   std::vector<std::string> fonts;
@@ -1537,16 +1978,26 @@ std::string rtf_export(const Document& doc)
   // paragraph with text takes its format from its runs.
   auto mark_of = [](const Paragraph& paragraph) -> const Run* {
     for (const Run& run : paragraph.runs) {
-      if (!run.text.empty())
+      if (!run.text.empty() || run.image.has_value() || run.note != 0)
         return nullptr;
     }
     return paragraph.mark ? &*paragraph.mark : nullptr;
   };
-  for (const Paragraph& paragraph : doc.paragraphs) {
+  auto index_paragraph = [&](const Paragraph& paragraph) {
     for (const Run& run : paragraph.runs)
       index_of(run.font);
     if (const Run* mark = mark_of(paragraph))
       index_of(mark->font);
+  };
+  for (const Paragraph& paragraph : doc.paragraphs)
+    index_paragraph(paragraph);
+  for (const Paragraph& paragraph : doc.header)
+    index_paragraph(paragraph);
+  for (const Paragraph& paragraph : doc.footer)
+    index_paragraph(paragraph);
+  for (const std::vector<Paragraph>& note : doc.notes) {
+    for (const Paragraph& paragraph : note)
+      index_paragraph(paragraph);
   }
 
   // Styles. A document that only uses Normal from the default sheet, as
@@ -1566,6 +2017,23 @@ std::string rtf_export(const Document& doc)
     if (heading >= 1 && heading <= 6 && (style == nullptr || style->name == kNormalStyle))
       any_style = true;
   }
+  auto story_needs_sheet = [&](const std::vector<Paragraph>& paragraphs) {
+    for (const Paragraph& paragraph : paragraphs) {
+      if (any_style)
+        return;
+      const Style* style =
+          paragraph.style == kNormalStyle ? nullptr : find_style(given, paragraph.style);
+      if (style != nullptr && style->name != kNormalStyle)
+        any_style = true;
+      if (paragraph.heading >= 1 && paragraph.heading <= 6 &&
+          (style == nullptr || style->name == kNormalStyle))
+        any_style = true;
+    }
+  };
+  story_needs_sheet(doc.header);
+  story_needs_sheet(doc.footer);
+  for (const std::vector<Paragraph>& note : doc.notes)
+    story_needs_sheet(note);
   const std::vector<Style> sheet = any_style ? complete_sheet(given) : std::vector<Style>{};
   auto style_index = [&](const std::string& name) {
     const Style* style = find_style(sheet, name);
@@ -1694,11 +2162,140 @@ std::string rtf_export(const Document& doc)
     }
     out << "}\n";
   }
+  const PageSetup page = clamp_page(doc.page);
+  if (!page_metrics_default(page)) {
+    out << "\\paperw" << page.paper_width << "\\paperh" << page.paper_height << "\\margl"
+        << page.margin_left << "\\margr" << page.margin_right << "\\margt" << page.margin_top
+        << "\\margb" << page.margin_bottom;
+    if (page.landscape)
+      out << "\\landscape";
+    out << "\n";
+  }
+  if (page.columns != 1)
+    out << "\\cols" << page.columns << "\\colsx" << page.column_gap << "\n";
+
+  // Headers, footers, and footnote bodies. The body loop below keeps the
+  // bytes a document without them has always written.
+  std::function<void(const Paragraph&)> write_plain;
+  auto emit_runs = [&](const Paragraph& paragraph) {
+    for (const Run& run : paragraph.runs) {
+      if (run.image && !run.image->data.empty()) {
+        const std::string type =
+            run.image->type.empty() ? image_type_of(run.image->data) : run.image->type;
+        if (type == "png" || type == "jpeg") {
+          out << "{\\pict\\" << (type == "jpeg" ? "jpegblip" : "pngblip");
+          if (run.image->width > 0)
+            out << "\\picwgoal" << run.image->width;
+          if (run.image->height > 0)
+            out << "\\pichgoal" << run.image->height;
+          out << " " << pict_bytes(run.image->data) << "}";
+        }
+        continue;
+      }
+      if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
+        const std::string label = run.text.empty() ? std::to_string(run.note) : run.text;
+        out << "{\\super " << escape_rtf(label) << "{\\footnote ";
+        const std::vector<Paragraph>& note = doc.notes[static_cast<size_t>(run.note - 1)];
+        if (note.empty())
+          out << "\\pard\\par";
+        else
+          for (const Paragraph& item : note)
+            write_plain(item);
+        out << "}}";
+        continue;
+      }
+      if (run.text.empty())
+        continue;
+      out << "\\f" << index_of(run.font) << "\\fs" << half_points_of(run.size)
+          << (run.bold ? "\\b" : "\\b0") << (run.italic ? "\\i" : "\\i0")
+          << (run.underline ? "\\ul" : "\\ulnone") << " " << escape_rtf(run.text);
+    }
+  };
+  write_plain = [&](const Paragraph& paragraph) {
+    if (paragraph.page_break)
+      out << "\\page";
+    out << "\\pard";
+    const Indents indents = clamp_indents(paragraph.indents);
+    if (indents.left != 0)
+      out << "\\li" << indents.left;
+    if (indents.right != 0)
+      out << "\\ri" << indents.right;
+    if (indents.first != 0)
+      out << "\\fi" << indents.first;
+    if (paragraph.align == Align::Center)
+      out << "\\qc";
+    else if (paragraph.align == Align::Right)
+      out << "\\qr";
+    else if (paragraph.align == Align::Justify)
+      out << "\\qj";
+    if (paragraph.heading >= 1 && paragraph.heading <= 6)
+      out << "\\outlinelevel" << (paragraph.heading - 1);
+    const bool had_run = [&] {
+      for (const Run& run : paragraph.runs)
+        if (!run.text.empty() || run.image || run.note != 0)
+          return true;
+      return false;
+    }();
+    if (!had_run) {
+      if (const Run* mark = mark_of(paragraph))
+        out << "\\f" << index_of(mark->font) << "\\fs" << half_points_of(mark->size)
+            << (mark->bold ? "\\b" : "\\b0") << (mark->italic ? "\\i" : "\\i0")
+            << (mark->underline ? "\\ul" : "\\ulnone");
+    } else {
+      emit_runs(paragraph);
+    }
+    out << "\\par";
+  };
+  auto write_story = [&](const char* destination, const std::vector<Paragraph>& paragraphs) {
+    if (paragraphs.empty())
+      return;
+    out << "{\\" << destination << " ";
+    for (const Paragraph& paragraph : paragraphs)
+      write_plain(paragraph);
+    out << "}";
+  };
+  write_story("header", doc.header);
+  write_story("footer", doc.footer);
+
   bool wrote = false;
   for (size_t index = 0; index < doc.paragraphs.size(); ++index) {
     const Paragraph& paragraph = doc.paragraphs[index];
     const ListFormat list = lists[index];
     wrote = true;
+    if (paragraph.cell.table != 0) {
+      const int id = paragraph.cell.table;
+      const int row = paragraph.cell.row;
+      const int column = paragraph.cell.column;
+      const bool row_start = index == 0 || doc.paragraphs[index - 1].cell.table != id ||
+                             doc.paragraphs[index - 1].cell.row != row;
+      const bool last = index + 1 == doc.paragraphs.size();
+      const Paragraph* next = last ? nullptr : &doc.paragraphs[index + 1];
+      const bool cell_end =
+          last || next->cell.table != id || next->cell.row != row || next->cell.column != column;
+      const bool row_end = last || next->cell.table != id || next->cell.row != row;
+      if (row_start) {
+        if (paragraph.page_break)
+          out << "\\page";
+        out << "\\trowd\\trgaph108";
+        int edge = 0;
+        const int columns = std::max(1, paragraph.cell.columns);
+        for (int c = 0; c < columns; ++c) {
+          int width = 1440;
+          if (c < static_cast<int>(paragraph.cell.widths.size()) && paragraph.cell.widths[c] > 0)
+            width = paragraph.cell.widths[c];
+          edge += width;
+          out << "\\cellx" << edge;
+        }
+      }
+      out << "\\pard\\intbl";
+      emit_runs(paragraph);
+      out << (cell_end ? "\\cell" : "\\par");
+      if (row_end)
+        out << "\\row\n";
+      continue;
+    }
+    if (paragraph.page_break)
+      out << "\\page";
     if (list.kind != ListKind::None) {
       // The label as plain text for readers without lists. Readers with them
       // skip {\pntext ...}. It is formatted as the item's first character,
@@ -1799,6 +2396,35 @@ std::string rtf_export(const Document& doc)
       return word;
     };
     for (const Run& run : paragraph.runs) {
+      if (run.image && !run.image->data.empty()) {
+        const std::string type =
+            run.image->type.empty() ? image_type_of(run.image->data) : run.image->type;
+        if (type == "png" || type == "jpeg") {
+          if (format(run))
+            out << " ";
+          out << "{\\pict\\" << (type == "jpeg" ? "jpegblip" : "pngblip");
+          if (run.image->width > 0)
+            out << "\\picwgoal" << run.image->width;
+          if (run.image->height > 0)
+            out << "\\pichgoal" << run.image->height;
+          out << " " << pict_bytes(run.image->data) << "}";
+          continue;
+        }
+      }
+      if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
+        if (format(run))
+          out << " ";
+        const std::string label = run.text.empty() ? std::to_string(run.note) : run.text;
+        out << "{\\super " << escape_rtf(label) << "{\\footnote ";
+        const std::vector<Paragraph>& note = doc.notes[static_cast<size_t>(run.note - 1)];
+        if (note.empty())
+          out << "\\pard\\par";
+        else
+          for (const Paragraph& item : note)
+            write_plain(item);
+        out << "}}";
+        continue;
+      }
       if (run.text.empty())
         continue;
       if (format(run))

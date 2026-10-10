@@ -31,18 +31,30 @@ struct ParaFormat {
   std::string style = kNormalStyle;
   // What of it was set directly (Paragraph::direct).
   unsigned direct = 0;
+  // A page break before this paragraph, and its table cell. Both zero on a
+  // paragraph tag written the old way, so a tag from before this slice still
+  // parses.
+  bool page_break = false;
+  Cell cell;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
   return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
-         a.direct == b.direct;
+         a.direct == b.direct && a.page_break == b.page_break && a.cell == b.cell;
 }
 
 inline ParaFormat para_format(const Paragraph& paragraph)
 {
-  return ParaFormat{paragraph.indents, paragraph.align, paragraph.list, paragraph.style,
-                    paragraph.direct};
+  ParaFormat format;
+  format.indents = paragraph.indents;
+  format.align = paragraph.align;
+  format.list = paragraph.list;
+  format.style = paragraph.style;
+  format.direct = paragraph.direct;
+  format.page_break = paragraph.page_break;
+  format.cell = paragraph.cell;
+  return format;
 }
 
 class MainWindow : public Gtk::ApplicationWindow {
@@ -295,8 +307,31 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_next_style();
   void on_style_dialog();
   int paragraph_index(int offset) const;
-  // One undo step from `before` to `after`, keeping the selection.
-  void commit_document(const Document& before, const Document& after);
+  // One undo step from `before` to `after`. The selection stays, unless
+  // `caret` is given: then the caret is that offset (a page break or a
+  // footnote lands in the new place).
+  void commit_document(const Document& before, const Document& after, int caret = -1);
+  // Paper, header, footer, and notes. The buffer holds none of them.
+  void apply_document_page(PageSetup page);
+  void install_stories(const Document& doc);
+  void refresh_stories();
+  void on_page_setup();
+  void on_columns();
+  void on_page_break();
+  void on_insert_table();
+  void on_insert_row();
+  void on_insert_column();
+  void on_delete_row();
+  void on_delete_column();
+  void on_footnote();
+  void on_picture();
+  void on_header_footer();
+  void on_story_end(std::vector<Paragraph>* story);
+  void on_notes_end();
+  // Ctrl+Z in a header, footer, or note undoes the document. Other Ctrl keys
+  // that would format the body are swallowed; the story is plain text.
+  bool on_story_key(GdkEventKey* event);
+  Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image);
   // commit_document()'s retagging when the text is the same; false if not.
   bool retag_paragraphs(const Document& before, const Document& after);
   void toggle_list_kind(ListKind kind);
@@ -430,7 +465,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ScrolledWindow paste_;
   Gtk::Box board_{Gtk::ORIENTATION_VERTICAL};
   Gtk::EventBox page_;
+  Gtk::Box page_box_{Gtk::ORIENTATION_VERTICAL};
+  Gtk::TextView header_view_;
   PageText text_;
+  Gtk::TextView notes_view_;
+  Gtk::TextView footer_view_;
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   Gtk::Box status_{Gtk::ORIENTATION_HORIZONTAL};
   Gtk::Label message_;
@@ -472,6 +511,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_right_item_ = nullptr;
   Gtk::MenuItem* justify_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
+  Gtk::MenuItem* page_setup_item_ = nullptr;
+  Gtk::MenuItem* picture_item_ = nullptr;
+  Gtk::MenuItem* insert_table_item_ = nullptr;
+  Gtk::MenuItem* page_break_item_ = nullptr;
+  Gtk::MenuItem* footnote_item_ = nullptr;
+  Gtk::MenuItem* columns_item_ = nullptr;
+  Gtk::MenuItem* table_insert_item_ = nullptr;
+  Gtk::MenuItem* table_row_item_ = nullptr;
+  Gtk::MenuItem* table_column_item_ = nullptr;
+  Gtk::MenuItem* table_delete_row_item_ = nullptr;
+  Gtk::MenuItem* table_delete_column_item_ = nullptr;
+  Gtk::CheckMenuItem* header_footer_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
   Gtk::MenuItem* context_paste_ = nullptr;
@@ -614,6 +665,25 @@ class MainWindow : public Gtk::ApplicationWindow {
   gint64 last_typed_us_ = 0;
   // The document's style sheet; empty for the default, as in Document.
   std::vector<Style> styles_;
+  // Paper, header, footer, and footnotes. The body buffer does not hold
+  // them; capture() copies these, and a command records the change.
+  PageSetup page_setup_{};
+  std::vector<Paragraph> header_;
+  std::vector<Paragraph> footer_;
+  std::vector<std::vector<Paragraph>> notes_;
+  // Pictures in the body, keyed by the pixbuf the buffer is showing. The
+  // value is the file's bytes; the pixbuf may be a scaled copy.
+  std::map<GdkPixbuf*, Image> image_pix_;
+  // View > Header and Footer. Not saved. A file that has either opens with
+  // it on, until the user has toggled the item (stories_chosen_).
+  bool stories_on_ = false;
+  bool stories_chosen_ = false;
+  bool suppress_stories_ = false;
+  // The text the story views are showing. An edit that still matches it
+  // keeps the document's own paragraphs.
+  std::string header_shown_;
+  std::string footer_shown_;
+  std::string notes_shown_;
   // Enter at the end of a paragraph: the new one takes the next style.
   bool next_style_pending_ = false;
   // apply_align() is under way: the alignment was chosen, so it is direct.
