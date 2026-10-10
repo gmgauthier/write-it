@@ -1293,19 +1293,201 @@ void starting()
 
 void markdown()
 {
-  // Markdown lists wait until M4: a list item exports as its paragraph.
+  // Bullets and numbers are Markdown markers. The counted label is what
+  // exports, so a list that starts at 1 writes 1. then 2.
   writeit::Document doc;
   doc.paragraphs.push_back(item("Bread", ListKind::Bullet));
   doc.paragraphs.push_back(item("Step", ListKind::Number));
-  CHECK(writeit::markdown_export(doc) == "Bread\n\nStep");
+  CHECK(writeit::markdown_export(doc) == "- Bread\n\n1. Step");
+
   const writeit::Document back = writeit::markdown_import("- Bread\n", "Sans", 11);
-  CHECK(back.paragraphs[0].list == ListFormat{});
+  CHECK(back.paragraphs.size() == 1);
+  CHECK(back.paragraphs[0].list.kind == ListKind::Bullet);
+  CHECK(back.paragraphs[0].list.level == 0);
+  CHECK(back.paragraphs[0].indents == writeit::list_indents(0));
+  CHECK(back.paragraphs[0].runs.size() == 1);
+  CHECK(back.paragraphs[0].runs[0].text == "Bread");
+  CHECK(back.paragraphs[0].runs[0].font == "Sans");
+  CHECK(back.paragraphs[0].runs[0].size == 11);
+
+  // Nested items, * and + bullets, and a number whose later markers are
+  // decorative. A level is two spaces.
+  const char* lists =
+      "- Bread\n"
+      "\n"
+      "  - Rye\n"
+      "\n"
+      "* Star\n"
+      "\n"
+      "1. Open\n"
+      "\n"
+      "2. Close\n"
+      "\n"
+      "   1. Look\n";
+  const writeit::Document imported = writeit::markdown_import(lists, "Sans", 11);
+  CHECK(imported.paragraphs.size() == 6);
+  CHECK(is_list(imported.paragraphs[0], ListKind::Bullet, 0));
+  CHECK(imported.paragraphs[0].runs[0].text == "Bread");
+  CHECK(is_list(imported.paragraphs[1], ListKind::Bullet, 1));
+  CHECK(imported.paragraphs[1].runs[0].text == "Rye");
+  CHECK(imported.paragraphs[1].indents == writeit::list_indents(1));
+  CHECK(is_list(imported.paragraphs[2], ListKind::Bullet, 0));
+  CHECK(imported.paragraphs[2].runs[0].text == "Star");
+  CHECK(is_list(imported.paragraphs[3], ListKind::Number, 0));
+  CHECK(is_list(imported.paragraphs[4], ListKind::Number, 0));
+  CHECK(is_list(imported.paragraphs[5], ListKind::Number, 1));
+  CHECK(writeit::list_numbers(imported.paragraphs) == (std::vector<int>{0, 0, 0, 1, 2, 1}));
+  CHECK(imported.paragraphs[3].list.start == 1);
+  CHECK(imported.paragraphs[4].list.start == 1);
+  CHECK(imported.paragraphs[4].list.list == 0);
+  CHECK(writeit::markdown_export(imported) ==
+        "- Bread\n\n  - Rye\n\n- Star\n\n1. Open\n\n2. Close\n\n  1. Look");
+  CHECK(writeit::markdown_import(writeit::markdown_export(imported), "Sans", 11) == imported);
+
+  // The first marker is the start. A paragraph ends the list, so the next
+  // 1. starts again. A bullet ends it too, and that marker's own number is
+  // the new start.
+  const writeit::Document restarted = writeit::markdown_import(
+      "3. One\n\n4. Two\n\nGap\n\n1. Again\n\n2. More\n", "Sans", 11);
+  CHECK(restarted.paragraphs.size() == 5);
+  CHECK(restarted.paragraphs[0].list.start == 3);
+  CHECK(restarted.paragraphs[1].list.start == 1);
+  CHECK(restarted.paragraphs[1].list.list == 0);
+  CHECK(restarted.paragraphs[2].list.kind == ListKind::None);
+  CHECK(restarted.paragraphs[2].runs[0].text == "Gap");
+  CHECK(restarted.paragraphs[3].list.list == 2);
+  CHECK(restarted.paragraphs[3].list.start == 1);
+  CHECK(writeit::list_numbers(restarted.paragraphs) == (std::vector<int>{3, 4, 0, 1, 2}));
+  CHECK(writeit::markdown_import(writeit::markdown_export(restarted), "Sans", 11) == restarted);
+
+  const writeit::Document across =
+      writeit::markdown_import("1. Open\n\n- Star\n\n2. Close\n", "Sans", 11);
+  CHECK(across.paragraphs.size() == 3);
+  CHECK(writeit::list_numbers(across.paragraphs) == (std::vector<int>{1, 0, 2}));
+  CHECK(across.paragraphs[2].list.list == 2);
+  CHECK(across.paragraphs[2].list.start == 2);
+  CHECK(writeit::markdown_import(writeit::markdown_export(across), "Sans", 11) == across);
+
+  // 1) is an ordered marker. An empty item and emphasis round-trip.
+  CHECK(writeit::markdown_export(writeit::markdown_import("1) Step\n", "Sans", 11)) == "1. Step");
+  CHECK(writeit::markdown_export(writeit::markdown_import("+ Plus\n", "Sans", 11)) == "- Plus");
+  const writeit::Document empty_item = writeit::markdown_import("- \n", "Sans", 11);
+  CHECK(empty_item.paragraphs.size() == 1);
+  CHECK(empty_item.paragraphs[0].list.kind == ListKind::Bullet);
+  CHECK(empty_item.paragraphs[0].runs.empty());
+  CHECK(writeit::markdown_export(empty_item) == "- ");
+  const writeit::Document emph =
+      writeit::markdown_import("- **Bread** and *butter*\n", "Sans", 11);
+  CHECK(emph.paragraphs[0].runs[0].text == "Bread");
+  CHECK(emph.paragraphs[0].runs[0].bold);
+  CHECK(writeit::markdown_export(emph) == "- **Bread** and *butter*");
+
+  // An indented follow-on line stays in the item. The next line does not.
+  const writeit::Document wrapped =
+      writeit::markdown_import("- bread\n  and butter\n\njam\n", "Sans", 11);
+  CHECK(wrapped.paragraphs.size() == 2);
+  CHECK(wrapped.paragraphs[0].list.kind == ListKind::Bullet);
+  CHECK(wrapped.paragraphs[0].runs[0].text == "bread and butter");
+  CHECK(wrapped.paragraphs[1].list.kind == ListKind::None);
+  CHECK(wrapped.paragraphs[1].runs[0].text == "jam");
+
+  // A number kept across a blank line is one list. Zero is a real start.
+  const writeit::Document kept = writeit::markdown_import("0. Zero\n\n1. One\n", "Sans", 11);
+  CHECK(kept.paragraphs[0].list.start == 0);
+  CHECK(kept.paragraphs[1].list.list == 0);
+  CHECK(writeit::list_numbers(kept.paragraphs) == (std::vector<int>{0, 1}));
+  CHECK(writeit::markdown_export(kept) == "0. Zero\n\n1. One");
+
+  const writeit::Document headed =
+      writeit::markdown_import("# Title\n\n- Item\n\nBody\n", "Sans", 11);
+  CHECK(headed.paragraphs.size() == 3);
+  CHECK(headed.paragraphs[0].heading == 1);
+  CHECK(headed.paragraphs[1].list.kind == ListKind::Bullet);
+  CHECK(headed.paragraphs[2].runs[0].text == "Body");
+  CHECK(writeit::markdown_export(headed) == "# Title\n\n- Item\n\nBody");
+
+  // GitHub pipe tables. The header is the first row. A tab stays in the cell.
+  const std::string table = "| Name | Qty |\n| --- | --- |\n| Bread | 2 |\n|  | 0 |";
+  const writeit::Document grid = writeit::markdown_import(table + "\n", "Sans", 11);
+  CHECK(grid.paragraphs.size() == 6);
+  CHECK(grid.paragraphs[0].cell.rows == 3);
+  CHECK(grid.paragraphs[0].cell.columns == 2);
+  CHECK(grid.paragraphs[0].cell.row == 0);
+  CHECK(grid.paragraphs[0].cell.column == 0);
+  CHECK(grid.paragraphs[1].cell.column == 1);
+  CHECK(grid.paragraphs[2].cell.row == 1);
+  CHECK(grid.paragraphs[0].runs[0].text == "Name");
+  CHECK(grid.paragraphs[1].runs[0].text == "Qty");
+  CHECK(grid.paragraphs[2].runs[0].text == "Bread");
+  CHECK(grid.paragraphs[3].runs[0].text == "2");
+  CHECK(grid.paragraphs[4].runs.empty());
+  CHECK(grid.paragraphs[5].runs[0].text == "0");
+  int width = 0;
+  for (int cell_width : grid.paragraphs[0].cell.widths)
+    width += cell_width;
+  CHECK(width == writeit::page_text_twips(writeit::default_page()));
+  CHECK(writeit::markdown_export(grid) == table);
+  CHECK(writeit::markdown_import(writeit::markdown_export(grid), "Sans", 11) == grid);
+
+  const writeit::Document pipes =
+      writeit::markdown_import("| **a** | b \\| c |\n| --- | --- |\n|  | d |\n", "Sans", 11);
+  CHECK(pipes.paragraphs.size() == 4);
+  CHECK(pipes.paragraphs[0].runs[0].bold);
+  CHECK(pipes.paragraphs[0].runs[0].text == "a");
+  CHECK(pipes.paragraphs[1].runs[0].text == "b | c");
+  CHECK(pipes.paragraphs[2].runs.empty());
+  CHECK(pipes.paragraphs[3].runs[0].text == "d");
+  CHECK(writeit::markdown_export(pipes) == "| **a** | b \\| c |\n| --- | --- |\n|  | d |");
+
+  const writeit::Document tabs =
+      writeit::markdown_import("| a\tb | c |\n| --- | --- |\n", "Sans", 11);
+  CHECK(tabs.paragraphs.size() == 2);
+  CHECK(tabs.paragraphs[0].runs[0].text == "a\tb");
+  CHECK(tabs.paragraphs[0].cell.columns == 2);
+  CHECK(writeit::markdown_export(tabs) == "| a\tb | c |\n| --- | --- |");
+
+  // A pipe in a sentence is not a table, and a list is not joined onto it.
+  const writeit::Document prose =
+      writeit::markdown_import("See a | b here.\n\n- Item\n", "Sans", 11);
+  CHECK(prose.paragraphs.size() == 2);
+  CHECK(prose.paragraphs[0].cell.table == 0);
+  CHECK(prose.paragraphs[0].list.kind == ListKind::None);
+  CHECK(prose.paragraphs[0].runs[0].text == "See a | b here.");
+  CHECK(prose.paragraphs[1].list.kind == ListKind::Bullet);
+  CHECK(prose.paragraphs[1].runs[0].text == "Item");
+
+  const writeit::Document around = writeit::markdown_import(
+      "Before\n\n| A | B |\n| --- | --- |\n| c | d |\n\nAfter\n", "Sans", 11);
+  CHECK(around.paragraphs.size() == 6);
+  CHECK(around.paragraphs[0].runs[0].text == "Before");
+  CHECK(around.paragraphs[0].cell.table == 0);
+  CHECK(around.paragraphs[1].cell.table != 0);
+  CHECK(around.paragraphs[1].runs[0].text == "A");
+  CHECK(around.paragraphs[4].runs[0].text == "d");
+  CHECK(around.paragraphs[5].runs[0].text == "After");
+  CHECK(around.paragraphs[5].cell.table == 0);
+
+  // Alignment colons are not paragraph alignment. Two tables stay two tables
+  // when the second header sits on the next line.
+  const writeit::Document aligned =
+      writeit::markdown_import("| L | R |\n| :--- | ---: |\n| a | b |\n", "Sans", 11);
+  CHECK(aligned.paragraphs[0].align == writeit::Align::Left);
+  CHECK(aligned.paragraphs[2].runs[0].text == "a");
+  CHECK(writeit::markdown_export(aligned) == "| L | R |\n| --- | --- |\n| a | b |");
+
+  const writeit::Document stuck =
+      writeit::markdown_import("| A |\n| --- |\n| a |\n| B |\n| --- |\n| b |\n", "Sans", 11);
+  CHECK(stuck.paragraphs.size() == 4);
+  CHECK(stuck.paragraphs[0].cell.table != stuck.paragraphs[2].cell.table);
+  CHECK(stuck.paragraphs[1].runs[0].text == "a");
+  CHECK(stuck.paragraphs[2].runs[0].text == "B");
+  CHECK(stuck.paragraphs[3].runs[0].text == "b");
 }
 
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 385;
+constexpr int kChecks = 496;
 
 int main()
 {
