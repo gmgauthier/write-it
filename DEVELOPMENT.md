@@ -33,7 +33,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 
 Known issues after M2, to be fixed in a later milestone:
 
-- Typing slows as the document grows. In a 1000-paragraph document each keystroke took about 330 ms of CPU, whether or not the text is in a list.
+- Typing slows as the document grows. In a 1000-paragraph document each keystroke takes about 1.4 s of CPU on `de03251`, so 20 keys take about 36 s. Before named styles and the list speed-up merged (`bd885b8`), the same test took about 330 ms. It does not crash; input falls further behind.
 - On a 1024×576 screen the first launch opens 960×576 below the title bar, so its bottom 58 px, the status bar included, are off the screen. The window should fit inside the work area, frame included.
 - A word copied from a Heading 1 and pasted into a Normal paragraph saves with `\outlinelevel0` but no `\s1`, so the paragraph is marked as a heading while its style is still Normal.
 - The Format → Style… list shows style names longer than the 32 characters the Named styles item allows.
