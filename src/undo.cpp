@@ -24,7 +24,8 @@ struct UndoHistory::Op {
   // Apply and Remove: the tag, and the ranges it really changed.
   Glib::RefPtr<Gtk::TextTag> tag;
   std::vector<std::pair<int, int>> ranges;
-  // Custom: undo, then redo.
+  // Custom: undo, then redo, and whether the document shows the change.
+  bool seen = true;
   std::shared_ptr<std::pair<std::function<void()>, std::function<void()>>> custom;
 };
 
@@ -46,6 +47,8 @@ struct UndoHistory::Step {
   int erase_start = 0;
   int erase_end = 0;
 };
+
+UndoHistory::UndoHistory() = default;
 
 UndoHistory::~UndoHistory()
 {
@@ -103,6 +106,26 @@ std::size_t UndoHistory::top_ops() const
   return undo_.empty() ? 0 : undo_.back()->ops.size();
 }
 
+std::string UndoHistory::describe_top() const
+{
+  std::string out;
+  if (undo_.empty())
+    return out;
+  const char* kinds[] = {"insert", "erase", "apply", "remove", "custom"};
+  for (const Op& op : undo_.back()->ops) {
+    out += kinds[static_cast<int>(op.kind)];
+    if (op.kind == Op::Kind::Insert || op.kind == Op::Kind::Erase)
+      out += " " + std::to_string(op.start) + " \"" + op.text.raw() + "\"";
+    if (op.tag) {
+      out += " " + op.tag->property_name().get_value();
+      for (const auto& range : op.ranges)
+        out += " [" + std::to_string(range.first) + "," + std::to_string(range.second) + ")";
+    }
+    out += "\n";
+  }
+  return out;
+}
+
 void UndoHistory::open(int caret, bool selection)
 {
   current_ = std::make_unique<Step>();
@@ -126,12 +149,13 @@ bool UndoHistory::recording()
   return false;
 }
 
-void UndoHistory::record_custom(std::function<void()> undo, std::function<void()> redo)
+void UndoHistory::record_custom(std::function<void()> undo, std::function<void()> redo, bool seen)
 {
   if (!open_ || replaying_)
     return;
   Op op;
   op.kind = Op::Kind::Custom;
+  op.seen = seen;
   op.custom = std::make_shared<std::pair<std::function<void()>, std::function<void()>>>(
       std::move(undo), std::move(redo));
   current_->ops.push_back(std::move(op));
@@ -163,6 +187,14 @@ void UndoHistory::push_op(Op&& op)
   if (op.kind == Op::Kind::Erase && !ops.empty() && ops.back().kind == Op::Kind::Insert &&
       ops.back().start == op.start && ops.back().text == op.text) {
     ops.pop_back();
+    return;
+  }
+  // Typing on from the end of the text just inserted is one longer
+  // insertion: undo then erases a burst at once.
+  if (op.kind == Op::Kind::Insert && !ops.empty() && ops.back().kind == Op::Kind::Insert &&
+      op.start == ops.back().start + ops.back().length) {
+    ops.back().text += op.text;
+    ops.back().length += op.length;
     return;
   }
   ops.push_back(std::move(op));
@@ -276,6 +308,53 @@ void UndoHistory::note_tag_shape(const std::vector<std::pair<int, int>>& ranges)
   }
 }
 
+UndoHistory::Seen UndoHistory::seen(const Step& step) const
+{
+  const auto is_tag = [](const Op& op) {
+    return op.kind == Op::Kind::Apply || op.kind == Op::Kind::Remove;
+  };
+  bool maybe = false;
+  for (size_t i = 0; i < step.ops.size(); ++i) {
+    const Op& op = step.ops[i];
+    if (op.kind == Op::Kind::Custom) {
+      maybe = maybe || op.seen;
+      continue;
+    }
+    if (op.kind == Op::Kind::Erase) {
+      // Erased and put back: the tags that follow may or may not restore it.
+      if (i + 1 < step.ops.size() && step.ops[i + 1].kind == Op::Kind::Insert &&
+          step.ops[i + 1].start == op.start && step.ops[i + 1].text == op.text) {
+        maybe = true;
+        ++i;
+        continue;
+      }
+      return Seen::Yes;
+    }
+    if (op.kind == Op::Kind::Insert)
+      return Seen::Yes;
+    if (i + 1 < step.ops.size()) {
+      const Op& next = step.ops[i + 1];
+      if (is_tag(next) && next.kind != op.kind && next.ranges == op.ranges && same_tag_ &&
+          same_tag_(op.tag, next.tag)) {
+        ++i;
+        continue;
+      }
+    }
+    bool unseen = static_cast<bool>(unseen_tag_);
+    for (const auto& range : op.ranges)
+      unseen = unseen && unseen_tag_(op.tag, range.first, range.second);
+    if (!unseen)
+      maybe = true;
+  }
+  if (!maybe)
+    return Seen::No;
+  // Tag changes alone, seen ones among them, are a real format command.
+  for (const Op& op : step.ops)
+    if (op.kind == Op::Kind::Custom || op.kind == Op::Kind::Erase)
+      return Seen::Maybe;
+  return Seen::Yes;
+}
+
 UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
 {
   if (!open_)
@@ -284,6 +363,21 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
   std::unique_ptr<Step> step = std::move(current_);
   if (step->ops.empty())
     return Closed::Dropped;
+  const Seen shows = seen(*step);
+  bool hidden = shows == Seen::No;
+  if (shows == Seen::Maybe && looks_same_) {
+    Step& probe = *step;
+    hidden =
+        looks_same_([this, &probe] { play(probe, false); }, [this, &probe] { play(probe, true); });
+  }
+  if (hidden) {
+    // Undoing the step below takes this back too; with none, nothing older
+    // can be replayed over it.
+    if (!undo_.empty())
+      for (Op& op : step->ops)
+        undo_.back()->ops.push_back(std::move(op));
+    return Closed::Dropped;
+  }
   if (step->may_insert && step->has_block && step->len > 0 && step->erases == 0 &&
       caret == step->at + step->len) {
     step->shape = Shape::Insertion;
@@ -322,8 +416,17 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
         break;
     }
     if (merge) {
-      for (Op& op : step->ops)
+      for (Op& op : step->ops) {
+        // A burst of typing stays one insertion.
+        Op* last = top.ops.empty() ? nullptr : &top.ops.back();
+        if (op.kind == Op::Kind::Insert && last && last->kind == Op::Kind::Insert &&
+            op.start == last->start + last->length) {
+          last->text += op.text;
+          last->length += op.length;
+          continue;
+        }
         top.ops.push_back(std::move(op));
+      }
       // A merged step is another document state: saved at "ab", "abc" is
       // not saved, though one undo still takes all of it back.
       top.id = next_id_++;

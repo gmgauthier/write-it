@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -29,19 +30,48 @@ class UndoHistory {
   // recomputes after every change (list-shift, list-tab).
   using IgnoreTag = std::function<bool(const Glib::RefPtr<Gtk::TextTag>&)>;
 
-  // What a closed step did, for coalescing: Word 97 keeps a burst of typing,
-  // of Backspace or of Delete as one step.
+  // What a closed step did, for coalescing: a burst of typing, of Backspace
+  // or of Delete is one step.
   enum class Shape { Other, Insertion, Backspace, Delete };
   enum class Closed { Dropped, Pushed, Merged };
 
   static constexpr std::size_t kCap = 200;
 
-  UndoHistory() = default;
+  UndoHistory();
   ~UndoHistory();
   UndoHistory(const UndoHistory&) = delete;
   UndoHistory& operator=(const UndoHistory&) = delete;
 
   void attach(const Glib::RefPtr<Gtk::TextBuffer>& buffer, IgnoreTag ignore);
+  // Two tags the document cannot tell apart (a paragraph format and the same
+  // format with other "set directly" bits). A step that only swaps tags for
+  // ones like them changes nothing the document shows: it joins the step
+  // below, not a step of its own, and leaves state_id() as it was.
+  using SameTag =
+      std::function<bool(const Glib::RefPtr<Gtk::TextTag>&, const Glib::RefPtr<Gtk::TextTag>&)>;
+  void set_same_tag(SameTag same)
+  {
+    same_tag_ = std::move(same);
+  }
+  // A tag put on or taken off a range where the document cannot show it (a
+  // character format on the newline of a paragraph that has text). A step
+  // made only of such changes, swaps of like tags and unseen custom changes
+  // joins the step below as well.
+  using UnseenTag = std::function<bool(const Glib::RefPtr<Gtk::TextTag>&, int start, int end)>;
+  void set_unseen_tag(UnseenTag unseen)
+  {
+    unseen_tag_ = std::move(unseen);
+  }
+  // For the rare step those rules cannot settle (text erased and put back as
+  // it was, a change to the window's own state): whether the document looks
+  // the same after `back` (the step undone) as before it. Then `forth` must
+  // be called to redo it. Only no-op commands get here, never typing.
+  using LooksSame =
+      std::function<bool(const std::function<void()>& back, const std::function<void()>& forth)>;
+  void set_looks_same(LooksSame looks_same)
+  {
+    looks_same_ = std::move(looks_same);
+  }
   void detach();
 
   // --- The saved-state hook. ---
@@ -86,8 +116,9 @@ class UndoHistory {
   {
     return open_;
   }
-  // A change outside the buffer, as part of the open step.
-  void record_custom(std::function<void()> undo, std::function<void()> redo);
+  // A change outside the buffer, as part of the open step. `seen` false: the
+  // document does not show it (see set_same_tag()).
+  void record_custom(std::function<void()> undo, std::function<void()> redo, bool seen = true);
   // Closes the open step. An empty step is dropped. With `may_merge` (typing
   // inside the coalescing window) a step that continues the top step's
   // insertion, Backspace run or Delete run joins it, under a fresh id.
@@ -111,6 +142,8 @@ class UndoHistory {
   }
   // Operations in the top undo step, for the tests.
   std::size_t top_ops() const;
+  // The top undo step's operations, one per line, for test failures.
+  std::string describe_top() const;
 
  private:
   struct Op;
@@ -122,6 +155,8 @@ class UndoHistory {
   void on_erase(const Gtk::TextIter& start, const Gtk::TextIter& end);
   void on_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
               const Gtk::TextIter& end, bool apply);
+  enum class Seen { Yes, No, Maybe };
+  Seen seen(const Step& step) const;
   void note_tag_shape(const std::vector<std::pair<int, int>>& ranges);
   void play(Step& step, bool forward);
   void emit()
@@ -131,6 +166,9 @@ class UndoHistory {
 
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   IgnoreTag ignore_;
+  SameTag same_tag_;
+  UnseenTag unseen_tag_;
+  LooksSame looks_same_;
   std::vector<sigc::connection> connections_;
   std::vector<std::unique_ptr<Step>> undo_;
   std::vector<std::unique_ptr<Step>> redo_;

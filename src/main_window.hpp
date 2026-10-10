@@ -6,11 +6,13 @@
 #include "narrow_combo.hpp"
 #include "page_text.hpp"
 #include "settings.hpp"
+#include "undo.hpp"
 #include "view.hpp"
 
 #include <gtkmm.h>
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <utility>
 #include <memory>
@@ -86,15 +88,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   // made of it.
   friend struct MainWindowProbe;
 
-  struct Snapshot {
-    Document doc;
-    int offset = 0;
+  // What an undo step keeps of the state the buffer cannot hold: the empty
+  // last paragraph's format and character format.
+  struct SideState {
+    ParaFormat pending_para;
+    bool pending_para_set = false;
+    Run pending_mark;
+    bool pending_mark_set = false;
   };
 
   enum class OpenKind { Rtf, Markdown, Plain };
 
   static constexpr int kPageW = kScreenPageWidth;
-  static constexpr int kUndoCap = 200;
 
   void build_menus();
   void build_toolbars();
@@ -166,7 +171,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   void redo();
   void on_user_begin();
   void on_user_end();
-  void coalesce_typing(const Document& current);
+  // Opens and closes an undo step around a user action or a command; the
+  // buffer's own signals record what it changes (undo.hpp).
+  void open_step();
+  UndoHistory::Closed close_step(bool may_merge);
+  // After undo or redo: the caret, and everything that follows the text.
+  void after_replay(int caret);
+  SideState side_state() const;
+  void set_side_state(const SideState& state);
   void on_inserted(const Gtk::TextBuffer::iterator& pos, const Glib::ustring& text, int bytes);
   void on_mark_set(const Gtk::TextBuffer::iterator& location,
                    const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark);
@@ -395,7 +407,8 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   std::string save_path_;
   std::string title_name_ = "Untitled";
-  Document saved_;
+  // undo_.state_id() at the last save or open (UndoHistory::state_id()).
+  std::uint64_t saved_state_ = 0;
   bool save_point_ = true;
   // Where an imported document came from; cleared when it becomes anything
   // else (New, Close, Save As). Lets a second request for it find this
@@ -488,8 +501,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   Run pending_mark_;
   bool pending_mark_set_ = false;
   std::string caret_key_;
-  std::vector<Snapshot> undo_;
-  std::vector<Snapshot> redo_;
+  // Undo and redo, recorded as operations (undo.hpp); undo_.state_id() is
+  // the saved-state hook.
+  UndoHistory undo_;
+  SideState side_before_;
   gint64 last_typed_us_ = 0;
   // The document's style sheet; empty for the default, as in Document.
   std::vector<Style> styles_;

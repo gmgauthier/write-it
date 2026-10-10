@@ -263,13 +263,31 @@ void MainWindow::apply_next_style()
     return;
   if (!apply_style(doc, at, at, next))
     return;
-  // Part of the Enter's own undo step: on_user_end compares against the
-  // snapshot taken before it.
-  const int caret = cursor_offset();
-  const bool was = restoring_;
-  restoring_ = true;
-  replace_buffer(doc, caret);
-  restoring_ = was;
+  // Part of the Enter's own undo step, recorded with it. The new paragraph
+  // is empty: its paragraph tag and its newline's character format (its
+  // mark) are all it has, or, as the empty last paragraph, the pending ones.
+  const Paragraph& styled = doc.paragraphs[at];
+  const int start = paragraph_start(cursor_offset());
+  tag_paragraph(start, para_format(styled));
+  if (paragraph_end(start) > start) {
+    auto from = buffer_->get_iter_at_offset(start);
+    auto to_iter = buffer_->get_iter_at_offset(start + 1);
+    strip_fmt(from, to_iter);
+    // A newline holds no outline level: the heading tag Enter carried over
+    // from the heading above goes too.
+    for (int level = 1; level <= 6; ++level)
+      buffer_->remove_tag(heading_tag(level), buffer_->get_iter_at_offset(start),
+                          buffer_->get_iter_at_offset(start + 1));
+    if (styled.mark)
+      buffer_->apply_tag(format_tag(*styled.mark), buffer_->get_iter_at_offset(start),
+                         buffer_->get_iter_at_offset(start + 1));
+  } else if (styled.mark) {
+    pending_mark_ = *styled.mark;
+    pending_mark_.text.clear();
+    pending_mark_set_ = true;
+  } else {
+    pending_mark_set_ = false;
+  }
   restyle_run(typing_, old ? *old : styles.front(), *to);
 }
 
@@ -281,17 +299,20 @@ void MainWindow::commit_document(const Document& before, const Document& after)
   }
   const int insert = buffer_->get_insert()->get_iter().get_offset();
   const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
-  if (static_cast<int>(undo_.size()) >= kUndoCap)
-    undo_.erase(undo_.begin());
-  Snapshot snap;
-  snap.doc = before;
-  snap.offset = insert;
-  undo_.push_back(std::move(snap));
-  redo_.clear();
+  // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
+  // so the rebuild's operations stand for the whole document this once.
+  open_step();
+  const std::vector<Style> old_styles = styles_;
   restoring_ = true;
   replace_buffer(after, insert);
   buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
   restoring_ = false;
+  if (!(old_styles == styles_)) {
+    const std::vector<Style> new_styles = styles_;
+    undo_.record_custom([this, old_styles] { styles_ = old_styles; },
+                        [this, new_styles] { styles_ = new_styles; });
+  }
+  close_step(false);
   // A style change is its own undo step, never merged into typing.
   last_typed_us_ = 0;
   update_title();

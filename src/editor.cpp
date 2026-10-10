@@ -243,74 +243,6 @@ void add_run(Paragraph& paragraph, Run run)
     paragraph.runs.push_back(std::move(run));
 }
 
-struct Atom {
-  gunichar ch = 0;
-  Run format;
-  int heading = 0;
-  ParaFormat para;
-};
-
-bool operator==(const Atom& a, const Atom& b)
-{
-  return a.ch == b.ch && a.heading == b.heading && a.para == b.para &&
-         same_format(a.format, b.format);
-}
-
-// One code point per buffer offset, with a newline between paragraphs.
-std::vector<Atom> atoms_of(const Document& doc)
-{
-  std::vector<Atom> atoms;
-  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
-    if (i > 0) {
-      Atom newline;
-      newline.ch = '\n';
-      atoms.push_back(newline);
-    }
-    const Paragraph& paragraph = doc.paragraphs[i];
-    for (const Run& run : paragraph.runs) {
-      const Glib::ustring text(run.text);
-      for (auto it = text.begin(); it != text.end(); ++it) {
-        Atom atom;
-        atom.ch = *it;
-        atom.format = run;
-        atom.format.text.clear();
-        atom.heading = paragraph.heading;
-        atom.para.indents = paragraph.indents;
-        atom.para.align = paragraph.align;
-        atom.para.list = paragraph.list;
-        atoms.push_back(atom);
-      }
-    }
-  }
-  return atoms;
-}
-
-struct Insertion {
-  int at = 0;
-  int len = 0;
-};
-
-// True when `after` is `before` plus one contiguous insertion.
-bool one_insertion(const Document& before, const Document& after, Insertion& out)
-{
-  const std::vector<Atom> old_atoms = atoms_of(before);
-  const std::vector<Atom> new_atoms = atoms_of(after);
-  if (new_atoms.size() <= old_atoms.size())
-    return false;
-  size_t prefix = 0;
-  while (prefix < old_atoms.size() && old_atoms[prefix] == new_atoms[prefix])
-    ++prefix;
-  size_t suffix = 0;
-  while (suffix < old_atoms.size() - prefix &&
-         old_atoms[old_atoms.size() - 1 - suffix] == new_atoms[new_atoms.size() - 1 - suffix])
-    ++suffix;
-  if (prefix + suffix != old_atoms.size())
-    return false;
-  out.at = static_cast<int>(prefix);
-  out.len = static_cast<int>(new_atoms.size() - old_atoms.size());
-  return out.len > 0;
-}
-
 }  // namespace
 
 void MainWindow::tell(const std::string& sentence)
@@ -424,6 +356,63 @@ void MainWindow::lend_primary(bool lend)
 
 void MainWindow::build_editor()
 {
+  // Undo records every buffer change but the screen-only list tags, which
+  // are recomputed after each change and may leave the tag table.
+  undo_.attach(buffer_, [](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    const std::string name = tag_name(tag);
+    return is_list_shift(name) || is_list_tab(name);
+  });
+  undo_.set_same_tag([](const Glib::RefPtr<Gtk::TextTag>& a, const Glib::RefPtr<Gtk::TextTag>& b) {
+    Run r;
+    Run q;
+    if (parse_fmt(tag_name(a), r) && parse_fmt(tag_name(b), q))
+      return same_look(r, q);
+    ParaFormat x;
+    ParaFormat y;
+    if (!parse_para(tag_name(a), x) || !parse_para(tag_name(b), y))
+      return false;
+    x.direct = y.direct;
+    return x == y;
+  });
+  undo_.set_looks_same([this](const std::function<void()>& back,
+                              const std::function<void()>& forth) {
+    const int insert = buffer_->get_insert()->get_iter().get_offset();
+    const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
+    const bool was = restoring_;
+    restoring_ = true;
+    const Document after = capture();
+    back();
+    const bool same = capture() == after;
+    forth();
+    restoring_ = was;
+    buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
+    return same;
+  });
+  undo_.set_unseen_tag([this](const Glib::RefPtr<Gtk::TextTag>& tag, int start, int end) {
+    // capture() reads a character format off a newline only when its
+    // paragraph is empty (Paragraph::mark), and reads only the character
+    // format of highest priority (format_of()): one under another, as a
+    // paste can leave, does not show.
+    Run ignored;
+    if (!parse_fmt(tag_name(tag), ignored))
+      return false;
+    for (int at = start; at < end; ++at) {
+      auto it = buffer_->get_iter_at_offset(at);
+      if (it.get_char() == '\n' && !it.starts_line())
+        continue;
+      bool covered = false;
+      for (const auto& other : it.get_tags()) {
+        if (other != tag && other->get_priority() > tag->get_priority() &&
+            parse_fmt(tag_name(other), ignored)) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered)
+        return false;
+    }
+    return true;
+  });
   for (int level = 1; level <= 6; ++level)
     heading_tag(level);
   raise_headings();
@@ -647,7 +636,6 @@ bool MainWindow::new_document(bool prompt)
   if (prompt && !confirm_discard_or_save())
     return false;
   undo_.clear();
-  redo_.clear();
   save_path_.clear();
   source_path_.clear();
   title_name_ = "Untitled";
@@ -656,7 +644,7 @@ bool MainWindow::new_document(bool prompt)
   typing_.size = known_size(settings_.default_size) ? settings_.default_size : 11;
   save_point_ = true;
   replace_buffer(blank_document(typing_.font, typing_.size), 0);
-  saved_ = capture();
+  saved_state_ = undo_.state_id();
   message_.set_text("");
   update_title();
   update_actions();
@@ -770,7 +758,6 @@ void MainWindow::refuse_not_local(const std::string& uri)
 void MainWindow::install_loaded(const Document& doc, const std::string& path, bool keep_path)
 {
   undo_.clear();
-  redo_.clear();
   replace_buffer(doc, 0);
   title_name_ = Glib::path_get_basename(path);
   // An opened file is unmodified until it is edited, as in Word 97, RTF or
@@ -780,7 +767,7 @@ void MainWindow::install_loaded(const Document& doc, const std::string& path, bo
   save_path_ = keep_path ? path : std::string();
   source_path_ = keep_path ? std::string() : path;
   save_point_ = true;
-  saved_ = capture();
+  saved_state_ = undo_.state_id();
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
   message_.set_text(Glib::ustring("Opened ") + title_name_);
@@ -829,7 +816,7 @@ bool MainWindow::write_rtf(const std::string& path)
   save_path_ = path;
   source_path_.clear();
   title_name_ = Glib::path_get_basename(path);
-  saved_ = capture();
+  saved_state_ = undo_.state_id();
   save_point_ = true;
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
@@ -1065,7 +1052,10 @@ bool MainWindow::dirty() const
 {
   if (!save_point_)
     return true;
-  return !(capture() == saved_);
+  // The history decides, not the text: clean exactly at the undo state the
+  // last save (or open) left, so typing "a" then Backspace is still dirty,
+  // and typing "a" then Undo is clean again.
+  return undo_.state_id() != saved_state_;
 }
 
 void MainWindow::update_title()
@@ -1089,8 +1079,8 @@ void MainWindow::update_actions()
   updating_actions_ = true;
   const bool selection = buffer_ && buffer_->get_has_selection();
   const bool any_text = buffer_ && buffer_->get_char_count() > 0;
-  const bool can_undo = !undo_.empty();
-  const bool can_redo = !redo_.empty();
+  const bool can_undo = undo_.can_undo();
+  const bool can_redo = undo_.can_redo();
   // Never wait_is_text_available(): see clipboard_text_.
   const bool can_paste = clipboard_text_;
   auto sens = [](Gtk::Widget* widget, bool on) {
@@ -1157,38 +1147,86 @@ int MainWindow::cursor_offset() const
 
 void MainWindow::undo()
 {
-  if (undo_.empty())
+  if (!undo_.can_undo() || undo_.is_open())
     return;
-  Snapshot current;
-  current.doc = capture();
-  current.offset = cursor_offset();
-  redo_.push_back(std::move(current));
-  const Snapshot snap = undo_.back();
-  undo_.pop_back();
   restoring_ = true;
-  replace_buffer(snap.doc, snap.offset);
+  const int caret = undo_.undo(cursor_offset());
   restoring_ = false;
-  update_title();
-  update_actions();
-  sync_format_controls();
+  after_replay(caret);
 }
 
 void MainWindow::redo()
 {
-  if (redo_.empty())
+  if (!undo_.can_redo() || undo_.is_open())
     return;
-  Snapshot current;
-  current.doc = capture();
-  current.offset = cursor_offset();
-  undo_.push_back(std::move(current));
-  const Snapshot snap = redo_.back();
-  redo_.pop_back();
   restoring_ = true;
-  replace_buffer(snap.doc, snap.offset);
+  const int caret = undo_.redo(cursor_offset());
   restoring_ = false;
+  after_replay(caret);
+}
+
+void MainWindow::after_replay(int caret)
+{
+  // As the snapshot undo left it: the caret where the step began (undo) or
+  // where it was when undone (redo), nothing selected.
+  const int count = buffer_->get_char_count();
+  restoring_ = true;
+  buffer_->place_cursor(buffer_->get_iter_at_offset(std::max(0, std::min(caret, count))));
+  restoring_ = false;
+  text_.scroll_to(buffer_->get_insert());
+  apply_page_size();
+  // The sheet may be another one now.
+  fill_style_combo();
   update_title();
   update_actions();
   sync_format_controls();
+  // Undoing one item can renumber the list items below it.
+  text_.queue_draw();
+}
+
+MainWindow::SideState MainWindow::side_state() const
+{
+  return SideState{pending_para_, pending_para_set_, pending_mark_, pending_mark_set_};
+}
+
+void MainWindow::set_side_state(const SideState& state)
+{
+  pending_para_ = state.pending_para;
+  pending_para_set_ = state.pending_para_set;
+  pending_mark_ = state.pending_mark;
+  pending_mark_set_ = state.pending_mark_set;
+}
+
+void MainWindow::open_step()
+{
+  if (undo_.is_open())
+    return;
+  undo_.open(cursor_offset(), buffer_->get_has_selection());
+  side_before_ = side_state();
+}
+
+UndoHistory::Closed MainWindow::close_step(bool may_merge)
+{
+  const SideState after = side_state();
+  const SideState& before = side_before_;
+  const bool same = before.pending_para_set == after.pending_para_set &&
+                    before.pending_para == after.pending_para &&
+                    before.pending_mark_set == after.pending_mark_set &&
+                    same_format(before.pending_mark, after.pending_mark);
+  if (!same) {
+    // capture() reads the pending formats only for an empty last paragraph,
+    // and not their "set directly" bits.
+    ParaFormat x = before.pending_para;
+    x.direct = after.pending_para.direct;
+    const bool looks_same = before.pending_para_set == after.pending_para_set &&
+                            x == after.pending_para &&
+                            before.pending_mark_set == after.pending_mark_set &&
+                            same_format(before.pending_mark, after.pending_mark);
+    undo_.record_custom([this, before] { set_side_state(before); },
+                        [this, after] { set_side_state(after); },
+                        final_paragraph_empty() && !looks_same);
+  }
+  return undo_.close(cursor_offset(), may_merge);
 }
 
 void MainWindow::on_user_begin()
@@ -1196,13 +1234,7 @@ void MainWindow::on_user_begin()
   if (loading_ || restoring_)
     return;
   in_user_ = true;
-  if (static_cast<int>(undo_.size()) >= kUndoCap)
-    undo_.erase(undo_.begin());
-  Snapshot snap;
-  snap.doc = capture();
-  snap.offset = cursor_offset();
-  undo_.push_back(std::move(snap));
-  redo_.clear();
+  open_step();
 }
 
 void MainWindow::on_user_end()
@@ -1217,44 +1249,18 @@ void MainWindow::on_user_end()
   if (pending_mark_set_ && !final_paragraph_empty())
     pending_mark_set_ = false;
   apply_next_style();
-  const Document current = capture();
-  if (!undo_.empty() && undo_.back().doc == current) {
-    undo_.pop_back();
-  } else {
-    coalesce_typing(current);
+  // A burst of typing, of Backspace or of Delete is one undo step. A pause,
+  // a format change, or a moved caret starts a new one (UndoHistory::close).
+  const gint64 now = g_get_monotonic_time();
+  const bool may_merge = last_typed_us_ != 0 && now - last_typed_us_ <= 1000000;
+  if (close_step(may_merge) != UndoHistory::Closed::Dropped)
     last_typed_us_ = g_get_monotonic_time();
-  }
   update_title();
   update_actions();
   apply_page_size();
   sync_format_controls();
   // An edit on one line can renumber list items on others.
   text_.queue_draw();
-}
-
-void MainWindow::coalesce_typing(const Document& current)
-{
-  // A burst of typing is one undo step. A pause, a format change, or a moved
-  // caret starts a new one.
-  if (undo_.size() < 2 || !redo_.empty() || last_typed_us_ == 0)
-    return;
-  const gint64 now = g_get_monotonic_time();
-  if (now - last_typed_us_ > 1000000)
-    return;
-  const Snapshot& earlier = undo_[undo_.size() - 2];
-  const Snapshot& intermediate = undo_.back();
-  Insertion first;
-  Insertion second;
-  if (!one_insertion(earlier.doc, intermediate.doc, first) ||
-      !one_insertion(intermediate.doc, current, second))
-    return;
-  if (intermediate.offset != first.at + first.len)
-    return;
-  if (cursor_offset() != second.at + second.len)
-    return;
-  if (second.at != first.at + first.len)
-    return;
-  undo_.pop_back();
 }
 
 void MainWindow::on_inserted(const Gtk::TextBuffer::iterator& pos, const Glib::ustring& text,
@@ -2197,7 +2203,7 @@ void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
   // Erasing through to the end of the buffer from the start of a line leaves
   // an empty last paragraph. Like Word's surviving paragraph mark, it keeps
   // the format of the last paragraph that was there.
-  if (loading_ || !buffer_ || !to.is_end() || from == to)
+  if (loading_ || restoring_ || !buffer_ || !to.is_end() || from == to)
     return;
   if (paragraph_start(from.get_offset()) != from.get_offset())
     return;
