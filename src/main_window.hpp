@@ -201,6 +201,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_tag_applied(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& from,
                       const Gtk::TextIter& to);
   void clear_applied_fmt();
+  // The start-end choice for a paste (see finish_pending()): which format the
+  // paragraph a paste's first end closes takes, the copied paragraph's
+  // (Word's paragraph mark) or the landing paragraph's.
+  Glib::RefPtr<Gtk::TextTag> first_end_para(const Glib::RefPtr<Gtk::TextTag>& copied,
+                                            const Glib::RefPtr<Gtk::TextTag>& landing) const;
+  // The only way finish_pending() sets a paragraph format: every other para
+  // tag on [from, to) comes off first.
+  void set_para(int from, int to, const Glib::RefPtr<Gtk::TextTag>& tag);
+  // [from, to)'s text takes outline level `level` (0 for none) and no other.
+  void set_heading(int from, int to, int level);
   Run line_break_mark(int newline) const;
   void tag_line_breaks(int start, int end);
   void apply_run_edit(const std::function<void(Run&)>& edit);
@@ -518,6 +528,8 @@ class MainWindow : public Gtk::ApplicationWindow {
     Glib::RefPtr<Gtk::TextMark> to;
   };
   std::vector<AppliedFmt> applied_fmt_;
+  // Paragraph formats applied likewise: a paste's or drop's source tags.
+  std::vector<AppliedFmt> applied_para_;
 
   std::unique_ptr<Gtk::Dialog> find_dialog_;
   Gtk::Entry* find_entry_ = nullptr;
