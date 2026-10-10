@@ -160,6 +160,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   Document capture() const;
   // Calls of capture(), for the tests: a keystroke makes at most undo's two.
   mutable long captures_ = 0;
+  // For the tests: label geometry read through get_iter_location() (which
+  // lays its line out again), and label layouts built, in list drawing and
+  // list measuring. A keystroke costs a few of each, however many items show.
+  long label_locates_ = 0;
+  long label_layouts_ = 0;
   void replace_buffer(const Document& doc, int offset);
   // The undo state differs from the one saved, opened or made new.
   bool dirty() const;
@@ -316,9 +321,45 @@ class MainWindow : public Gtk::ApplicationWindow {
   // a plain paragraph.
   bool list_label_place(const Paragraph& paragraph, int offset, int number,
                         Glib::RefPtr<Pango::Layout>& layout, int& x, Gdk::Rectangle& where);
+  // As list_label_place(), with the first character's location `where`
+  // already known.
+  bool list_label_at(const Paragraph& paragraph, int offset, int number,
+                     Glib::RefPtr<Pango::Layout>& layout, int& x, const Gdk::Rectangle& where);
   // The label's layout and pixel width, and a space's width in its font.
+  // Layouts are kept by label text and font (label_layout_cache_): drawing
+  // one again does not shape it again.
   Glib::RefPtr<Pango::Layout> list_label_layout(const Paragraph& paragraph, int offset, int number,
                                                 int& width, int& gap);
+  struct LabelLayout {
+    Glib::RefPtr<Pango::Layout> layout;
+    int width = 0;
+    int gap = 0;
+  };
+  std::map<std::string, LabelLayout> label_layout_cache_;
+  // Where the first character of the GTK line at `start` sits, the line's
+  // top being `line_y` and its height `line_height` (get_line_yrange(),
+  // which lays nothing out). get_iter_location() lays its line out again,
+  // since GTK keeps only one laid-out line outside its draw pass, so each
+  // line's answer is kept (label_geometry_) relative to the line's top: a
+  // line that moves up or down keeps it.
+  void label_where(const Gtk::TextIter& start, int line_y, int line_height, Gdk::Rectangle& where);
+  struct LabelGeometry {
+    int x = 0;
+    int dy = 0;
+    int width = 0;
+    int height = 0;
+    int line_height = 0;
+  };
+  // By GTK line. An edit or a tag change forgets the lines it touches and
+  // moves the entries below by the lines it adds or removes; a line whose
+  // height changed is measured again; any other change to the layout (the
+  // text width, zoom, the left margin, tag priorities, the style) forgets
+  // them all.
+  std::map<int, LabelGeometry> label_geometry_;
+  int label_geometry_width_ = -1;
+  int label_geometry_margin_ = -1;
+  double label_geometry_zoom_ = 0;
+  void forget_label_geometry(int first, int last, int shift);
   // A centred list item whose text must be centred from somewhere other
   // than its left indent (list_centre_from()) gets a screen-only
   // "list-shift" tag carrying that left margin, one tag per margin in use,
