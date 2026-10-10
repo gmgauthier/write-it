@@ -12,7 +12,7 @@ LCOS itself: [https://github.com/BryanLunduke/LCOS](https://github.com/BryanLund
 
 ## Status
 
-**M2 (Paragraph) is done. M3 is next.** Typing, character format, undo, find and replace, and RTF open and save are in. Recent files are in. Plain text imports as paragraphs, and Markdown import and export cover headings, paragraphs, bold, and italic. From M2, paragraph indents in inches or centimetres, left, center, right, and justified alignment, Draft view, bulleted and numbered lists, and named styles are in. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
+**M3 (Page) is done. M4 is next.** Typing, character format, undo, find and replace, and RTF open and save are in. Recent files are in. Plain text imports as paragraphs, and Markdown import and export cover headings, paragraphs, bold, italic, and image paths. From M2, paragraph indents in inches or centimetres, left, center, right, and justified alignment, Draft view, bulleted and numbered lists, and named styles are in. From M3, page setup, columns, tables, headers, footers, footnotes, and pictures are in. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Save writes RTF. Export writes Markdown.
 
