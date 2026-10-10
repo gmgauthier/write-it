@@ -99,9 +99,11 @@ class UndoHistory {
   // insertion, Backspace run or Delete run joins it, under a fresh id.
   Closed close(int caret, bool may_merge);
 
-  // Plays the top step back. `caret` is where the caret is now, for redo to
-  // put back. Returns where the caret goes, or -1 with nothing to undo.
-  int undo(int caret);
+  // Plays the top step back. Returns where the caret goes (where the step
+  // began), or -1 with nothing to undo or a step open.
+  int undo();
+  // Plays the top redo step forward. Returns where the caret goes (where
+  // the action left it), or -1.
   int redo();
   bool replaying() const
   {
@@ -133,6 +135,7 @@ class UndoHistory {
   bool is_edit(const Step& step) const;
   void note_tag_shape(const std::vector<std::pair<int, int>>& ranges);
   void play(Step& step, bool forward);
+  void play_ops(Step& step, bool forward);
   void emit()
   {
     state_changed_.emit();
@@ -144,6 +147,8 @@ class UndoHistory {
   std::vector<std::unique_ptr<Step>> undo_;
   std::vector<std::unique_ptr<Step>> redo_;
   std::unique_ptr<Step> current_;
+  // The redo steps while a step is open: back if it turns out no edit.
+  std::vector<std::unique_ptr<Step>> stashed_redo_;
   bool open_ = false;
   bool replaying_ = false;
   std::uint64_t next_id_ = 2;

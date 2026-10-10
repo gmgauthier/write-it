@@ -1146,17 +1146,22 @@ int MainWindow::cursor_offset() const
 
 void MainWindow::undo()
 {
-  if (!undo_.can_undo() || undo_.is_open())
+  // A step left open (a user action never ended) must not leave Undo dead.
+  if (undo_.is_open())
+    close_step(false);
+  if (!undo_.can_undo())
     return;
   restoring_ = true;
-  const int caret = undo_.undo(cursor_offset());
+  const int caret = undo_.undo();
   restoring_ = false;
   after_replay(caret);
 }
 
 void MainWindow::redo()
 {
-  if (!undo_.can_redo() || undo_.is_open())
+  if (undo_.is_open())
+    close_step(false);
+  if (!undo_.can_redo())
     return;
   restoring_ = true;
   const int caret = undo_.redo();
@@ -1166,8 +1171,9 @@ void MainWindow::redo()
 
 void MainWindow::after_replay(int caret)
 {
-  // As the snapshot undo left it: the caret where the step began (undo) or
-  // where it was when undone (redo), nothing selected.
+  // The caret where the step began (undo: the start of a selection it
+  // replaced) or where the action left it (redo), nothing selected, and
+  // scrolled into view.
   const int count = buffer_->get_char_count();
   // Typing after Undo or Redo starts a step of its own.
   last_typed_us_ = 0;
@@ -1202,7 +1208,12 @@ void MainWindow::open_step()
 {
   if (undo_.is_open())
     return;
-  undo_.open(cursor_offset(), buffer_->get_has_selection());
+  Gtk::TextBuffer::iterator from;
+  Gtk::TextBuffer::iterator to;
+  const bool selection = buffer_->get_selection_bounds(from, to);
+  // Undo puts the caret back at the start of what the step changes: with a
+  // selection, its start, whichever end the caret is at.
+  undo_.open(selection ? from.get_offset() : cursor_offset(), selection);
   side_before_ = side_state();
 }
 

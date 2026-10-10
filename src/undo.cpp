@@ -32,11 +32,15 @@ struct UndoHistory::Op {
 struct UndoHistory::Step {
   std::uint64_t id = 0;
   std::vector<Op> ops;
-  // Where undo puts the caret: where the step began.
+  // Where undo puts the caret: where the step began (the start of a
+  // selection it replaced).
   int caret = 0;
-  // Where redo puts it: where it was when the step was undone.
-  int redo_caret = 0;
+  // Where redo puts it: where the action left it, at the change.
+  int after = 0;
   bool selection = false;
+  // It began by erasing the selection: typing over a selection. Its insert
+  // may start a burst of typing, never join one.
+  bool replaced = false;
   Shape shape = Shape::Other;
   // The shape's range: the text inserted, or erased by the run.
   int at = 0;
@@ -97,6 +101,10 @@ std::uint64_t UndoHistory::state_id() const
 
 void UndoHistory::clear()
 {
+  // A step left open would record the next document into itself.
+  open_ = false;
+  current_.reset();
+  stashed_redo_.clear();
   undo_.clear();
   redo_.clear();
   base_id_ = next_id_++;
@@ -134,6 +142,8 @@ void UndoHistory::open(int caret, bool selection)
   current_->caret = caret;
   current_->selection = selection;
   open_ = true;
+  // Only an edit drops the redo steps: kept aside until close() knows.
+  stashed_redo_ = std::move(redo_);
   redo_.clear();
 }
 
@@ -213,7 +223,9 @@ void UndoHistory::on_insert(const Gtk::TextIter& pos, const Glib::ustring& text)
   op.length = static_cast<int>(text.length());
   Step& step = *current_;
   ++step.inserts;
-  if (step.erases > 0) {
+  if (step.erases > 0 && !(step.replaced && step.erases == 1)) {
+    step.may_insert = false;
+  } else if (step.replaced && !step.has_block && op.start != step.erase_start) {
     step.may_insert = false;
   } else if (!step.has_block) {
     step.has_block = true;
@@ -259,8 +271,13 @@ void UndoHistory::on_erase(const Gtk::TextIter& start, const Gtk::TextIter& end)
     it = next;
   }
   Step& step = *current_;
+  // Typing over a selection erases it first; the typing may still be an
+  // insertion that the next keys join.
+  if (step.selection && step.erases == 0 && step.inserts == 0 && step.ops.empty())
+    step.replaced = true;
+  else
+    step.may_insert = false;
   ++step.erases;
-  step.may_insert = false;
   step.erase_start = op.start;
   step.erase_end = op.start + op.length;
   push_op(std::move(op));
@@ -361,18 +378,20 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
     return Closed::Dropped;
   open_ = false;
   std::unique_ptr<Step> step = std::move(current_);
-  if (step->ops.empty())
-    return Closed::Dropped;
-  const bool hidden = !is_edit(*step);
-  if (hidden) {
-    // Undoing the step below takes this back too; with none, nothing older
-    // can be replayed over it.
+  if (step->ops.empty() || !is_edit(*step)) {
+    // Not an edit: the redo steps still fit, and undoing the step below
+    // takes this back too; with none, nothing older can be replayed over it.
+    redo_ = std::move(stashed_redo_);
+    stashed_redo_.clear();
     if (!undo_.empty())
       for (Op& op : step->ops)
         undo_.back()->ops.push_back(std::move(op));
     return Closed::Dropped;
   }
-  if (step->may_insert && step->has_block && step->len > 0 && step->erases == 0 &&
+  stashed_redo_.clear();
+  step->after = caret;
+  const bool clean_insert = step->erases == 0 || (step->replaced && step->erases == 1);
+  if (step->may_insert && step->has_block && step->len > 0 && clean_insert &&
       caret == step->at + step->len) {
     step->shape = Shape::Insertion;
   } else if (step->erases == 1 && step->inserts == 0 && !step->selection) {
@@ -383,7 +402,7 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
     step->at = step->erase_start;
     step->len = step->erase_end - step->erase_start;
   }
-  if (may_merge && step->shape != Shape::Other && !undo_.empty() &&
+  if (may_merge && step->shape != Shape::Other && !step->replaced && !undo_.empty() &&
       undo_.back()->shape == step->shape) {
     Step& top = *undo_.back();
     bool merge = false;
@@ -424,6 +443,7 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
       // A merged step is another document state: saved at "ab", "abc" is
       // not saved, though one undo still takes all of it back.
       top.id = next_id_++;
+      top.after = caret;
       emit();
       return Closed::Merged;
     }
@@ -441,7 +461,31 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
 
 void UndoHistory::play(Step& step, bool forward)
 {
-  replaying_ = true;
+  // Recording stays off only while replaying, whatever happens; a replay
+  // cut short leaves the buffer between states, so no step fits it any more.
+  struct Guard {
+    bool& flag;
+    explicit Guard(bool& f)
+        : flag(f)
+    {
+      flag = true;
+    }
+    ~Guard()
+    {
+      flag = false;
+    }
+  };
+  try {
+    Guard guard(replaying_);
+    play_ops(step, forward);
+  } catch (...) {
+    clear();
+    throw;
+  }
+}
+
+void UndoHistory::play_ops(Step& step, bool forward)
+{
   auto at = [this](int offset) { return buffer_->get_iter_at_offset(offset); };
   auto insert = [&](const Op& op) { buffer_->insert(at(op.start), op.text); };
   auto erase = [&](const Op& op) { buffer_->erase(at(op.start), at(op.start + op.length)); };
@@ -494,10 +538,9 @@ void UndoHistory::play(Step& step, bool forward)
     for (auto it = step.ops.rbegin(); it != step.ops.rend(); ++it)
       run(*it);
   }
-  replaying_ = false;
 }
 
-int UndoHistory::undo(int caret)
+int UndoHistory::undo()
 {
   if (undo_.empty() || open_ || !buffer_)
     return -1;
@@ -505,7 +548,6 @@ int UndoHistory::undo(int caret)
   undo_.pop_back();
   play(*step, false);
   const int back = step->caret;
-  step->redo_caret = caret;
   redo_.push_back(std::move(step));
   emit();
   return back;
@@ -518,7 +560,7 @@ int UndoHistory::redo()
   std::unique_ptr<Step> step = std::move(redo_.back());
   redo_.pop_back();
   play(*step, true);
-  const int back = step->redo_caret;
+  const int back = step->after;
   undo_.push_back(std::move(step));
   emit();
   return back;

@@ -16,13 +16,17 @@
 // list document) and opens it as Open does.
 //
 // The rules the window half holds the window to:
-// - An action that changes nothing adds no undo step.
-// - An action that changes the document adds one step, or joins the top step
-//   only as a continued burst: typing (any insertion at the caret: keys,
-//   Enter, paste with nothing selected) on from where the last insertion
-//   ended, a Backspace on from where the last Backspace ended, a Delete at
-//   the last Delete's place.
-// - Undo puts the caret where the undone step began.
+// - An action that never inserts, deletes or re-tags anything (net) adds no
+//   undo step and keeps Redo; one that does is an edit even when the
+//   document comes out the same (typing or pasting the same text over a
+//   selection), and drops Redo.
+// - An edit adds one step, or joins the top step only as a continued burst:
+//   typing (any insertion at the caret: keys, Enter, paste, and the first key
+//   or paste over a selection, which starts a burst) on from where the last
+//   insertion ended, a Backspace on from where the last Backspace ended, a
+//   Delete at the last Delete's place.
+// - Undo puts the caret where the undone step began (the start of a
+//   selection it replaced); redo puts it where the action left it.
 // - The dirty mark follows the history: clear exactly at the state the last
 //   save or open left (MainWindow::dirty()); an edit merged into the step
 //   that was on top at the save is a new state.
@@ -123,6 +127,13 @@ struct MainWindowProbe {
   static int caret(MainWindow& w)
   {
     return w.cursor_offset();
+  }
+  // Where an action starts: the caret, or the start of the selection.
+  static int start(MainWindow& w)
+  {
+    Gtk::TextIter from;
+    Gtk::TextIter to;
+    return w.buffer_->get_selection_bounds(from, to) ? from.get_offset() : w.cursor_offset();
   }
   static Glib::RefPtr<Gtk::TextBuffer> buffer(MainWindow& w)
   {
@@ -344,6 +355,8 @@ struct State {
   // Where the caret was before the edit that made this state: undo puts it
   // back there.
   int caret_before = -1;
+  // Where the caret was after it: redo puts it there.
+  int caret_after = -1;
   // The step and op that made it, for failure reports.
   std::string origin;
 };
@@ -530,10 +543,9 @@ class Run_ {
     if (same(now, before) && !buffer_edit_) {
       if (steps != steps_before)
         fail("an action that changed nothing added an undo step");
-      // As the snapshot undo did, a user action forgets redo even when it
-      // changes nothing.
-      if (!MainWindowProbe::can_redo(*w_))
-        redo_.clear();
+      // Only an edit drops the redo steps (section 3).
+      if (MainWindowProbe::can_redo(*w_) != !redo_.empty())
+        fail("an action that changed nothing changed Redo");
       // Nor does it end a burst: typing on still joins the step below.
       check_mark("after a no-op");
       return;
@@ -541,6 +553,8 @@ class Run_ {
     if (MainWindowProbe::can_redo(*w_))
       fail("an edit kept redo");
     redo_.clear();
+    const int caret = MainWindowProbe::caret(*w_);
+    now.caret_after = caret;
     if (steps == steps_before + 1) {
       now.caret_before = caret_before;
       now.origin = std::to_string(step_) + " " + op_;
@@ -559,7 +573,6 @@ class Run_ {
       fail("undo steps went from " + std::to_string(steps_before) + " to " + std::to_string(steps));
       stack_.push_back(now);
     }
-    const int caret = MainWindowProbe::caret(*w_);
     reset_bursts(burst);
     if (burst == Burst::Insert)
       last_insert_end_ = caret;
@@ -608,6 +621,10 @@ class Run_ {
       redo_.push_back(stack_.back());
       stack_.pop_back();
     } else {
+      if (redo_.back().caret_after >= 0 && MainWindowProbe::caret(*w_) != redo_.back().caret_after)
+        fail("redo put the caret at " + std::to_string(MainWindowProbe::caret(*w_)) + ", not " +
+             std::to_string(redo_.back().caret_after) + " where the step left it " + where +
+             " (the step of " + redo_.back().origin + ")");
       stack_.push_back(redo_.back());
       redo_.pop_back();
     }
@@ -723,7 +740,7 @@ class Run_ {
     const size_t steps = MainWindowProbe::steps(*w_);
     const State before = record();
     before_rtf_ = before.rtf;
-    const int caret = MainWindowProbe::caret(*w_);
+    const int caret = MainWindowProbe::start(*w_);
     // Whether the action is an edit by section 5.5: it put text in or took
     // it out, or left some character's tags other than they were. Then it
     // is a step and the * even when the document comes out the same.
@@ -831,7 +848,9 @@ class Run_ {
         if (!MainWindowProbe::paste_ready(*w_) || a == b)
           break;
         MainWindowProbe::select(*w_, a, b);
-        paste(Burst::None);
+        // Typing on after a paste over a selection may join it, as after any
+        // paste.
+        paste(Burst::Insert);
         break;
       }
       case Kind::SameOver: {
@@ -847,7 +866,7 @@ class Run_ {
             break;
           detail << "type " << c << " over [" << a << ", " << a + 1 << ')';
           MainWindowProbe::select(*w_, a, a + 1);
-          edit(Burst::None, [&] { key(*w_, gdk_unicode_to_keyval(c)); });
+          edit(Burst::Insert, [&] { key(*w_, gdk_unicode_to_keyval(c)); });
           break;
         }
         const int b = std::min(total, a + 1 + static_cast<int>(r() % 6));
@@ -861,7 +880,7 @@ class Run_ {
         });
         wait_for([&] { return MainWindowProbe::paste_ready(*w_); });
         MainWindowProbe::select(*w_, a, b);
-        edit(Burst::None, [&] {
+        edit(Burst::Insert, [&] {
           key(*w_, GDK_KEY_v, GDK_CONTROL_MASK);
           wait_for([&] { return text_changed_; });
         });
@@ -1278,7 +1297,7 @@ void model_run(std::uint64_t seed, int run, int ops)
   }
   bool undo_ok = true;
   for (size_t i = states.size() - 1; i > 0; --i) {
-    history.undo(0);
+    history.undo();
     undo_ok = undo_ok && plain() == states[i - 1];
   }
   undo_ok = undo_ok && !history.can_undo();
