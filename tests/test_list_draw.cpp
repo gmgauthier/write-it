@@ -8,7 +8,8 @@
 // and Enter, may read a few labels' geometry and build a layout or two, a
 // small number however many items are in view: checked in a small window
 // and in a large one with far more items showing. Typing in one item builds
-// no other item's label layout.
+// no label layout at all: its own label is unchanged, and no other item's
+// label is shaped again.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -88,7 +89,8 @@ constexpr int kItems = 300;
 constexpr int kKeys = 4;
 // Per keystroke, however many items show.
 constexpr long kLocatesPerKey = 4;
-constexpr long kLayoutsPerKey = 1;
+// Typing in one item leaves every label's text and font as they were.
+constexpr long kLayoutsPerKey = 0;
 // Enter splits an item and renumbers every item below it.
 constexpr long kLocatesPerEnter = 8;
 constexpr long kLayoutsPerEnter = 3;

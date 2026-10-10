@@ -451,7 +451,10 @@ void MainWindow::build_editor()
       false);
   auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>&, const Gtk::TextIter& start,
                                 const Gtk::TextIter& end) {
-    forget_label_geometry(start.get_line(), end.get_line(), 0);
+    // A range up to the next line's start, as a paragraph's is, leaves that
+    // line's first character, and so its layout, untouched.
+    const int last = end.get_line() - (end.starts_line() && end.compare(start) > 0 ? 1 : 0);
+    forget_label_geometry(start.get_line(), std::max(start.get_line(), last), 0);
   };
   buffer_->signal_apply_tag().connect(geometry_on_tag);
   buffer_->signal_remove_tag().connect(geometry_on_tag);
