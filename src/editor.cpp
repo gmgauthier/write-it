@@ -806,8 +806,7 @@ bool MainWindow::write_rtf(const std::string& path)
   save_path_ = path;
   source_path_.clear();
   title_name_ = Glib::path_get_basename(path);
-  saved_state_ = undo_.state_id();
-  save_point_ = true;
+  mark_saved();
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
   message_.set_text(Glib::ustring("Saved ") + title_name_);
@@ -1047,6 +1046,15 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   fill_style_combo();
 }
 
+void MainWindow::mark_saved()
+{
+  saved_state_ = undo_.state_id();
+  save_point_ = true;
+  // Save ends a run of typing (Greg's decision): what follows is a step of
+  // its own, so one Ctrl+Z comes back to the saved state.
+  last_typed_us_ = 0;
+}
+
 bool MainWindow::dirty() const
 {
   if (!save_point_)
@@ -1204,6 +1212,22 @@ void MainWindow::set_side_state(const SideState& state)
   pending_mark_set_ = state.pending_mark_set;
 }
 
+bool MainWindow::pending_same(const SideState& before, const SideState& after) const
+{
+  // The window's own state, not the buffer: different only where the empty
+  // last paragraph's format is (the pending one, else the paragraph above's),
+  // "set directly" bits included, as they are in a paragraph's tag.
+  if (!final_paragraph_empty())
+    return true;
+  const int count = buffer_->get_char_count();
+  // capture() of an empty document: a default paragraph.
+  const ParaFormat above = count > 0 ? para_at(count - 1) : para_format(Paragraph{});
+  const ParaFormat& was = before.pending_para_set ? before.pending_para : above;
+  const ParaFormat& now = after.pending_para_set ? after.pending_para : above;
+  return was == now && before.pending_mark_set == after.pending_mark_set &&
+         (!after.pending_mark_set || same_format(before.pending_mark, after.pending_mark));
+}
+
 void MainWindow::open_step()
 {
   if (undo_.is_open())
@@ -1225,26 +1249,9 @@ UndoHistory::Closed MainWindow::close_step(bool may_merge)
                     before.pending_para == after.pending_para &&
                     before.pending_mark_set == after.pending_mark_set &&
                     same_format(before.pending_mark, after.pending_mark);
-  if (!same) {
-    // The window's own state, not the buffer: an edit only where capture()
-    // reads it differently, for an empty last paragraph (which follows the
-    // paragraph above when no format is pending).
-    bool seen = false;
-    if (final_paragraph_empty()) {
-      const int count = buffer_->get_char_count();
-      // capture() of an empty document: a default paragraph.
-      const ParaFormat above = count > 0 ? para_at(count - 1) : para_format(Paragraph{});
-      ParaFormat was = before.pending_para_set ? before.pending_para : above;
-      const ParaFormat& now = after.pending_para_set ? after.pending_para : above;
-      // Not the "set directly" bits, which the document's paragraphs do not
-      // compare either (pending Greg's call on style-set versus direct).
-      was.direct = now.direct;
-      seen = !(was == now) || before.pending_mark_set != after.pending_mark_set ||
-             (after.pending_mark_set && !(before.pending_mark == after.pending_mark));
-    }
+  if (!same)
     undo_.record_custom([this, before] { set_side_state(before); },
-                        [this, after] { set_side_state(after); }, seen);
-  }
+                        [this, after] { set_side_state(after); }, !pending_same(before, after));
   return undo_.close(cursor_offset(), may_merge);
 }
 

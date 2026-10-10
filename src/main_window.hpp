@@ -154,6 +154,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void rebuild_recent();
   void install_loaded(const Document& doc, const std::string& path, bool keep_path);
   bool write_rtf(const std::string& path);
+  // The current state is the saved one now.
+  void mark_saved();
 
   Document capture() const;
   // Calls of capture(), for the tests: a keystroke makes at most undo's two.
@@ -182,6 +184,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void after_replay(int caret);
   SideState side_state() const;
   void set_side_state(const SideState& state);
+  // Whether the document is the same with either side state (close_step()).
+  bool pending_same(const SideState& before, const SideState& after) const;
   void on_inserted(const Gtk::TextBuffer::iterator& pos, const Glib::ustring& text, int bytes);
   void on_mark_set(const Gtk::TextBuffer::iterator& location,
                    const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark);

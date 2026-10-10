@@ -7,16 +7,15 @@
 // saved one:
 //
 //   - New, Open and Save (or Save As) are clean;
-//   - any change after them is dirty, even typing that joins the step that
-//     was on top when the file was saved ("ab", Save, "c");
+//   - any change after them is dirty;
 //   - undo back to the saved state is clean again, redo off it dirty, and
 //     nothing else clears it: "a" then Backspace is dirty;
 //   - the screen-only list passes (list-shift and list-tab tags) never are.
 //
-// Typing, Delete or Backspace that joins the step on top of the undo stack
-// gives that step a fresh id (the Coordinator's "fresh id on merge"): "ab",
-// Save, "c" is dirty, and one Undo still takes "abc" away, back past the
-// save point, so that is dirty too.
+// Save ends a run of typing, Delete or Backspace (Greg's decision): "ab",
+// Save, "c" makes "c" a step of its own, dirty, and one Undo lands on the
+// saved "ab", clean. A run that joins the step on top still gives it a
+// fresh id.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -228,24 +227,24 @@ int run(writeit::MainWindow& window, const std::string& home)
   // A new window is clean.
   CHECK(is_dirty(window, false, "new window"));
 
-  // Bug Basher's case: "ab", Save, "c" typed straight on. "c" joins the step
-  // "ab" is in, and still makes the document dirty.
+  // Bug Basher's case: "ab", Save, "c" typed straight on. Save ends the run
+  // of typing (Greg's decision), so "c" is a step of its own and makes the
+  // document dirty; one Undo lands on the saved "ab", clean.
   type(window, "ab");
   CHECK(is_dirty(window, true, "typed ab"));
   CHECK(MainWindowProbe::save_as(window, first));
   CHECK(is_dirty(window, false, "saved ab"));
-  const size_t depth = MainWindowProbe::undo_depth(window);
+  const size_t ab_depth = MainWindowProbe::undo_depth(window);
   type(window, "c");
-  CHECK(MainWindowProbe::undo_depth(window) == depth);
-  CHECK(is_dirty(window, true, "ab, save, c (joined)"));
-  // One Undo takes the whole joined step, "abc", back to the empty page:
-  // not the saved "ab", so dirty.
+  CHECK(MainWindowProbe::undo_depth(window) == ab_depth + 1);
+  CHECK(is_dirty(window, true, "ab, save, c"));
   MainWindowProbe::undo(window);
-  CHECK(MainWindowProbe::all(window).empty());
-  CHECK(is_dirty(window, true, "undo of the joined step"));
+  CHECK(MainWindowProbe::all(window) == "ab");
+  CHECK(is_dirty(window, false, "undo of c: the save point"));
   MainWindowProbe::redo(window);
   CHECK(MainWindowProbe::all(window) == "abc");
-  CHECK(is_dirty(window, true, "redo of the joined step"));
+  CHECK(is_dirty(window, true, "redo of c"));
+  const size_t depth = MainWindowProbe::undo_depth(window);
 
   // Saved, then a pause: "d" is its own step. Undo is the save point, clean;
   // redo off it is dirty; undo is clean again.

@@ -49,8 +49,7 @@ struct MainWindowProbe {
   // What a save does to the window's state (write_rtf without the file).
   static void save(MainWindow& w)
   {
-    w.saved_state_ = w.undo_.state_id();
-    w.save_point_ = true;
+    w.mark_saved();
     w.update_title();
   }
   static Document doc(MainWindow& w)
@@ -173,6 +172,37 @@ struct MainWindowProbe {
     load(w, shown);
     return w.capture() == shown && signature() == tags;
   }
+  // Format > Paragraph..., the Left indent set to `left`, OK.
+  static void paragraph_dialog(MainWindow& w, double left)
+  {
+    sigc::connection poll = Glib::signal_timeout().connect(
+        [&w, left] {
+          for (Gtk::Window* top : Gtk::Window::list_toplevels()) {
+            auto* dialog = dynamic_cast<Gtk::Dialog*>(top);
+            if (!dialog || !dialog->get_visible() || dialog->get_title() != "Paragraph" ||
+                dialog->get_transient_for() != &w)
+              continue;
+            std::vector<Gtk::Widget*> todo = {dialog};
+            while (!todo.empty()) {
+              Gtk::Widget* widget = todo.back();
+              todo.pop_back();
+              auto* label = dynamic_cast<Gtk::Label*>(widget);
+              if (label && label->get_label() == "_Left:")
+                if (auto* spin = dynamic_cast<Gtk::SpinButton*>(label->get_mnemonic_widget()))
+                  spin->set_text(Glib::ustring::format(left));
+              if (auto* box = dynamic_cast<Gtk::Container*>(widget))
+                for (Gtk::Widget* child : box->get_children())
+                  todo.push_back(child);
+            }
+            dialog->response(Gtk::RESPONSE_OK);
+            return false;
+          }
+          return true;
+        },
+        50);
+    w.on_paragraph();
+    poll.disconnect();
+  }
   static void begin_action(MainWindow& w)
   {
     w.buffer_->begin_user_action();
@@ -279,6 +309,15 @@ struct MainWindowProbe {
   }
   // Bold switched on over the selection, as Ctrl+B does over text that is
   // not all bold yet (the same path, without the toggle's all-bold test).
+  // Bold switched on and marked direct, as Ctrl+B does over a selection
+  // that is not all directly bold.
+  static void bold_direct(MainWindow& w)
+  {
+    w.apply_run_edit([](Run& run) {
+      run.bold = true;
+      run.direct |= kDirectBold;
+    });
+  }
   static void bold_on(MainWindow& w)
   {
     w.apply_run_edit([](Run& run) { run.bold = true; });
@@ -577,7 +616,8 @@ void same_text_edits(writeit::MainWindow& w, const std::string& path)
 // Bug Basher's review of #42: Redo kept over a no-op, recorded Replace,
 // Restart Numbering and drag and drop, typing over a selection as one step,
 // the carets of undo and redo, a step left open, a replay that throws, and
-// the pending-format regression of 5c3e420. Twenty-eight checks.
+// the pending-format regression of 5c3e420, and the Paragraph and Style
+// dialogs. Thirty-two checks.
 void review(writeit::MainWindow& w)
 {
   const auto starred = [&w] { return w.get_title().find('*') != Glib::ustring::npos; };
@@ -651,6 +691,23 @@ void review(writeit::MainWindow& w)
   MainWindowProbe::redo(w);
   CHECK(text_of(MainWindowProbe::doc(w)) == "plain  end\ntargetbold" &&
         MainWindowProbe::doc(w).paragraphs[1].runs.back().bold);
+
+  // The Paragraph and Style dialogs: one step each, history kept.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, "A");
+  MainWindowProbe::caret(w, 3);
+  MainWindowProbe::paragraph_dialog(w, 1);
+  CHECK(MainWindowProbe::steps(w) == 2 && MainWindowProbe::stray(w) == 0 &&
+        MainWindowProbe::doc(w).paragraphs[0].indents.left > 0);
+  writeit::Style normal = MainWindowProbe::style_named(w, "Normal");
+  normal.format.size = 14;
+  CHECK(MainWindowProbe::edit_style(w, normal));
+  CHECK(MainWindowProbe::steps(w) == 3 && MainWindowProbe::stray(w) == 0);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == hello && !MainWindowProbe::dirty(w));
 
   // 3 and 5. A word typed over a selection is one step; undo puts the caret
   //    at the start of the text it gives back.
@@ -845,15 +902,15 @@ void typing(writeit::MainWindow& w)
   round_trip(w, start, MainWindowProbe::doc(w));
 }
 
-// Saved in the middle of a burst: the edit merged into the top step after
-// the save is a new state (a fresh id, and the signal), though one undo
-// still takes the whole burst back.
-void merged_after_save(writeit::MainWindow& w)
+// Save ends a run of typing, Delete or Backspace (Greg's decision): what
+// follows is a step of its own, so one Ctrl+Z lands on the saved state and
+// clears the *. Fourteen checks.
+void save_ends_run(writeit::MainWindow& w, const std::string& path)
 {
   int emitted = 0;
   sigc::connection counter = MainWindowProbe::changed(w).connect([&emitted] { ++emitted; });
 
-  // Typing.
+  // Typing: ab, save, c.
   const Document start = document({para("Hello")});
   MainWindowProbe::load(w, start);
   MainWindowProbe::caret(w, 5);
@@ -863,10 +920,24 @@ void merged_after_save(writeit::MainWindow& w)
   const std::uint64_t saved = MainWindowProbe::id(w);
   emitted = 0;
   MainWindowProbe::type(w, "c");
-  CHECK(MainWindowProbe::steps(w) == 1 && text_of(MainWindowProbe::doc(w)) == "Helloabc");
+  CHECK(MainWindowProbe::steps(w) == 2 && text_of(MainWindowProbe::doc(w)) == "Helloabc");
   CHECK(MainWindowProbe::id(w) != saved && emitted == 1 && MainWindowProbe::dirty(w));
   MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Helloab" && MainWindowProbe::id(w) == saved &&
+        !MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
   CHECK(MainWindowProbe::doc(w) == start && MainWindowProbe::steps(w) == 0);
+
+  // The same through File > Save As.
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::type(w, "b");
+  CHECK(MainWindowProbe::save_as(w, path));
+  MainWindowProbe::type(w, "c");
+  CHECK(MainWindowProbe::steps(w) == 2 && MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Helloab" && !MainWindowProbe::dirty(w));
 
   // A Delete run.
   const Document letters = document({para("abcdef")});
@@ -876,31 +947,25 @@ void merged_after_save(writeit::MainWindow& w)
   MainWindowProbe::del(w);
   CHECK(MainWindowProbe::steps(w) == 1 && text_of(MainWindowProbe::doc(w)) == "adef");
   MainWindowProbe::save(w);
-  const std::uint64_t saved_delete = MainWindowProbe::id(w);
-  emitted = 0;
   MainWindowProbe::del(w);
-  CHECK(MainWindowProbe::steps(w) == 1 && text_of(MainWindowProbe::doc(w)) == "aef");
-  CHECK(MainWindowProbe::id(w) != saved_delete && emitted == 1 && MainWindowProbe::dirty(w));
+  CHECK(MainWindowProbe::steps(w) == 2 && text_of(MainWindowProbe::doc(w)) == "aef" &&
+        MainWindowProbe::dirty(w));
   MainWindowProbe::undo(w);
-  CHECK(MainWindowProbe::doc(w) == letters && MainWindowProbe::caret(w) == 1);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "adef" && !MainWindowProbe::dirty(w) &&
+        MainWindowProbe::caret(w) == 1);
 
-  // A Backspace run.
+  // A Backspace run; redo goes back to the edit after the save.
   MainWindowProbe::load(w, letters);
   MainWindowProbe::caret(w, 6);
   MainWindowProbe::backspace(w);
   MainWindowProbe::backspace(w);
-  CHECK(MainWindowProbe::steps(w) == 1 && text_of(MainWindowProbe::doc(w)) == "abcd");
   MainWindowProbe::save(w);
-  const std::uint64_t saved_back = MainWindowProbe::id(w);
-  emitted = 0;
   MainWindowProbe::backspace(w);
-  CHECK(MainWindowProbe::steps(w) == 1 && text_of(MainWindowProbe::doc(w)) == "abc");
-  CHECK(MainWindowProbe::id(w) != saved_back && emitted == 1 && MainWindowProbe::dirty(w));
+  CHECK(MainWindowProbe::steps(w) == 2 && text_of(MainWindowProbe::doc(w)) == "abc");
   MainWindowProbe::undo(w);
-  CHECK(MainWindowProbe::doc(w) == letters && MainWindowProbe::caret(w) == 6);
-  // Redo is the merged state, not the saved one.
+  CHECK(text_of(MainWindowProbe::doc(w)) == "abcd" && !MainWindowProbe::dirty(w));
   MainWindowProbe::redo(w);
-  CHECK(text_of(MainWindowProbe::doc(w)) == "abc" && MainWindowProbe::id(w) != saved_back);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "abc" && MainWindowProbe::dirty(w));
 
   // Backspace then Delete are two steps; so is a run broken by a pause.
   MainWindowProbe::load(w, letters);
@@ -911,6 +976,32 @@ void merged_after_save(writeit::MainWindow& w)
   MainWindowProbe::del(w);
   CHECK(MainWindowProbe::steps(w) == 3 && text_of(MainWindowProbe::doc(w)) == "abf");
   counter.disconnect();
+}
+
+// Bold ticked over text that is bold only from its style is an edit (it is
+// direct now, so a later style change leaves it); over text already directly
+// bold it is not. Four checks.
+void style_bold(writeit::MainWindow& w)
+{
+  Paragraph heading = para("Title words");
+  heading.style = "Heading 1";
+  heading.heading = 1;
+  heading.runs[0].bold = true;
+  const Document start = document({heading, para("body")});
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_direct(w);
+  CHECK(MainWindowProbe::steps(w) == 1 && MainWindowProbe::dirty(w));
+  // Now direct: a second time is a no-op.
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_direct(w);
+  CHECK(MainWindowProbe::steps(w) == 1);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::steps(w) == 0 && !MainWindowProbe::dirty(w));
+  // An empty last paragraph's pending format: its direct bits are state too.
+  MainWindowProbe::load(w, writeit::blank_document("Sans", 11));
+  MainWindowProbe::align(w, writeit::Align::Left);
+  CHECK(MainWindowProbe::steps(w) == 1 && MainWindowProbe::dirty(w));
 }
 
 // Deleting formatted text across paragraphs, and pasting it back: the tags
@@ -1281,7 +1372,8 @@ int main(int argc, char* argv[])
     window.show();
     settle();
     typing(window);
-    merged_after_save(window);
+    save_ends_run(window, Glib::build_filename(home, "saved.rtf"));
+    style_bold(window);
     same_text_edits(window, Glib::build_filename(home, "saved.rtf"));
     review(window);
     retag(window);
@@ -1298,5 +1390,5 @@ int main(int argc, char* argv[])
   }
   g_remove(Glib::build_filename(home, "saved.rtf").c_str());
   g_rmdir(home.c_str());
-  return suite_test::done("undo", 227);
+  return suite_test::done("undo", 236);
 }

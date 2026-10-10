@@ -28,8 +28,12 @@
 // - Undo puts the caret where the undone step began (the start of a
 //   selection it replaced); redo puts it where the action left it.
 // - The dirty mark follows the history: clear exactly at the state the last
-//   save or open left (MainWindow::dirty()); an edit merged into the step
-//   that was on top at the save is a new state.
+//   save or open left (MainWindow::dirty()). Save ends a burst, so the next
+//   edit is a step of its own and one undo comes back to the saved state; a
+//   merged burst is a new state.
+// - An edit is text inserted or deleted, a character's tags changed, or the
+//   empty last paragraph's pending format changed ("set directly" bits
+//   included): ticking Bold over text bold only from its style is one.
 // - Save writes the RTF of the document; closing and reopening the saved
 //   file gives back those bytes, clean, with no undo or redo.
 //
@@ -127,6 +131,17 @@ struct MainWindowProbe {
   static int caret(MainWindow& w)
   {
     return w.cursor_offset();
+  }
+  // The empty last paragraph's pending formats, and whether two of them
+  // make the same document (direct bits included).
+  static MainWindow::SideState side(MainWindow& w)
+  {
+    return w.side_state();
+  }
+  static bool side_same(MainWindow& w, const MainWindow::SideState& a,
+                        const MainWindow::SideState& b)
+  {
+    return w.pending_same(a, b);
   }
   // Where an action starts: the caret, or the start of the selection.
   static int start(MainWindow& w)
@@ -748,6 +763,7 @@ class Run_ {
     // is a step and the * even when the document comes out the same.
     auto buffer = MainWindowProbe::buffer(*w_);
     const std::string tags_before = tag_signature();
+    const auto side_before = MainWindowProbe::side(*w_);
     text_changed_ = false;
     sigc::connection inserted = buffer->signal_insert().connect(
         [this](const Gtk::TextIter&, const Glib::ustring&, int) { text_changed_ = true; }, false);
@@ -757,7 +773,8 @@ class Run_ {
     settle();
     inserted.disconnect();
     erased.disconnect();
-    buffer_edit_ = text_changed_ || tag_signature() != tags_before;
+    buffer_edit_ = text_changed_ || tag_signature() != tags_before ||
+                   !MainWindowProbe::side_same(*w_, side_before, MainWindowProbe::side(*w_));
     after_edit(steps, before, burst, caret);
   }
 
@@ -1109,6 +1126,8 @@ class Run_ {
     key(*w_, GDK_KEY_s, GDK_CONTROL_MASK);
     settle();
     saved_serial_ = stack_.back().serial;
+    // Save ends a run of typing, Delete or Backspace.
+    reset_bursts(Burst::None);
     const std::string bytes = read_file(path_);
     if (bytes != stack_.back().rtf)
       fail(std::string("the saved file is not the document's RTF ") + where);
