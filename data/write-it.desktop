@@ -3,6 +3,7 @@ Type=Application
 Name=Write-It
 Comment=A word processor for The Lunduke Computer Operating System
 Exec=write-it %F
+Icon=write-it
 Terminal=false
 Categories=GTK;Office;WordProcessor;
 StartupWMClass=write-it

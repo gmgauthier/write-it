@@ -326,7 +326,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M5 — 1.0
 
-- `debian/`, a desktop file for `org.gmgauthier.WriteIt`, and `scripts/release.sh`.
+- `debian/`, a desktop file for `org.gmgauthier.WriteIt`, and `scripts/release.sh`. The desktop file is `data/write-it.desktop`: `Name=Write-It` is the AppImage’s name, and `Icon=write-it` is the hicolor icon.
 - The script produces the source tarball, the amd64 `.deb`, and the AppImage. The desktop `Name=` is the AppImage’s name.
 - Tag `v1.0.0` after `meson test` and lint are green. Publish the tag and the three artifacts to Gitea and GitHub.
 

@@ -3,6 +3,12 @@ build-appimage/
 builddir/
 obj-*/
 dist/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/debhelper-build-stamp
+debian/.debhelper/
+debian/write-it/
 .cache/
 *.o
 *~
