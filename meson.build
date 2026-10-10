@@ -50,6 +50,7 @@ writeit_core_sources = files(
   'src/para_check.cpp',
   'src/rtf.cpp',
   'src/settings.cpp',
+  'src/spelling.cpp',
   'src/styles.cpp',
   'src/undo.cpp',
   'src/units.cpp',
@@ -107,6 +108,13 @@ write_it_settings_tests = executable(
   dependencies: [writeit_dep],
 )
 test('settings', write_it_settings_tests)
+
+write_it_spelling_tests = executable(
+  'write-it-spelling-tests',
+  'tests/test_spelling.cpp',
+  dependencies: [writeit_dep],
+)
+test('spelling', write_it_spelling_tests)
 
 # Every test that opens a GTK window passes is_parallel: false. They all
 # share the one Xvfb display, and with it the X PRIMARY selection and the

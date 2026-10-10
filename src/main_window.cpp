@@ -419,7 +419,8 @@ void MainWindow::build_menus()
   columns_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_columns));
 
   auto* tools = add_menu("_Tools");
-  add_item(*tools, "_Spelling…", false, GDK_KEY_F7, static_cast<Gdk::ModifierType>(0));
+  spelling_item_ =
+      add_item(*tools, "_Spelling…", true, GDK_KEY_F7, static_cast<Gdk::ModifierType>(0));
   options_item_ = add_item(*tools, "_Options…", true);
 
   auto* table = add_menu("T_able");

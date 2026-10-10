@@ -469,6 +469,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void find_next();
   void replace_once();
   void on_options();
+  void on_spelling();
   void tell(const std::string& sentence);
 
   Settings settings_;
@@ -537,6 +538,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
   Gtk::MenuItem* justify_item_ = nullptr;
+  Gtk::MenuItem* spelling_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* page_setup_item_ = nullptr;
   Gtk::MenuItem* picture_item_ = nullptr;
