@@ -263,13 +263,31 @@ void MainWindow::apply_next_style()
     return;
   if (!apply_style(doc, at, at, next))
     return;
-  // Part of the Enter's own undo step: on_user_end compares against the
-  // snapshot taken before it.
-  const int caret = cursor_offset();
-  const bool was = restoring_;
-  restoring_ = true;
-  replace_buffer(doc, caret);
-  restoring_ = was;
+  // Part of the Enter's own undo step, recorded with it. The new paragraph
+  // is empty: its paragraph tag and its newline's character format (its
+  // mark) are all it has, or, as the empty last paragraph, the pending ones.
+  const Paragraph& styled = doc.paragraphs[at];
+  const int start = paragraph_start(cursor_offset());
+  tag_paragraph(start, para_format(styled));
+  if (paragraph_end(start) > start) {
+    auto from = buffer_->get_iter_at_offset(start);
+    auto to_iter = buffer_->get_iter_at_offset(start + 1);
+    strip_fmt(from, to_iter);
+    // A newline holds no outline level: the heading tag Enter carried over
+    // from the heading above goes too.
+    for (int level = 1; level <= 6; ++level)
+      buffer_->remove_tag(heading_tag(level), buffer_->get_iter_at_offset(start),
+                          buffer_->get_iter_at_offset(start + 1));
+    if (styled.mark)
+      buffer_->apply_tag(format_tag(*styled.mark), buffer_->get_iter_at_offset(start),
+                         buffer_->get_iter_at_offset(start + 1));
+  } else if (styled.mark) {
+    pending_mark_ = *styled.mark;
+    pending_mark_.text.clear();
+    pending_mark_set_ = true;
+  } else {
+    pending_mark_set_ = false;
+  }
   restyle_run(typing_, old ? *old : styles.front(), *to);
 }
 
@@ -281,17 +299,24 @@ void MainWindow::commit_document(const Document& before, const Document& after)
   }
   const int insert = buffer_->get_insert()->get_iter().get_offset();
   const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
-  if (static_cast<int>(undo_.size()) >= kUndoCap)
-    undo_.erase(undo_.begin());
-  Snapshot snap;
-  snap.doc = before;
-  snap.offset = insert;
-  undo_.push_back(std::move(snap));
-  redo_.clear();
+  // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
+  // so the rebuild's operations stand for the whole document this once.
+  open_step();
+  const std::vector<Style> old_styles = styles_;
   restoring_ = true;
-  replace_buffer(after, insert);
+  // With the text the same (a style or a style's format changed), only the
+  // paragraphs that changed are retagged, so the step records them and not
+  // the whole document.
+  if (!retag_paragraphs(before, after))
+    replace_buffer(after, insert);
   buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
   restoring_ = false;
+  if (!(old_styles == styles_)) {
+    const std::vector<Style> new_styles = styles_;
+    undo_.record_custom([this, old_styles] { styles_ = old_styles; },
+                        [this, new_styles] { styles_ = new_styles; });
+  }
+  close_step(false);
   // A style change is its own undo step, never merged into typing.
   last_typed_us_ = 0;
   update_title();
@@ -300,6 +325,92 @@ void MainWindow::commit_document(const Document& before, const Document& after)
   ruler_.queue_draw();
   text_.queue_draw();
   text_.grab_focus();
+}
+
+bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
+{
+  if (before.paragraphs.size() != after.paragraphs.size() || after.paragraphs.empty())
+    return false;
+  auto text = [](const Paragraph& p) {
+    std::string out;
+    for (const Run& run : p.runs)
+      out += run.text;
+    return out;
+  };
+  std::vector<int> starts;
+  int at = 0;
+  for (size_t i = 0; i < after.paragraphs.size(); ++i) {
+    const std::string mine = text(after.paragraphs[i]);
+    if (mine != text(before.paragraphs[i]))
+      return false;
+    starts.push_back(at);
+    at += static_cast<int>(Glib::ustring(mine).length()) + 1;
+  }
+  const int count = buffer_->get_char_count();
+  if (at - 1 != count)
+    return false;
+  styles_ = after.styles;
+  const size_t last = after.paragraphs.size() - 1;
+  for (size_t i = 0; i <= last; ++i) {
+    const Paragraph& paragraph = after.paragraphs[i];
+    if (paragraph == before.paragraphs[i])
+      continue;
+    const int start = starts[i];
+    const int end = i < last ? starts[i + 1] : count;
+    // Everything but the screen-only list tags, which follow by themselves.
+    std::vector<Glib::RefPtr<Gtk::TextTag>> old_tags;
+    for (auto it = buffer_->get_iter_at_offset(start); it.get_offset() < end;) {
+      for (const auto& tag : it.get_tags()) {
+        const std::string name = tag->property_name().get_value();
+        const bool screen = name.rfind(std::string("list-shift") + '\x1f', 0) == 0 ||
+                            name.rfind(std::string("list-tab") + '\x1f', 0) == 0;
+        if (!screen && std::find(old_tags.begin(), old_tags.end(), tag) == old_tags.end())
+          old_tags.push_back(tag);
+      }
+      if (!it.forward_to_tag_toggle(Glib::RefPtr<Gtk::TextTag>()))
+        break;
+    }
+    for (const auto& tag : old_tags)
+      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start),
+                          buffer_->get_iter_at_offset(end));
+    // Then as replace_buffer() builds a paragraph.
+    const auto para = para_tag(para_format(paragraph));
+    int run_at = start;
+    bool any = false;
+    for (const Run& run : paragraph.runs) {
+      if (run.text.empty())
+        continue;
+      const int run_end = run_at + static_cast<int>(Glib::ustring(run.text).length());
+      auto from = buffer_->get_iter_at_offset(run_at);
+      auto to = buffer_->get_iter_at_offset(run_end);
+      buffer_->apply_tag(format_tag(run), from, to);
+      if (paragraph.heading >= 1 && paragraph.heading <= 6)
+        buffer_->apply_tag(heading_tag(paragraph.heading), from, to);
+      buffer_->apply_tag(para, from, to);
+      run_at = run_end;
+      any = true;
+    }
+    if (i < last) {
+      auto from = buffer_->get_iter_at_offset(run_at);
+      auto to = buffer_->get_iter_at_offset(run_at + 1);
+      buffer_->apply_tag(para, from, to);
+      if (!any && paragraph.mark)
+        buffer_->apply_tag(format_tag(*paragraph.mark), from, to);
+    } else if (!any) {
+      pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align,
+                                 clamp_list(paragraph.list), paragraph.style, paragraph.direct};
+      pending_para_set_ = true;
+      if (paragraph.mark) {
+        pending_mark_ = *paragraph.mark;
+        pending_mark_.text.clear();
+        pending_mark_set_ = true;
+      }
+    }
+    tag_line_breaks(start, end);
+  }
+  list_lines_valid_ = false;
+  fill_style_combo();
+  return true;
 }
 
 void MainWindow::on_style_dialog()

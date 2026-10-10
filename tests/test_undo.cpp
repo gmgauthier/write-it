@@ -1,0 +1,1394 @@
+/* SPDX-License-Identifier: Unlicense */
+
+// The real window, under a display: undo and redo as recorded operations.
+// Every edit undone gives back the very document (capture() equality, which
+// sees text, character format, paragraph format, lists, styles and the
+// empty last paragraph's format), and redo the edited one. Steps group as
+// before: a burst of typing is one step, each command is one, a no-op is
+// none; a run of Backspace or of Delete is one step too. The
+// state id hook (UndoHistory::state_id()) says when the document is back at
+// its saved state, and a merge into the top step is a new state. Screen-only
+// list tags never make a step. Last, the bookkeeping one keystroke costs in
+// a 1,000-paragraph document against a 10-paragraph one.
+
+#include "check.hpp"
+#include "document.hpp"
+#include "main_window.hpp"
+#include "undo.hpp"
+
+#include <glib.h>
+#include <glib/gstdio.h>
+#include <glibmm/miscutils.h>
+#include <gtkmm.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <stdexcept>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace writeit {
+
+// Test-only access to the window's privates; declared a friend there.
+struct MainWindowProbe {
+  // A document as Open leaves it: no undo, unmodified.
+  static void load(MainWindow& w, const Document& doc)
+  {
+    w.undo_.clear();
+    w.replace_buffer(doc, 0);
+    w.saved_state_ = w.undo_.state_id();
+    w.save_point_ = true;
+    w.last_typed_us_ = 0;
+    w.update_title();
+    w.update_actions();
+    w.sync_format_controls();
+  }
+  // What a save does to the window's state (write_rtf without the file).
+  static void save(MainWindow& w)
+  {
+    w.mark_saved();
+    w.update_title();
+  }
+  static Document doc(MainWindow& w)
+  {
+    return w.capture();
+  }
+  static bool dirty(MainWindow& w)
+  {
+    return w.dirty();
+  }
+  static std::uint64_t id(MainWindow& w)
+  {
+    return w.undo_.state_id();
+  }
+  static sigc::signal<void>& changed(MainWindow& w)
+  {
+    return w.undo_.signal_state_changed();
+  }
+  static size_t steps(MainWindow& w)
+  {
+    return w.undo_.size();
+  }
+  static bool can_redo(MainWindow& w)
+  {
+    return w.undo_.can_redo();
+  }
+  static long stray(MainWindow& w)
+  {
+    return w.undo_.stray_edits();
+  }
+  static std::string describe(MainWindow& w)
+  {
+    return w.undo_.describe_top();
+  }
+  static size_t top_ops(MainWindow& w)
+  {
+    return w.undo_.top_ops();
+  }
+  static void caret(MainWindow& w, int at)
+  {
+    w.buffer_->place_cursor(w.buffer_->get_iter_at_offset(at));
+  }
+  static int caret(MainWindow& w)
+  {
+    return w.cursor_offset();
+  }
+  static void select(MainWindow& w, int from, int to)
+  {
+    w.buffer_->select_range(w.buffer_->get_iter_at_offset(from), w.buffer_->get_iter_at_offset(to));
+  }
+  // A key typed, as GTK types it: one interactive insertion at the caret.
+  static void type(MainWindow& w, const char* text)
+  {
+    w.buffer_->insert_interactive_at_cursor(text, true);
+  }
+  // A key typed over a selection, as the text view does it: one user
+  // action that deletes the selection and inserts the key.
+  static void type_over(MainWindow& w, const char* text)
+  {
+    w.buffer_->begin_user_action();
+    w.buffer_->erase_selection(true, true);
+    w.buffer_->insert_interactive_at_cursor(text, true);
+    w.buffer_->end_user_action();
+  }
+  // Edit > Replace: the needle selected, Replace pressed.
+  static void replace(MainWindow& w, int from, int to, const char* needle, const char* with)
+  {
+    w.present_find(true);
+    w.find_entry_->set_text(needle);
+    w.replace_entry_->set_text(with);
+    select(w, from, to);
+    w.replace_once();
+    w.find_dialog_->hide();
+  }
+  // A drag of the selection to `to` inside the view, as GTK does it: the
+  // drop inserts the dragged text with its tags in one user action, then
+  // the source deletes its selection in another.
+  static void drag_move(MainWindow& w, int from, int end, int to)
+  {
+    auto buffer = w.buffer_;
+    buffer->select_range(buffer->get_iter_at_offset(from), buffer->get_iter_at_offset(end));
+    auto source_start = buffer->create_mark(buffer->get_iter_at_offset(from), false);
+    auto source_end = buffer->create_mark(buffer->get_iter_at_offset(end), false);
+    buffer->begin_user_action();
+    auto dest = buffer->get_iter_at_offset(to);
+    auto copy_start = buffer->get_iter_at_offset(from);
+    auto copy_end = buffer->get_iter_at_offset(end);
+    gtk_text_buffer_insert_range_interactive(buffer->gobj(), dest.gobj(), copy_start.gobj(),
+                                             copy_end.gobj(), TRUE);
+    buffer->end_user_action();
+    buffer->select_range(source_start->get_iter(), source_end->get_iter());
+    buffer->erase_selection(true, true);
+    buffer->delete_mark(source_start);
+    buffer->delete_mark(source_end);
+  }
+  // Whether the buffer is as replace_buffer() would build it from what it
+  // shows: the same tags on every character (the screen-only list tags
+  // aside) and the same capture(). Rebuilds the buffer, history cleared.
+  static bool canonical(MainWindow& w)
+  {
+    auto signature = [&w] {
+      std::string out;
+      for (auto it = w.buffer_->begin(); !it.is_end();) {
+        out += std::to_string(it.get_offset()) + ':';
+        for (const auto& tag : it.get_tags()) {
+          const std::string name = tag->property_name().get_value();
+          if (name.rfind(std::string("list-shift") + '\x1f', 0) == 0 ||
+              name.rfind(std::string("list-tab") + '\x1f', 0) == 0)
+            continue;
+          out += name + '|';
+        }
+        out += '\n';
+        if (!it.forward_to_tag_toggle(Glib::RefPtr<Gtk::TextTag>()))
+          break;
+      }
+      return out;
+    };
+    const Document shown = w.capture();
+    const std::string tags = signature();
+    load(w, shown);
+    return w.capture() == shown && signature() == tags;
+  }
+  // Format > Paragraph..., the Left indent set to `left`, OK.
+  static void paragraph_dialog(MainWindow& w, double left)
+  {
+    sigc::connection poll = Glib::signal_timeout().connect(
+        [&w, left] {
+          for (Gtk::Window* top : Gtk::Window::list_toplevels()) {
+            auto* dialog = dynamic_cast<Gtk::Dialog*>(top);
+            if (!dialog || !dialog->get_visible() || dialog->get_title() != "Paragraph" ||
+                dialog->get_transient_for() != &w)
+              continue;
+            std::vector<Gtk::Widget*> todo = {dialog};
+            while (!todo.empty()) {
+              Gtk::Widget* widget = todo.back();
+              todo.pop_back();
+              auto* label = dynamic_cast<Gtk::Label*>(widget);
+              if (label && label->get_label() == "_Left:")
+                if (auto* spin = dynamic_cast<Gtk::SpinButton*>(label->get_mnemonic_widget()))
+                  spin->set_text(Glib::ustring::format(left));
+              if (auto* box = dynamic_cast<Gtk::Container*>(widget))
+                for (Gtk::Widget* child : box->get_children())
+                  todo.push_back(child);
+            }
+            dialog->response(Gtk::RESPONSE_OK);
+            return false;
+          }
+          return true;
+        },
+        50);
+    w.on_paragraph();
+    poll.disconnect();
+  }
+  static void begin_action(MainWindow& w)
+  {
+    w.buffer_->begin_user_action();
+  }
+  static void end_action(MainWindow& w)
+  {
+    w.buffer_->end_user_action();
+  }
+  static void new_document(MainWindow& w)
+  {
+    w.new_document(false);
+  }
+  // Whether the caret is inside the part of the page the view shows.
+  static bool caret_visible(MainWindow& w)
+  {
+    settle_view();
+    Gdk::Rectangle where;
+    Gdk::Rectangle shown;
+    w.text_.get_iter_location(w.buffer_->get_insert()->get_iter(), where);
+    w.text_.get_visible_rect(shown);
+    return where.get_y() >= shown.get_y() &&
+           where.get_y() + where.get_height() <= shown.get_y() + shown.get_height();
+  }
+  static void settle_view()
+  {
+    auto context = Glib::MainContext::get_default();
+    for (int round = 0; round < 6; ++round) {
+      while (context->pending())
+        context->iteration(false);
+      g_usleep(20000);
+    }
+  }
+  // Backspace and Delete at the caret, as the text view does them.
+  static void backspace(MainWindow& w)
+  {
+    auto iter = w.buffer_->get_insert()->get_iter();
+    w.buffer_->begin_user_action();
+    w.buffer_->backspace(iter, true, true);
+    w.buffer_->end_user_action();
+  }
+  static void del(MainWindow& w)
+  {
+    auto start = w.buffer_->get_insert()->get_iter();
+    auto end = start;
+    end.forward_char();
+    w.buffer_->begin_user_action();
+    w.buffer_->erase_interactive(start, end, true);
+    w.buffer_->end_user_action();
+  }
+  static void copy(MainWindow& w)
+  {
+    w.buffer_->copy_clipboard(Gtk::Clipboard::get());
+  }
+  static void paste(MainWindow& w)
+  {
+    w.buffer_->paste_clipboard(Gtk::Clipboard::get());
+  }
+  static int length(MainWindow& w)
+  {
+    return w.buffer_->get_char_count();
+  }
+  static void delete_selection(MainWindow& w)
+  {
+    w.buffer_->erase_selection(true, true);
+  }
+  // Enter or Backspace as the window takes it: its list keys first.
+  static void key(MainWindow& w, guint keyval)
+  {
+    GdkEventKey event{};
+    event.type = GDK_KEY_PRESS;
+    event.keyval = keyval;
+    if (w.on_text_key(&event))
+      return;
+    if (keyval == GDK_KEY_Return)
+      type(w, "\n");
+    else if (keyval == GDK_KEY_BackSpace)
+      backspace(w);
+  }
+  // More than the coalescing window since the last edit.
+  static void pause(MainWindow& w)
+  {
+    if (w.last_typed_us_ != 0)
+      w.last_typed_us_ -= 2000000;
+  }
+  static void undo(MainWindow& w)
+  {
+    w.undo();
+  }
+  static void redo(MainWindow& w)
+  {
+    w.redo();
+  }
+  static void bold(MainWindow& w)
+  {
+    w.toggle_flag(MainWindow::TextFlag::Bold);
+  }
+  static void italic(MainWindow& w)
+  {
+    w.toggle_flag(MainWindow::TextFlag::Italic);
+  }
+  static void underline(MainWindow& w)
+  {
+    w.toggle_flag(MainWindow::TextFlag::Underline);
+  }
+  // Bold switched on over the selection, as Ctrl+B does over text that is
+  // not all bold yet (the same path, without the toggle's all-bold test).
+  // Bold switched on and marked direct, as Ctrl+B does over a selection
+  // that is not all directly bold.
+  static void bold_direct(MainWindow& w)
+  {
+    w.apply_run_edit([](Run& run) {
+      run.bold = true;
+      run.direct |= kDirectBold;
+    });
+  }
+  static void bold_on(MainWindow& w)
+  {
+    w.apply_run_edit([](Run& run) { run.bold = true; });
+  }
+  // File > Save As to a path: the real write.
+  static bool save_as(MainWindow& w, const std::string& path)
+  {
+    return w.write_rtf(path);
+  }
+  static void font(MainWindow& w, const char* name)
+  {
+    w.apply_run_edit([name](Run& run) {
+      run.font = name;
+      run.direct |= kDirectFont;
+    });
+  }
+  static void align(MainWindow& w, Align align)
+  {
+    w.apply_align(align);
+  }
+  static void indents(MainWindow& w, Indents indents)
+  {
+    w.apply_para_edit([indents](ParaFormat& format) { format.indents = indents; });
+  }
+  static void style(MainWindow& w, const char* name)
+  {
+    w.apply_named_style(name);
+  }
+  // As Format > Style...'s OK: one undo step.
+  static bool edit_style(MainWindow& w, const Style& style)
+  {
+    const Document before = w.capture();
+    Document after = before;
+    adopt_sheet(after, w.typing_.font, w.typing_.size);
+    after.styles = complete_sheet(style_sheet(after));
+    if (!update_style(after, style.name, style))
+      return false;
+    w.commit_document(before, after);
+    return true;
+  }
+  static Style style_named(MainWindow& w, const char* name)
+  {
+    for (const Style& style : w.sheet())
+      if (style.name == name)
+        return style;
+    return Style{};
+  }
+  static void list(MainWindow& w, ListKind kind)
+  {
+    w.toggle_list_kind(kind);
+  }
+  static bool level(MainWindow& w, int delta)
+  {
+    return w.shift_list_level(delta);
+  }
+  static bool restart(MainWindow& w)
+  {
+    return w.renumber_list(true);
+  }
+  static int line_start(MainWindow& w, int line)
+  {
+    return w.buffer_->get_iter_at_line(line).get_offset();
+  }
+  // Whether paragraph `line`'s first character has a screen-only list tag.
+  static bool screen_tag(MainWindow& w, int line, const char* prefix)
+  {
+    for (const auto& tag : w.buffer_->get_iter_at_line(line).get_tags()) {
+      const std::string name = tag->property_name().get_value();
+      if (name.compare(0, std::string(prefix).size(), prefix) == 0)
+        return true;
+    }
+    return false;
+  }
+  // The undo bookkeeping of one keystroke: the step opened, the key's text
+  // recorded as the buffer inserts it, the step closed (and coalesced).
+  // One keystroke's undo work, as on_user_begin() and on_user_end() do it
+  // around the buffer's insertion: the step opened and closed (`book`), and
+  // the insertion itself with the history recording it (`insert`).
+  struct Split {
+    double book;
+    double insert;
+  };
+  static Split bookkeeping_us(MainWindow& w)
+  {
+    using us = std::chrono::duration<double, std::micro>;
+    const auto t0 = std::chrono::steady_clock::now();
+    w.open_step();
+    const auto ta = std::chrono::steady_clock::now();
+    w.buffer_->insert_at_cursor("x");
+    const auto tb = std::chrono::steady_clock::now();
+    w.close_step(true);
+    const auto t1 = std::chrono::steady_clock::now();
+    return Split{us(ta - t0).count() + us(t1 - tb).count(), us(tb - ta).count()};
+  }
+  // The buffer's insertion with no undo at all (the history emptied first,
+  // so nothing is recorded), to tell the recording from the insertion.
+  static double insert_only_us(MainWindow& w)
+  {
+    w.undo_.clear();
+    const auto t0 = std::chrono::steady_clock::now();
+    w.buffer_->insert_at_cursor("x");
+    const auto t1 = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::micro>(t1 - t0).count();
+  }
+  // A whole keystroke, the window's other work included.
+  static double keystroke_us(MainWindow& w)
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    type(w, "x");
+    const auto t1 = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::micro>(t1 - t0).count();
+  }
+  static double undo_us(MainWindow& w)
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    w.undo();
+    const auto t1 = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::micro>(t1 - t0).count();
+  }
+};
+
+}  // namespace writeit
+
+namespace {
+
+using writeit::Align;
+using writeit::Document;
+using writeit::ListKind;
+using writeit::MainWindowProbe;
+using writeit::Paragraph;
+using writeit::Run;
+
+void settle()
+{
+  auto context = Glib::MainContext::get_default();
+  for (int round = 0; round < 4; ++round) {
+    while (context->pending())
+      context->iteration(false);
+    g_usleep(20000);
+  }
+  while (context->pending())
+    context->iteration(false);
+}
+
+Run run(const std::string& text, bool bold = false, bool italic = false, double size = 11)
+{
+  Run r;
+  r.text = text;
+  r.font = "Sans";
+  r.size = size;
+  r.bold = bold;
+  r.italic = italic;
+  return r;
+}
+
+Paragraph para(const std::string& text)
+{
+  Paragraph p;
+  p.runs.push_back(run(text));
+  return p;
+}
+
+Document document(const std::vector<Paragraph>& paragraphs)
+{
+  Document doc = writeit::blank_document("Sans", 11);
+  doc.paragraphs = paragraphs;
+  return doc;
+}
+
+std::string text_of(const Document& doc)
+{
+  std::string text;
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    if (i > 0)
+      text += '\n';
+    for (const Run& r : doc.paragraphs[i].runs)
+      text += r.text;
+  }
+  return text;
+}
+
+// Undo gives `before` back and redo `after`, twice over; nothing strays.
+// Four checks.
+void round_trip(writeit::MainWindow& w, const Document& before, const Document& after)
+{
+  bool undone = true;
+  bool redone = true;
+  for (int pass = 0; pass < 2; ++pass) {
+    MainWindowProbe::undo(w);
+    settle();
+    undone = undone && MainWindowProbe::doc(w) == before;
+    MainWindowProbe::redo(w);
+    settle();
+    redone = redone && MainWindowProbe::doc(w) == after;
+  }
+  CHECK(undone);
+  CHECK(redone);
+  MainWindowProbe::undo(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == before);
+  CHECK(MainWindowProbe::stray(w) == 0);
+}
+
+// The dirty rule (Greg's decision: the history rule, see DEVELOPMENT.md and
+// MainWindow::dirty()). The mark clears only at the saved undo state, so "a"
+// then Backspace (text as saved, history not) stays dirty; "a" then Undo is
+// clean; any edit, even one space on an empty line, marks it.
+constexpr bool kDirtyFollowsHistory = true;
+
+void dirty_rule(writeit::MainWindow& w, const Document& start)
+{
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::pause(w);
+  MainWindowProbe::backspace(w);
+  CHECK(MainWindowProbe::doc(w) == start);
+  CHECK(MainWindowProbe::dirty(w) == kDirtyFollowsHistory);
+  CHECK((w.get_title().find('*') != Glib::ustring::npos) == kDirtyFollowsHistory);
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::undo(w);
+  CHECK(!MainWindowProbe::dirty(w) && w.get_title().find('*') == Glib::ustring::npos);
+  // Any edit marks it, even a single space on an empty line.
+  MainWindowProbe::load(w, writeit::blank_document("Sans", 11));
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, " ");
+  CHECK(MainWindowProbe::dirty(w) && w.get_title().find('*') != Glib::ustring::npos);
+}
+
+// Greg's rule, both ways (undo_fuzz.md sections 4 and 5.5). An action that
+// inserted or deleted text is an edit even when the result is identical: its
+// own step, and the *. One that never inserted, deleted or re-tagged anything
+// adds no step and leaves the mark as it was. Twelve checks.
+void same_text_edits(writeit::MainWindow& w, const std::string& path)
+{
+  const auto starred = [&w] { return w.get_title().find('*') != Glib::ustring::npos; };
+  const auto typed_abc = [&] {
+    MainWindowProbe::load(w, writeit::blank_document("Sans", 11));
+    MainWindowProbe::caret(w, 0);
+    MainWindowProbe::type(w, "abc");
+    CHECK(MainWindowProbe::save_as(w, path) && !MainWindowProbe::dirty(w) && !starred());
+  };
+
+  // Type abc, Save As, Shift+Left over the c, type c.
+  typed_abc();
+  const Document abc = MainWindowProbe::doc(w);
+  MainWindowProbe::select(w, 3, 2);
+  MainWindowProbe::type_over(w, "c");
+  CHECK(MainWindowProbe::doc(w) == abc && MainWindowProbe::steps(w) == 2);
+  CHECK(MainWindowProbe::dirty(w) && starred());
+  // Ctrl+Z takes back the c typed over, not the earlier typing.
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == abc && MainWindowProbe::steps(w) == 1 &&
+        !MainWindowProbe::dirty(w) && !starred());
+
+  // The same with Ctrl+C, Ctrl+V over the selected c.
+  typed_abc();
+  MainWindowProbe::select(w, 3, 2);
+  MainWindowProbe::copy(w);
+  settle();
+  MainWindowProbe::paste(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == abc && MainWindowProbe::steps(w) == 2);
+  CHECK(MainWindowProbe::dirty(w) && starred());
+
+  // True no-ops: no step, still clean.
+  const Document start = document({para("Hello"), para("world")});
+  const auto unchanged = [&] {
+    return MainWindowProbe::doc(w) == start && MainWindowProbe::steps(w) == 0 &&
+           !MainWindowProbe::dirty(w) && !starred();
+  };
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::backspace(w);
+  CHECK(unchanged());
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::del(w);
+  CHECK(unchanged());
+  Document bold = start;
+  bold.paragraphs[0].runs[0].bold = true;
+  MainWindowProbe::load(w, bold);
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_on(w);
+  CHECK(MainWindowProbe::doc(w) == bold && MainWindowProbe::steps(w) == 0 &&
+        !MainWindowProbe::dirty(w) && !starred());
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 2);
+  MainWindowProbe::style(w, "Normal");
+  CHECK(unchanged());
+  MainWindowProbe::level(w, -1);
+  CHECK(unchanged());
+}
+
+// Bug Basher's review of #42: Redo kept over a no-op, recorded Replace,
+// Restart Numbering and drag and drop, typing over a selection as one step,
+// the carets of undo and redo, a step left open, a replay that throws, and
+// the pending-format regression of 5c3e420, and the Paragraph and Style
+// dialogs. Thirty-two checks.
+void review(writeit::MainWindow& w)
+{
+  const auto starred = [&w] { return w.get_title().find('*') != Glib::ustring::npos; };
+  const Document hello = document({para("Hello world"), para("second")});
+
+  // 1. A no-op keeps Redo; an edit drops it.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::caret(w, 11);
+  MainWindowProbe::type(w, "!");
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::can_redo(w));
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::backspace(w);
+  CHECK(MainWindowProbe::can_redo(w));
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::del(w);
+  MainWindowProbe::caret(w, 3);
+  MainWindowProbe::style(w, "Normal");
+  CHECK(MainWindowProbe::can_redo(w) && MainWindowProbe::steps(w) == 0);
+  Document bold = hello;
+  bold.paragraphs[0].runs[0].bold = true;
+  MainWindowProbe::load(w, bold);
+  MainWindowProbe::caret(w, 11);
+  MainWindowProbe::type(w, "!");
+  MainWindowProbe::undo(w);
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_on(w);
+  CHECK(MainWindowProbe::can_redo(w));
+  MainWindowProbe::redo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Hello world!\nsecond");
+  MainWindowProbe::undo(w);
+  MainWindowProbe::caret(w, 2);
+  MainWindowProbe::type(w, "x");
+  CHECK(!MainWindowProbe::can_redo(w));
+
+  // 2. Replace, Restart Numbering and drag and drop are recorded steps;
+  //    nothing clears the history behind its back.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::replace(w, 6, 11, "world", "there");
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Hello there\nsecond" && MainWindowProbe::steps(w) == 1);
+  // The same word replaced is an edit too.
+  MainWindowProbe::replace(w, 6, 11, "there", "there");
+  CHECK(MainWindowProbe::steps(w) == 2 && MainWindowProbe::stray(w) == 0);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == hello && !MainWindowProbe::dirty(w));
+  Document listed = document({para("one"), para("two"), para("three")});
+  for (Paragraph& p : listed.paragraphs) {
+    p.list.kind = ListKind::Number;
+    p.list.list = 1;
+  }
+  MainWindowProbe::load(w, listed);
+  const Document listed_start = MainWindowProbe::doc(w);
+  MainWindowProbe::caret(w, 4);
+  CHECK(MainWindowProbe::restart(w));
+  CHECK(MainWindowProbe::steps(w) == 1 && MainWindowProbe::stray(w) == 0 && MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == listed_start && !MainWindowProbe::dirty(w));
+  Paragraph mixed;
+  mixed.runs = {run("plain "), run("bold", true), run(" end")};
+  const Document dnd = document({mixed, para("target")});
+  MainWindowProbe::load(w, dnd);
+  const Document dnd_start = MainWindowProbe::doc(w);
+  MainWindowProbe::drag_move(w, 6, 10, 21);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "plain  end\ntargetbold");
+  CHECK(MainWindowProbe::steps(w) == 2 && MainWindowProbe::stray(w) == 0);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == dnd_start);
+  MainWindowProbe::redo(w);
+  MainWindowProbe::redo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "plain  end\ntargetbold" &&
+        MainWindowProbe::doc(w).paragraphs[1].runs.back().bold);
+
+  // The Paragraph and Style dialogs: one step each, history kept.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, "A");
+  MainWindowProbe::caret(w, 3);
+  MainWindowProbe::paragraph_dialog(w, 1);
+  CHECK(MainWindowProbe::steps(w) == 2 && MainWindowProbe::stray(w) == 0 &&
+        MainWindowProbe::doc(w).paragraphs[0].indents.left > 0);
+  writeit::Style normal = MainWindowProbe::style_named(w, "Normal");
+  normal.format.size = 14;
+  CHECK(MainWindowProbe::edit_style(w, normal));
+  CHECK(MainWindowProbe::steps(w) == 3 && MainWindowProbe::stray(w) == 0);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == hello && !MainWindowProbe::dirty(w));
+
+  // 3 and 5. A word typed over a selection is one step; undo puts the caret
+  //    at the start of the text it gives back.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::select(w, 11, 6);  // world, selected left to right
+  MainWindowProbe::type_over(w, "t");
+  MainWindowProbe::type(w, "h");
+  MainWindowProbe::type(w, "e");
+  MainWindowProbe::type(w, "r");
+  MainWindowProbe::type(w, "e");
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Hello there\nsecond" && MainWindowProbe::steps(w) == 1);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == hello && MainWindowProbe::caret(w) == 6);
+  // Redo puts the caret where the typing left it.
+  MainWindowProbe::redo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Hello there\nsecond" && MainWindowProbe::caret(w) == 11);
+  // The typing over a selection never joins the burst before it.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "x");
+  MainWindowProbe::select(w, 7, 6);
+  MainWindowProbe::type_over(w, "W");
+  CHECK(MainWindowProbe::steps(w) == 2);
+
+  // 4. Redo moves the caret to the change and scrolls it into view.
+  std::vector<Paragraph> many;
+  for (int i = 0; i < 40; ++i)
+    many.push_back(para("Paragraph " + std::to_string(i + 1)));
+  MainWindowProbe::load(w, document(many));
+  MainWindowProbe::caret(w, 11);  // the end of paragraph 1
+  MainWindowProbe::type(w, "foo");
+  const int foo_end = 14;
+  MainWindowProbe::pause(w);
+  const int para30 = MainWindowProbe::line_start(w, 29) + 12;
+  MainWindowProbe::caret(w, para30);
+  MainWindowProbe::type(w, "bar");
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::caret(w, para30);
+  MainWindowProbe::caret_visible(w);
+  MainWindowProbe::redo(w);
+  CHECK(MainWindowProbe::caret(w) == foo_end && MainWindowProbe::caret_visible(w));
+  MainWindowProbe::redo(w);
+  CHECK(MainWindowProbe::caret(w) == para30 + 3 && MainWindowProbe::caret_visible(w));
+
+  // 7. New and Open drop a step left open; Undo still works with one open;
+  //    a replay that throws clears the history and leaves recording on.
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::begin_action(w);
+  MainWindowProbe::new_document(w);
+  MainWindowProbe::end_action(w);
+  CHECK(MainWindowProbe::steps(w) == 0 && !MainWindowProbe::dirty(w) && !starred());
+  MainWindowProbe::load(w, hello);
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::begin_action(w);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::end_action(w);
+  CHECK(MainWindowProbe::doc(w) == hello);
+  {
+    writeit::UndoHistory history;
+    auto buffer = Gtk::TextBuffer::create();
+    history.attach(buffer, nullptr);
+    history.open(0, false);
+    buffer->insert(buffer->begin(), "abc");
+    history.record_custom([] { throw std::runtime_error("replay failed"); }, [] {}, true);
+    history.close(3, false);
+    bool thrown = false;
+    try {
+      history.undo();
+    } catch (const std::runtime_error&) {
+      thrown = true;
+    }
+    CHECK(thrown && history.size() == 0 && !history.replaying());
+    history.open(0, false);
+    buffer->insert(buffer->begin(), "x");
+    history.close(1, false);
+    CHECK(history.size() == 1 && history.stray_edits() == 0);
+    history.detach();
+  }
+
+  // 8. 5c3e420: New, type a, Center, End, Enter, Up, Save, Center again:
+  //    no *, no step.
+  MainWindowProbe::load(w, writeit::blank_document("Sans", 11));
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::align(w, writeit::Align::Center);
+  MainWindowProbe::caret(w, 1);
+  MainWindowProbe::key(w, GDK_KEY_Return);
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::save(w);
+  const size_t saved_steps = MainWindowProbe::steps(w);
+  MainWindowProbe::align(w, writeit::Align::Center);
+  CHECK(!MainWindowProbe::dirty(w) && !starred() && MainWindowProbe::steps(w) == saved_steps);
+  MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "a");
+}
+
+// A style command retags only the paragraphs it changes; the buffer must
+// come out as a full rebuild would make it, and undo and redo exactly.
+// Twelve checks.
+void retag(writeit::MainWindow& w)
+{
+  Paragraph mixed;
+  mixed.runs = {run("plain "), run("bold", true), run(" big", false, true, 18)};
+  Paragraph item = para("item");
+  item.list.kind = ListKind::Bullet;
+  item.list.list = 1;
+  Paragraph empty;
+  Run mark = run("", true);
+  empty.mark = mark;
+  const Document start = document({mixed, item, item, empty, para("text"), Paragraph{}});
+  struct Case {
+    int from;
+    int to;
+    const char* style;
+  };
+  const Case cases[] = {{0, 0, "Heading 1"}, {13, 13, "Heading 2"}, {0, 25, "Block Text"},
+                        {-1, -1, "Heading 3"}};
+  for (const Case& c : cases) {
+    MainWindowProbe::load(w, start);
+    const int end = MainWindowProbe::length(w);
+    MainWindowProbe::select(w, c.from < 0 ? end : c.from, c.to < 0 ? end : c.to);
+    MainWindowProbe::style(w, c.style);
+    const Document after = MainWindowProbe::doc(w);
+    MainWindowProbe::undo(w);
+    CHECK(MainWindowProbe::doc(w) == start);
+    MainWindowProbe::redo(w);
+    CHECK(MainWindowProbe::doc(w) == after && !(after == start));
+    CHECK(MainWindowProbe::canonical(w));
+  }
+}
+
+// Typing: one step per burst, the caret back where it began, the saved
+// state found again.
+void typing(writeit::MainWindow& w)
+{
+  const Document start = document({para("Hello"), para("world")});
+  MainWindowProbe::load(w, start);
+  settle();
+  const std::uint64_t saved = MainWindowProbe::id(w);
+  CHECK(!MainWindowProbe::dirty(w) && MainWindowProbe::steps(w) == 0);
+  MainWindowProbe::caret(w, 5);
+  for (const char* key : {",", " ", "t", "h", "e", "r", "e"})
+    MainWindowProbe::type(w, key);
+  settle();
+  const Document typed = MainWindowProbe::doc(w);
+  CHECK(text_of(typed) == "Hello, there\nworld");
+  // A burst is one step, recorded as one insertion: the format passes
+  // after each key (finish_pending(), tag_line_breaks()) put back the tags
+  // they take off, which records nothing.
+  CHECK(MainWindowProbe::steps(w) == 1);
+  CHECK(MainWindowProbe::top_ops(w) == 1);
+  if (MainWindowProbe::top_ops(w) != 1)
+    std::cerr << MainWindowProbe::describe(w);
+  CHECK(MainWindowProbe::dirty(w) && MainWindowProbe::id(w) != saved);
+  // Undo back to the saved state: clean again, by the hook and by the title.
+  MainWindowProbe::undo(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == start && MainWindowProbe::caret(w) == 5);
+  CHECK(MainWindowProbe::id(w) == saved && !MainWindowProbe::dirty(w));
+  CHECK(w.get_title().find('*') == Glib::ustring::npos);
+  MainWindowProbe::redo(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == typed && MainWindowProbe::dirty(w));
+  CHECK(MainWindowProbe::caret(w) == 12);
+  // A pause starts another step.
+  MainWindowProbe::pause(w);
+  MainWindowProbe::type(w, "!");
+  CHECK(MainWindowProbe::steps(w) == 2);
+  // So does a moved caret.
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, ">");
+  CHECK(MainWindowProbe::steps(w) == 3);
+  MainWindowProbe::undo(w);
+  MainWindowProbe::undo(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == typed);
+  // An edit after undo forgets redo.
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::type(w, "#");
+  CHECK(!MainWindowProbe::can_redo(w));
+  dirty_rule(w, start);
+  // Enter is typing too, and comes back out as one with it.
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::type(w, "\n");
+  MainWindowProbe::type(w, "b");
+  settle();
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Helloa\nb\nworld" && MainWindowProbe::steps(w) == 1);
+  round_trip(w, start, MainWindowProbe::doc(w));
+}
+
+// Save ends a run of typing, Delete or Backspace (Greg's decision): what
+// follows is a step of its own, so one Ctrl+Z lands on the saved state and
+// clears the *. Fourteen checks.
+void save_ends_run(writeit::MainWindow& w, const std::string& path)
+{
+  int emitted = 0;
+  sigc::connection counter = MainWindowProbe::changed(w).connect([&emitted] { ++emitted; });
+
+  // Typing: ab, save, c.
+  const Document start = document({para("Hello")});
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::type(w, "b");
+  MainWindowProbe::save(w);
+  const std::uint64_t saved = MainWindowProbe::id(w);
+  emitted = 0;
+  MainWindowProbe::type(w, "c");
+  CHECK(MainWindowProbe::steps(w) == 2 && text_of(MainWindowProbe::doc(w)) == "Helloabc");
+  CHECK(MainWindowProbe::id(w) != saved && emitted == 1 && MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Helloab" && MainWindowProbe::id(w) == saved &&
+        !MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == start && MainWindowProbe::steps(w) == 0);
+
+  // The same through File > Save As.
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "a");
+  MainWindowProbe::type(w, "b");
+  CHECK(MainWindowProbe::save_as(w, path));
+  MainWindowProbe::type(w, "c");
+  CHECK(MainWindowProbe::steps(w) == 2 && MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "Helloab" && !MainWindowProbe::dirty(w));
+
+  // A Delete run.
+  const Document letters = document({para("abcdef")});
+  MainWindowProbe::load(w, letters);
+  MainWindowProbe::caret(w, 1);
+  MainWindowProbe::del(w);
+  MainWindowProbe::del(w);
+  CHECK(MainWindowProbe::steps(w) == 1 && text_of(MainWindowProbe::doc(w)) == "adef");
+  MainWindowProbe::save(w);
+  MainWindowProbe::del(w);
+  CHECK(MainWindowProbe::steps(w) == 2 && text_of(MainWindowProbe::doc(w)) == "aef" &&
+        MainWindowProbe::dirty(w));
+  MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "adef" && !MainWindowProbe::dirty(w) &&
+        MainWindowProbe::caret(w) == 1);
+
+  // A Backspace run; redo goes back to the edit after the save.
+  MainWindowProbe::load(w, letters);
+  MainWindowProbe::caret(w, 6);
+  MainWindowProbe::backspace(w);
+  MainWindowProbe::backspace(w);
+  MainWindowProbe::save(w);
+  MainWindowProbe::backspace(w);
+  CHECK(MainWindowProbe::steps(w) == 2 && text_of(MainWindowProbe::doc(w)) == "abc");
+  MainWindowProbe::undo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "abcd" && !MainWindowProbe::dirty(w));
+  MainWindowProbe::redo(w);
+  CHECK(text_of(MainWindowProbe::doc(w)) == "abc" && MainWindowProbe::dirty(w));
+
+  // Backspace then Delete are two steps; so is a run broken by a pause.
+  MainWindowProbe::load(w, letters);
+  MainWindowProbe::caret(w, 3);
+  MainWindowProbe::backspace(w);
+  MainWindowProbe::del(w);
+  MainWindowProbe::pause(w);
+  MainWindowProbe::del(w);
+  CHECK(MainWindowProbe::steps(w) == 3 && text_of(MainWindowProbe::doc(w)) == "abf");
+  counter.disconnect();
+}
+
+// Bold ticked over text that is bold only from its style is an edit (it is
+// direct now, so a later style change leaves it); over text already directly
+// bold it is not. Four checks.
+void style_bold(writeit::MainWindow& w)
+{
+  Paragraph heading = para("Title words");
+  heading.style = "Heading 1";
+  heading.heading = 1;
+  heading.runs[0].bold = true;
+  const Document start = document({heading, para("body")});
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_direct(w);
+  CHECK(MainWindowProbe::steps(w) == 1 && MainWindowProbe::dirty(w));
+  // Now direct: a second time is a no-op.
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_direct(w);
+  CHECK(MainWindowProbe::steps(w) == 1);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::steps(w) == 0 && !MainWindowProbe::dirty(w));
+  // An empty last paragraph's pending format: its direct bits are state too.
+  MainWindowProbe::load(w, writeit::blank_document("Sans", 11));
+  MainWindowProbe::align(w, writeit::Align::Left);
+  CHECK(MainWindowProbe::steps(w) == 1 && MainWindowProbe::dirty(w));
+}
+
+// Deleting formatted text across paragraphs, and pasting it back: the tags
+// come back exactly.
+void delete_and_paste(writeit::MainWindow& w)
+{
+  Paragraph mixed;
+  mixed.runs = {run("plain "), run("bold", true), run(" and "), run("big", false, true, 18)};
+  Paragraph centred = para("centred");
+  centred.align = Align::Center;
+  centred.direct = writeit::kDirectAlign;
+  const Document start = document({mixed, centred, para("last")});
+  MainWindowProbe::load(w, start);
+  settle();
+  // From inside "bold" to inside "centred", newline and all.
+  MainWindowProbe::select(w, 8, 22);
+  MainWindowProbe::delete_selection(w);
+  settle();
+  const Document deleted = MainWindowProbe::doc(w);
+  CHECK(text_of(deleted) == "plain botred\nlast" && MainWindowProbe::steps(w) == 1);
+  round_trip(w, start, deleted);
+
+  // Copy "bold and" (no step), paste it at the end of "last".
+  MainWindowProbe::select(w, 6, 14);
+  const size_t steps = MainWindowProbe::steps(w);
+  MainWindowProbe::copy(w);
+  settle();
+  CHECK(MainWindowProbe::steps(w) == steps);
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::paste(w);
+  settle();
+  const Document pasted = MainWindowProbe::doc(w);
+  CHECK(text_of(pasted) == "plain bold and big\ncentred\nlastbold and");
+  CHECK(MainWindowProbe::steps(w) == steps + 1);
+  round_trip(w, start, pasted);
+}
+
+// Bold, italic, underline and font over a selection: one step each, and
+// back exactly. Over nothing selected, or as a no-op, no step.
+void formats(writeit::MainWindow& w)
+{
+  Paragraph mixed;
+  mixed.runs = {run("one "), run("two", true), run(" three")};
+  const Document start = document({mixed, para("second"), Paragraph{}, para("end")});
+  MainWindowProbe::load(w, start);
+  settle();
+  MainWindowProbe::select(w, 0, 14);
+  MainWindowProbe::bold(w);
+  CHECK(MainWindowProbe::steps(w) == 1);
+  round_trip(w, start, [&] {
+    MainWindowProbe::redo(w);
+    const Document after = MainWindowProbe::doc(w);
+    MainWindowProbe::undo(w);
+    return after;
+  }());
+  MainWindowProbe::select(w, 4, 7);
+  MainWindowProbe::italic(w);
+  Document after = MainWindowProbe::doc(w);
+  CHECK(!(after == start));
+  round_trip(w, start, after);
+  // Underline across the empty paragraph, whose newline holds its format.
+  MainWindowProbe::select(w, 0, MainWindowProbe::length(w));
+  MainWindowProbe::underline(w);
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[2].mark && after.paragraphs[2].mark->underline);
+  round_trip(w, start, after);
+  MainWindowProbe::select(w, 0, 3);
+  MainWindowProbe::font(w, "Serif");
+  after = MainWindowProbe::doc(w);
+  round_trip(w, start, after);
+  // The same font again over the same text: no change, no step.
+  MainWindowProbe::redo(w);
+  const size_t steps = MainWindowProbe::steps(w);
+  MainWindowProbe::select(w, 0, 3);
+  MainWindowProbe::font(w, "Serif");
+  CHECK(MainWindowProbe::steps(w) == steps && MainWindowProbe::doc(w) == after);
+  // Bold with nothing selected sets what is typed next only.
+  MainWindowProbe::caret(w, 2);
+  MainWindowProbe::bold(w);
+  CHECK(MainWindowProbe::steps(w) == steps);
+  CHECK(MainWindowProbe::stray(w) == 0);
+}
+
+// Alignment and indents, over one paragraph and over several.
+void paragraphs(writeit::MainWindow& w)
+{
+  const Document start = document({para("alpha"), para("beta"), para("gamma")});
+  MainWindowProbe::load(w, start);
+  settle();
+  MainWindowProbe::select(w, 2, 8);
+  MainWindowProbe::align(w, Align::Center);
+  Document after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[0].align == Align::Center && after.paragraphs[1].align == Align::Center &&
+        after.paragraphs[2].align == Align::Left && MainWindowProbe::steps(w) == 1);
+  round_trip(w, start, after);
+  MainWindowProbe::caret(w, 7);
+  MainWindowProbe::indents(w, writeit::Indents{720, 360, -360});
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[1].indents == (writeit::Indents{720, 360, -360}));
+  round_trip(w, start, after);
+  MainWindowProbe::select(w, 0, MainWindowProbe::length(w));
+  MainWindowProbe::align(w, Align::Justify);
+  after = MainWindowProbe::doc(w);
+  round_trip(w, start, after);
+  // Typing in a centred paragraph after undo and redo keeps it centred.
+  MainWindowProbe::redo(w);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::type(w, "!");
+  CHECK(MainWindowProbe::doc(w).paragraphs[0].align == Align::Justify);
+  round_trip(w, after, MainWindowProbe::doc(w));
+}
+
+// Named styles: applied, edited in Format > Style..., and the following
+// style Enter gives a new paragraph.
+void styles(writeit::MainWindow& w)
+{
+  const Document start = document({para("Title"), para("Body")});
+  MainWindowProbe::load(w, start);
+  settle();
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::style(w, "Heading 1");
+  Document after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[0].style == "Heading 1" && MainWindowProbe::steps(w) == 1);
+  round_trip(w, start, after);
+  // Normal made 14 pt and centred: the sheet and every Normal paragraph.
+  writeit::Style normal = MainWindowProbe::style_named(w, "Normal");
+  normal.format.size = 14;
+  normal.align = Align::Center;
+  CHECK(MainWindowProbe::edit_style(w, normal));
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[1].align == Align::Center && !(after.styles == start.styles));
+  round_trip(w, start, after);
+
+  // Enter at the end of a heading: the new paragraph is Normal, in the
+  // middle of the document and as the empty last paragraph.
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::style(w, "Heading 1");
+  const Document heading = MainWindowProbe::doc(w);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::pause(w);
+  MainWindowProbe::key(w, GDK_KEY_Return);
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs.size() == 3 && after.paragraphs[1].style == "Normal");
+  round_trip(w, heading, after);
+  MainWindowProbe::load(w, document({para("Title")}));
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::style(w, "Heading 1");
+  const Document alone = MainWindowProbe::doc(w);
+  MainWindowProbe::caret(w, 5);
+  MainWindowProbe::pause(w);
+  MainWindowProbe::key(w, GDK_KEY_Return);
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs.size() == 2 && after.paragraphs[1].style == "Normal");
+  round_trip(w, alone, after);
+  // Typed into after redo, the new paragraph is still Normal.
+  MainWindowProbe::redo(w);
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::type(w, "x");
+  CHECK(MainWindowProbe::doc(w).paragraphs[1].style == "Normal");
+}
+
+// Lists: Bullets and Numbering, Enter and Backspace on items, Tab, Restart
+// Numbering. Labels are drawn and wide ones move text with screen-only
+// tags; neither makes a step, and undo keeps them right.
+void lists(writeit::MainWindow& w)
+{
+  std::vector<Paragraph> items;
+  for (int i = 0; i < 12; ++i)
+    items.push_back(para("Item"));
+  const Document start = document(items);
+  MainWindowProbe::load(w, start);
+  settle();
+  MainWindowProbe::select(w, 0, MainWindowProbe::length(w));
+  MainWindowProbe::list(w, ListKind::Number);
+  settle();
+  const Document numbered = MainWindowProbe::doc(w);
+  CHECK(numbered.paragraphs[11].list.kind == ListKind::Number);
+  // "10." moves its text to the next stop, on screen only: no step.
+  CHECK(MainWindowProbe::screen_tag(w, 9, "list-tab"));
+  CHECK(MainWindowProbe::steps(w) == 1 && MainWindowProbe::stray(w) == 0);
+  round_trip(w, start, numbered);
+  MainWindowProbe::redo(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == numbered && MainWindowProbe::screen_tag(w, 9, "list-tab"));
+  // A centred item, then typing in item 11: one step each, none from the
+  // screen passes.
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::align(w, Align::Center);
+  settle();
+  const Document centred = MainWindowProbe::doc(w);
+  const size_t steps = MainWindowProbe::steps(w);
+  MainWindowProbe::caret(w, MainWindowProbe::line_start(w, 10) + 4);
+  MainWindowProbe::type(w, "x");
+  settle();
+  CHECK(MainWindowProbe::steps(w) == steps + 1);
+  round_trip(w, centred, MainWindowProbe::doc(w));
+  // Deleting from item 9 into item 11, through the moved items' text.
+  MainWindowProbe::select(w, MainWindowProbe::line_start(w, 8) + 2,
+                          MainWindowProbe::line_start(w, 10) + 2);
+  MainWindowProbe::delete_selection(w);
+  settle();
+  const Document joined = MainWindowProbe::doc(w);
+  CHECK(joined.paragraphs.size() == 10);
+  round_trip(w, centred, joined);
+  CHECK(MainWindowProbe::screen_tag(w, 9, "list-tab") &&
+        MainWindowProbe::screen_tag(w, 11, "list-tab"));
+  // Enter at the end of the last item makes another; Enter on it ends the
+  // list there, a step of its own.
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::pause(w);
+  MainWindowProbe::key(w, GDK_KEY_Return);
+  const Document thirteen = MainWindowProbe::doc(w);
+  CHECK(thirteen.paragraphs.size() == 13 && thirteen.paragraphs[12].list.kind == ListKind::Number);
+  MainWindowProbe::key(w, GDK_KEY_Return);
+  const Document ended = MainWindowProbe::doc(w);
+  CHECK(ended.paragraphs.size() == 13 && ended.paragraphs[12].list.kind == ListKind::None);
+  round_trip(w, thirteen, ended);
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == centred);
+  // Backspace at the start of item 4 takes it out of the list.
+  MainWindowProbe::caret(w, MainWindowProbe::line_start(w, 3));
+  MainWindowProbe::key(w, GDK_KEY_BackSpace);
+  Document after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[3].list.kind == ListKind::None);
+  round_trip(w, centred, after);
+  // Tab at the start of item 2, and Restart Numbering at item 6.
+  MainWindowProbe::caret(w, MainWindowProbe::line_start(w, 1));
+  CHECK(MainWindowProbe::level(w, 1));
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[1].list.level == 1);
+  round_trip(w, centred, after);
+  MainWindowProbe::caret(w, MainWindowProbe::line_start(w, 5));
+  MainWindowProbe::select(w, MainWindowProbe::line_start(w, 5), MainWindowProbe::line_start(w, 5));
+  CHECK(MainWindowProbe::restart(w));
+  after = MainWindowProbe::doc(w);
+  round_trip(w, centred, after);
+  settle();
+  CHECK(MainWindowProbe::screen_tag(w, 9, "list-tab"));
+}
+
+// The empty last paragraph's format, which no tag holds: kept by erasing
+// everything, set by aligning it alone, given up by typing into it.
+void last_paragraph(writeit::MainWindow& w)
+{
+  // Erased through to the end, the last paragraph's format stays.
+  Paragraph right = para("two");
+  right.align = Align::Right;
+  right.direct = writeit::kDirectAlign;
+  const Document start = document({para("one"), right});
+  MainWindowProbe::load(w, start);
+  settle();
+  MainWindowProbe::select(w, 0, MainWindowProbe::length(w));
+  MainWindowProbe::delete_selection(w);
+  Document after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs.size() == 1 && after.paragraphs[0].align == Align::Right);
+  round_trip(w, start, after);
+
+  const Document trailing = document({para("one"), Paragraph{}});
+  MainWindowProbe::load(w, trailing);
+  settle();
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::align(w, Align::Center);
+  after = MainWindowProbe::doc(w);
+  CHECK(after.paragraphs[1].align == Align::Center && after.paragraphs[0].align == Align::Left);
+  CHECK(MainWindowProbe::steps(w) == 1);
+  round_trip(w, trailing, after);
+  MainWindowProbe::redo(w);
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::type(w, "x");
+  const Document typed = MainWindowProbe::doc(w);
+  CHECK(typed.paragraphs[1].align == Align::Center && text_of(typed) == "one\nx");
+  round_trip(w, after, typed);
+}
+
+// 200 steps at most; undoing them all does not reach the state before the
+// first, which is gone.
+void cap(writeit::MainWindow& w)
+{
+  const Document start = document({para("a")});
+  MainWindowProbe::load(w, start);
+  const std::uint64_t first = MainWindowProbe::id(w);
+  MainWindowProbe::caret(w, 1);
+  for (int i = 0; i < 205; ++i) {
+    MainWindowProbe::pause(w);
+    MainWindowProbe::type(w, "x");
+  }
+  CHECK(MainWindowProbe::steps(w) == 200);
+  for (int i = 0; i < 205; ++i)
+    MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::steps(w) == 0 && text_of(MainWindowProbe::doc(w)) == "axxxxx");
+  CHECK(MainWindowProbe::id(w) != first && MainWindowProbe::dirty(w));
+}
+
+double median(std::vector<double> samples)
+{
+  std::sort(samples.begin(), samples.end());
+  return samples[samples.size() / 2];
+}
+
+Document long_document(int count)
+{
+  std::vector<Paragraph> paragraphs;
+  for (int i = 0; i < count; ++i) {
+    Paragraph p;
+    p.runs = {run("Paragraph " + std::to_string(i) + " has "), run("some bold", true),
+              run(" and plain text after it.")};
+    paragraphs.push_back(p);
+  }
+  return document(paragraphs);
+}
+
+// The undo bookkeeping of one keystroke does not grow with the document.
+void timing(writeit::MainWindow& w)
+{
+  double book[2] = {0, 0};
+  int index = 0;
+  for (int count : {10, 1000}) {
+    MainWindowProbe::load(w, long_document(count));
+    settle();
+    MainWindowProbe::caret(w, MainWindowProbe::line_start(w, count / 2) + 10);
+    // Interleaved, so both see the same buffer and the same pending work.
+    std::vector<double> plain;
+    std::vector<double> recorded;
+    std::vector<double> samples;
+    for (int i = 0; i < 300; ++i) {
+      plain.push_back(MainWindowProbe::insert_only_us(w));
+      const MainWindowProbe::Split split = MainWindowProbe::bookkeeping_us(w);
+      samples.push_back(split.book);
+      recorded.push_back(split.insert);
+    }
+    book[index] = median(samples);
+    settle();
+    // A burst of 320 characters, one step, and its undo.
+    MainWindowProbe::caret(w, MainWindowProbe::line_start(w, count / 2) + 10);
+    for (int i = 0; i < 320; ++i)
+      MainWindowProbe::bookkeeping_us(w);
+    const double undo = MainWindowProbe::undo_us(w);
+    settle();
+    std::vector<double> keys;
+    for (int i = 0; i < 30; ++i)
+      keys.push_back(MainWindowProbe::keystroke_us(w));
+    settle();
+    std::cout << "  " << count << " paragraphs: undo bookkeeping " << book[index]
+              << " us per keystroke (median of 300); buffer insert " << median(recorded)
+              << " us recorded, " << median(plain) << " us not; whole keystroke " << median(keys)
+              << " us (median of 30); undo of 320 typed characters " << undo << " us\n";
+    ++index;
+  }
+  CHECK(book[1] < std::max(3.0 * book[0], book[0] + 100.0));
+}
+
+}  // namespace
+
+int main(int argc, char* argv[])
+{
+  std::string home = Glib::build_filename(Glib::get_tmp_dir(), "write-it-undo-XXXXXX");
+  if (!g_mkdtemp(&home[0]))
+    return EXIT_FAILURE;
+  g_setenv("XDG_CONFIG_HOME", home.c_str(), TRUE);
+  g_setenv("GDK_BACKEND", "x11", FALSE);
+  if (!gtk_init_check(&argc, &argv)) {
+    std::cout << "undo: no display, skipped\n";
+    return 77;
+  }
+  Gtk::Main kit(argc, argv);
+  {
+    writeit::MainWindow window;
+    window.show();
+    settle();
+    typing(window);
+    save_ends_run(window, Glib::build_filename(home, "saved.rtf"));
+    style_bold(window);
+    same_text_edits(window, Glib::build_filename(home, "saved.rtf"));
+    review(window);
+    retag(window);
+    delete_and_paste(window);
+    formats(window);
+    paragraphs(window);
+    styles(window);
+    lists(window);
+    last_paragraph(window);
+    cap(window);
+    timing(window);
+    window.hide();
+    settle();
+  }
+  g_remove(Glib::build_filename(home, "saved.rtf").c_str());
+  g_rmdir(home.c_str());
+  return suite_test::done("undo", 236);
+}

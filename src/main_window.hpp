@@ -6,11 +6,13 @@
 #include "narrow_combo.hpp"
 #include "page_text.hpp"
 #include "settings.hpp"
+#include "undo.hpp"
 #include "view.hpp"
 
 #include <gtkmm.h>
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <utility>
 #include <memory>
@@ -86,15 +88,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   // made of it.
   friend struct MainWindowProbe;
 
-  struct Snapshot {
-    Document doc;
-    int offset = 0;
+  // What an undo step keeps of the state the buffer cannot hold: the empty
+  // last paragraph's format and character format.
+  struct SideState {
+    ParaFormat pending_para;
+    bool pending_para_set = false;
+    Run pending_mark;
+    bool pending_mark_set = false;
   };
 
   enum class OpenKind { Rtf, Markdown, Plain };
 
   static constexpr int kPageW = kScreenPageWidth;
-  static constexpr int kUndoCap = 200;
 
   void build_menus();
   void build_toolbars();
@@ -149,9 +154,19 @@ class MainWindow : public Gtk::ApplicationWindow {
   void rebuild_recent();
   void install_loaded(const Document& doc, const std::string& path, bool keep_path);
   bool write_rtf(const std::string& path);
+  // The current state is the saved one now.
+  void mark_saved();
 
   Document capture() const;
+  // Calls of capture(), for the tests: a keystroke makes at most undo's two.
+  mutable long captures_ = 0;
+  // For the tests: label geometry read through get_iter_location() (which
+  // lays its line out again), and label layouts built, in list drawing and
+  // list measuring. A keystroke costs a few of each, however many items show.
+  long label_locates_ = 0;
+  long label_layouts_ = 0;
   void replace_buffer(const Document& doc, int offset);
+  // The undo state differs from the one saved, opened or made new.
   bool dirty() const;
   void update_title();
   void update_actions();
@@ -166,7 +181,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void redo();
   void on_user_begin();
   void on_user_end();
-  void coalesce_typing(const Document& current);
+  // Opens and closes an undo step around a user action or a command; the
+  // buffer's own signals record what it changes (undo.hpp).
+  void open_step();
+  UndoHistory::Closed close_step(bool may_merge);
+  // After undo or redo: the caret, and everything that follows the text.
+  void after_replay(int caret);
+  SideState side_state() const;
+  void set_side_state(const SideState& state);
+  // Whether the document is the same with either side state (close_step()).
+  bool pending_same(const SideState& before, const SideState& after) const;
   void on_inserted(const Gtk::TextBuffer::iterator& pos, const Glib::ustring& text, int bytes);
   void on_mark_set(const Gtk::TextBuffer::iterator& location,
                    const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark);
@@ -246,7 +270,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   int paragraph_start(int offset) const;
   int paragraph_end(int offset) const;
   bool final_paragraph_empty() const;
+  // Gives each paragraph the user action touched one paragraph tag over all
+  // of it; the rest are as the last action left them.
   void normalise_paragraphs();
+  // Widens the range normalise_paragraphs() looks at to [from, to).
+  void note_touched(int from, int to);
   void on_erase(const Gtk::TextBuffer::iterator& from, const Gtk::TextBuffer::iterator& to);
   // Edits the format of every paragraph the selection touches, each from
   // its own current format.
@@ -269,6 +297,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   int paragraph_index(int offset) const;
   // One undo step from `before` to `after`, keeping the selection.
   void commit_document(const Document& before, const Document& after);
+  // commit_document()'s retagging when the text is the same; false if not.
+  bool retag_paragraphs(const Document& before, const Document& after);
   void toggle_list_kind(ListKind kind);
   // Tags the paragraph that starts at `start` with `format`, or holds the
   // format aside for the empty last paragraph.
@@ -283,14 +313,71 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  // Each paragraph's format and list number, as capture() and list_numbers()
+  // give them, and the GTK line it starts on, without copying the document:
+  // for the labels on_text_draw() draws and update_list_shifts(). Rebuilt
+  // from the paragraph tags when a paragraph format changes, a line comes or
+  // goes, or the empty last paragraph's held format changes; typing inside a
+  // paragraph leaves it as it is.
+  struct ListLine {
+    ParaFormat format;
+    int line = 0;
+    int number = 0;
+  };
+  const std::vector<ListLine>& list_lines();
+  // Whether any paragraph is a list item, from the tag table without
+  // walking the paragraphs: a paragraph tag with a list that is in the
+  // buffer, or a held format with one. A document with no list does no list
+  // work on a draw.
+  bool any_list() const;
+  // The paragraph list_label_layout() measures for paragraph `index` of
+  // list_lines(), starting at buffer `offset`: its format, and its first
+  // character's format (or its mark's) as the label's.
+  Paragraph label_paragraph(size_t index, int offset) const;
   // A list item's label, for the paragraph that starts at buffer `offset`:
   // its layout, its buffer x, and the first character's location. False for
   // a plain paragraph.
   bool list_label_place(const Paragraph& paragraph, int offset, int number,
                         Glib::RefPtr<Pango::Layout>& layout, int& x, Gdk::Rectangle& where);
+  // As list_label_place(), with the first character's location `where`
+  // already known.
+  bool list_label_at(const Paragraph& paragraph, int offset, int number,
+                     Glib::RefPtr<Pango::Layout>& layout, int& x, const Gdk::Rectangle& where);
   // The label's layout and pixel width, and a space's width in its font.
+  // Layouts are kept by label text and font (label_layout_cache_): drawing
+  // one again does not shape it again.
   Glib::RefPtr<Pango::Layout> list_label_layout(const Paragraph& paragraph, int offset, int number,
                                                 int& width, int& gap);
+  struct LabelLayout {
+    Glib::RefPtr<Pango::Layout> layout;
+    int width = 0;
+    int gap = 0;
+  };
+  std::map<std::string, LabelLayout> label_layout_cache_;
+  // Where the first character of the GTK line at `start` sits, the line's
+  // top being `line_y` and its height `line_height` (get_line_yrange(),
+  // which lays nothing out). get_iter_location() lays its line out again,
+  // since GTK keeps only one laid-out line outside its draw pass, so each
+  // line's answer is kept (label_geometry_) relative to the line's top: a
+  // line that moves up or down keeps it.
+  void label_where(const Gtk::TextIter& start, int line_y, int line_height, Gdk::Rectangle& where);
+  struct LabelGeometry {
+    int x = 0;
+    int dy = 0;
+    int width = 0;
+    int height = 0;
+    int line_height = 0;
+  };
+  // By GTK line. An edit or a tag change forgets the lines it touches and
+  // moves the entries below by the lines it adds or removes; a line whose
+  // height changed is measured again; any other change to the layout (the
+  // text width, zoom, the left margin, tag priorities, the style) forgets
+  // them all.
+  std::map<int, LabelGeometry> label_geometry_;
+  int label_geometry_width_ = -1;
+  int label_geometry_margin_ = -1;
+  double label_geometry_zoom_ = 0;
+  void forget_label_geometry(int first, int last, int shift);
   // A centred list item whose text must be centred from somewhere other
   // than its left indent (list_centre_from()) gets a screen-only
   // "list-shift" tag carrying that left margin, one tag per margin in use,
@@ -413,7 +500,8 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   std::string save_path_;
   std::string title_name_ = "Untitled";
-  Document saved_;
+  // undo_.state_id() at the last save or open (UndoHistory::state_id()).
+  std::uint64_t saved_state_ = 0;
   bool save_point_ = true;
   // Where an imported document came from; cleared when it becomes anything
   // else (New, Close, Save As). Lets a second request for it find this
@@ -424,6 +512,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool restoring_ = false;
   bool suppress_format_ = false;
   bool in_user_ = false;
+  // The range the current user action changed (note_touched()).
+  Glib::RefPtr<Gtk::TextMark> touched_start_;
+  Glib::RefPtr<Gtk::TextMark> touched_end_;
+  bool touched_ = false;
+  bool normalising_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
   // The idle that sizes the page again after a layout: to a new pasteboard
@@ -458,6 +551,14 @@ class MainWindow : public Gtk::ApplicationWindow {
     int number = 0;
   };
   std::vector<TabLine> tab_lines_;
+  // list_lines()' cache: valid until a change it depends on, with the held
+  // format of the empty last paragraph it was built with.
+  std::vector<ListLine> list_lines_;
+  bool list_lines_valid_ = false;
+  bool list_lines_any_ = false;
+  bool list_lines_centred_ = false;
+  bool list_lines_pending_set_ = false;
+  ParaFormat list_lines_pending_;
   bool tabs_full_ = true;
   bool tabs_renumber_ = false;
   bool tabs_noted_ = false;
@@ -506,8 +607,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   Run pending_mark_;
   bool pending_mark_set_ = false;
   std::string caret_key_;
-  std::vector<Snapshot> undo_;
-  std::vector<Snapshot> redo_;
+  // Undo and redo, recorded as operations (undo.hpp); undo_.state_id() is
+  // the saved-state hook.
+  UndoHistory undo_;
+  SideState side_before_;
   gint64 last_typed_us_ = 0;
   // The document's style sheet; empty for the default, as in Document.
   std::vector<Style> styles_;

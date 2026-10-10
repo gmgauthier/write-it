@@ -49,6 +49,7 @@ writeit_core_sources = files(
   'src/rtf.cpp',
   'src/settings.cpp',
   'src/styles.cpp',
+  'src/undo.cpp',
   'src/units.cpp',
   'src/view.cpp',
 )
@@ -451,3 +452,54 @@ test(
     meson.current_source_dir() / 'src' / 'editor.cpp',
   ],
 )
+
+# The real window under a display: undo and redo as recorded operations, for
+# typing, Delete, Backspace, paste, character and paragraph format, styles and
+# lists; the saved-state id; and the bookkeeping one keystroke costs in a
+# long document.
+write_it_undo_tests = executable(
+  'write-it-undo-tests',
+  'tests/test_undo.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo', write_it_undo_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display, and a bare buffer without one: the undo
+# fuzz of bench/undo_fuzz.md. Random runs of edits through the keys, boxes,
+# buttons, menus and dialogs, with undo, redo, save and reopen in between;
+# every undo and redo must give back the reference state byte for byte.
+# UNDO_FUZZ_SEED, UNDO_FUZZ_RUNS (200), UNDO_FUZZ_OPS (60) and
+# UNDO_FUZZ_REPLAY=<failure file> change what it runs.
+write_it_undo_fuzz_tests = executable(
+  'write-it-undo-fuzz-tests',
+  'tests/test_undo_fuzz.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo-fuzz', write_it_undo_fuzz_tests, timeout: 1800, is_parallel: false)
+# The real window under a display: capture() copies the whole document, so
+# a keystroke may call it only for undo (at most twice), and a redraw not at
+# all. A test-only count in the window.
+write_it_capture_count_tests = executable(
+  'write-it-capture-count-tests',
+  'tests/test_capture_count.cpp',
+  dependencies: [writeit_dep],
+)
+test('capture-count', write_it_capture_count_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: a keystroke in a list draws its labels
+# with a few line layouts and label layouts, however many items show.
+write_it_list_draw_tests = executable(
+  'write-it-list-draw-tests',
+  'tests/test_list_draw.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-draw', write_it_list_draw_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: the unsaved-changes state after typing,
+# Save, Save As, Undo, Redo, New and Open, from the undo state id.
+write_it_dirty_state_tests = executable(
+  'write-it-dirty-state-tests',
+  'tests/test_dirty_state.cpp',
+  dependencies: [writeit_dep],
+)
+test('dirty-state', write_it_dirty_state_tests, timeout: 60, is_parallel: false)
