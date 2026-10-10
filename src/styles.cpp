@@ -286,12 +286,14 @@ void MainWindow::commit_document(const Document& before, const Document& after)
   Snapshot snap;
   snap.doc = before;
   snap.offset = insert;
+  snap.state = undo_state_.state_id();
   undo_.push_back(std::move(snap));
   redo_.clear();
   restoring_ = true;
   replace_buffer(after, insert);
   buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
   restoring_ = false;
+  undo_state_.bump();
   // A style change is its own undo step, never merged into typing.
   last_typed_us_ = 0;
   update_title();

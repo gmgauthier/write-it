@@ -486,6 +486,43 @@ void MainWindow::build_editor()
         if (mark == buffer_->get_insert())
           queue_page_status();
       });
+  // Every change is a new undo state (note_change()). list_lines() is built
+  // again when a line comes or goes or a paragraph format changes: an edit
+  // within one GTK line moves no paragraph to another line.
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
+        auto start = end;
+        start.backward_chars(static_cast<int>(text.length()));
+        if (start.get_line() != end.get_line())
+          list_lines_valid_ = false;
+        if (in_user_ && !loading_ && !restoring_ && !text.empty())
+          text_touched_ = true;
+        note_change({});
+      },
+      true);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+        if (start.get_line() != end.get_line())
+          list_lines_valid_ = false;
+        if (in_user_ && !loading_ && !restoring_ && start.get_offset() != end.get_offset())
+          text_touched_ = true;
+        note_change({});
+      },
+      false);
+  auto changes_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
+                               const Gtk::TextIter&) {
+    ParaFormat ignored;
+    if (parse_para(tag_name(tag), ignored))
+      list_lines_valid_ = false;
+    note_change(tag);
+  };
+  buffer_->signal_apply_tag().connect(changes_on_tag);
+  buffer_->signal_remove_tag().connect(changes_on_tag);
+  // Before the tag goes on or comes off: what it covered.
+  auto tag_before = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                           const Gtk::TextIter& end) { note_tag_before(tag, start, end); };
+  buffer_->signal_apply_tag().connect(tag_before, false);
+  buffer_->signal_remove_tag().connect(tag_before, false);
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
   // The clipboard outlives the window: ~MainWindow disconnects this. It is
   // asked again on every change, and when the window comes back to the
@@ -656,7 +693,8 @@ bool MainWindow::new_document(bool prompt)
   typing_.size = known_size(settings_.default_size) ? settings_.default_size : 11;
   save_point_ = true;
   replace_buffer(blank_document(typing_.font, typing_.size), 0);
-  saved_ = capture();
+  undo_state_.clear();
+  saved_id_ = undo_state_.state_id();
   message_.set_text("");
   update_title();
   update_actions();
@@ -780,7 +818,8 @@ void MainWindow::install_loaded(const Document& doc, const std::string& path, bo
   save_path_ = keep_path ? path : std::string();
   source_path_ = keep_path ? std::string() : path;
   save_point_ = true;
-  saved_ = capture();
+  undo_state_.clear();
+  saved_id_ = undo_state_.state_id();
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
   message_.set_text(Glib::ustring("Opened ") + title_name_);
@@ -829,7 +868,7 @@ bool MainWindow::write_rtf(const std::string& path)
   save_path_ = path;
   source_path_.clear();
   title_name_ = Glib::path_get_basename(path);
-  saved_ = capture();
+  saved_id_ = undo_state_.state_id();
   save_point_ = true;
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
@@ -926,6 +965,7 @@ void MainWindow::rebuild_recent()
 
 Document MainWindow::capture() const
 {
+  ++captures_;
   Document doc;
   Paragraph paragraph;
   Run run;
@@ -1063,6 +1103,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   buffer_->place_cursor(buffer_->get_iter_at_offset(place));
   text_.scroll_to(buffer_->get_insert());
   loading_ = false;
+  list_lines_valid_ = false;
   apply_page_size();
   // The sheet may be another one now: a file, a new document, undo.
   fill_style_combo();
@@ -1072,7 +1113,50 @@ bool MainWindow::dirty() const
 {
   if (!save_point_)
     return true;
-  return !(capture() == saved_);
+  return undo_state_.state_id() != saved_id_;
+}
+
+void MainWindow::note_tag_before(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                                 const Gtk::TextIter& end)
+{
+  // Once text has gone in or out the action is an edit anyway, and the
+  // offsets noted no longer hold.
+  if (!in_user_ || loading_ || restoring_ || text_touched_)
+    return;
+  const std::string name = tag_name(tag);
+  if (is_list_shift(name) || is_list_tab(name))
+    return;
+  std::map<int, bool>& had = tags_before_[tag];
+  for (auto iter = start; iter.compare(end) < 0; ++iter)
+    had.emplace(iter.get_offset(), iter.has_tag(tag));
+}
+
+bool MainWindow::edited() const
+{
+  if (text_touched_)
+    return true;
+  for (const auto& [tag, had] : tags_before_) {
+    for (const auto& [offset, on] : had) {
+      if (buffer_->get_iter_at_offset(offset).has_tag(tag) != on)
+        return true;
+    }
+  }
+  return false;
+}
+
+void MainWindow::note_change(const Glib::RefPtr<Gtk::TextTag>& tag)
+{
+  // A load sets the state itself (New, Open), and undo and redo put back
+  // the state of the snapshot they restore. The list passes' tags are on
+  // screen only.
+  if (loading_ || restoring_ || shifting_ || tabbing_)
+    return;
+  if (tag) {
+    const std::string name = tag_name(tag);
+    if (is_list_shift(name) || is_list_tab(name))
+      return;
+  }
+  undo_state_.bump();
 }
 
 void MainWindow::update_title()
@@ -1169,12 +1253,14 @@ void MainWindow::undo()
   Snapshot current;
   current.doc = capture();
   current.offset = cursor_offset();
+  current.state = undo_state_.state_id();
   redo_.push_back(std::move(current));
   const Snapshot snap = undo_.back();
   undo_.pop_back();
   restoring_ = true;
   replace_buffer(snap.doc, snap.offset);
   restoring_ = false;
+  undo_state_.restore(snap.state);
   update_title();
   update_actions();
   sync_format_controls();
@@ -1187,12 +1273,14 @@ void MainWindow::redo()
   Snapshot current;
   current.doc = capture();
   current.offset = cursor_offset();
+  current.state = undo_state_.state_id();
   undo_.push_back(std::move(current));
   const Snapshot snap = redo_.back();
   redo_.pop_back();
   restoring_ = true;
   replace_buffer(snap.doc, snap.offset);
   restoring_ = false;
+  undo_state_.restore(snap.state);
   update_title();
   update_actions();
   sync_format_controls();
@@ -1208,6 +1296,10 @@ void MainWindow::on_user_begin()
   Snapshot snap;
   snap.doc = capture();
   snap.offset = cursor_offset();
+  snap.state = undo_state_.state_id();
+  begin_id_ = snap.state;
+  text_touched_ = false;
+  tags_before_.clear();
   undo_.push_back(std::move(snap));
   redo_.clear();
 }
@@ -1225,9 +1317,21 @@ void MainWindow::on_user_end()
     pending_mark_set_ = false;
   apply_next_style();
   const Document current = capture();
-  if (!undo_.empty() && undo_.back().doc == current) {
+  // An action that inserted, deleted or re-tagged something is an edit and
+  // a step, even if the document comes out the same (typing "c" over a
+  // selected "c"). One that did none of these is not: the tags it stripped
+  // and put back leave the state as it was.
+  const bool edit = edited();
+  tags_before_.clear();
+  if (!edit && !undo_.empty() && undo_.back().doc == current) {
     undo_.pop_back();
+    if (undo_state_.state_id() != begin_id_)
+      undo_state_.restore(begin_id_);
   } else {
+    // A change no buffer signal showed, such as the empty last paragraph's
+    // held format, is a new state all the same.
+    if (undo_state_.state_id() == begin_id_)
+      undo_state_.bump();
     coalesce_typing(current);
     last_typed_us_ = g_get_monotonic_time();
   }
@@ -2591,14 +2695,11 @@ void MainWindow::update_list_shifts()
     if (is_list_shift(tag_name(tag)))
       old.push_back(tag);
   });
-  const Document doc = capture();
-  const bool centred =
-      std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(), [](const Paragraph& p) {
-        return p.align == Align::Center && clamp_list(p.list).kind != ListKind::None;
-      });
-  if (!centred && old.empty())
+  if (old.empty() && !any_list())
     return;
-  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  const std::vector<ListLine>& lines = list_lines();
+  if (!list_lines_centred_ && old.empty())
+    return;
   const int total = buffer_->get_char_count();
   // Does [s, e) hold `tag` anywhere, or all through?
   auto touches = [](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& s,
@@ -2617,22 +2718,22 @@ void MainWindow::update_list_shifts()
   };
   shifting_ = true;
   std::vector<Glib::RefPtr<Gtk::TextTag>> used;
+  // Each paragraph from its start to the next one's.
   int offset = 0;
-  for (size_t i = 0; i < doc.paragraphs.size() && offset < total; ++i) {
-    const Paragraph& paragraph = doc.paragraphs[i];
-    int length = 0;
-    for (const Run& run : paragraph.runs)
-      length += static_cast<int>(Glib::ustring(run.text).length());
-    const int end = std::min(total, offset + length + 1);
+  for (size_t i = 0; i < lines.size() && offset < total; ++i) {
+    const ParaFormat& format = lines[i].format;
+    const int end = i + 1 < lines.size()
+                        ? std::min(total, buffer_->get_iter_at_line(lines[i + 1].line).get_offset())
+                        : total;
     Glib::RefPtr<Gtk::TextTag> want;
-    if (paragraph.align == Align::Center && clamp_list(paragraph.list).kind != ListKind::None) {
-      const Indents indents = clamp_indents(paragraph.indents);
+    if (format.align == Align::Center && clamp_list(format.list).kind != ListKind::None) {
+      const Indents indents = clamp_indents(format.indents);
       int width = 0;
       int gap = 0;
-      list_label_layout(paragraph, offset, numbers[i], width, gap);
+      list_label_layout(label_paragraph(i, offset), offset, lines[i].number, width, gap);
       // As list_label_place() measures: the first-line indent and the room.
       const int from =
-          list_centre_from(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
+          list_centre_from(format.align, margin_left() + indent_px(indents.left + indents.first),
                            width, indent_px(list_label_space(indents)), gap);
       // The paragraph tag's own left margin already centres it when equal.
       if (from >= 0 && from != std::max(0, margin_left() + indent_px(indents.left)))
@@ -2650,7 +2751,7 @@ void MainWindow::update_list_shifts()
       if (std::find(used.begin(), used.end(), want) == used.end())
         used.push_back(want);
     }
-    offset += length + 1;
+    offset = end;
   }
   // Tags no paragraph needs go, so the table holds one per offset in use.
   for (const auto& tag : old)
@@ -2924,6 +3025,123 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
   return want;
 }
 
+const std::vector<MainWindow::ListLine>& MainWindow::list_lines()
+{
+  if (list_lines_valid_ && list_lines_pending_set_ == pending_para_set_ &&
+      (!pending_para_set_ || list_lines_pending_ == pending_para_))
+    return list_lines_;
+  list_lines_.clear();
+  // Paragraphs start at 0 and after each '\n', as capture() splits them;
+  // GTK's lines also break at other separators. After a final '\n' comes an
+  // empty last paragraph, which forward_line() does not stop at.
+  std::vector<int> starts{0};
+  std::vector<int> lines{0};
+  auto it = buffer_->begin();
+  while (it.forward_line()) {
+    auto before = it;
+    before.backward_char();
+    if (before.get_char() == '\n') {
+      starts.push_back(it.get_offset());
+      lines.push_back(it.get_line());
+    }
+  }
+  const int total = buffer_->get_char_count();
+  if (total > 0 && starts.back() != total &&
+      buffer_->get_iter_at_offset(total - 1).get_char() == '\n') {
+    starts.push_back(total);
+    lines.push_back(buffer_->get_line_count() - 1);
+  }
+  // Each one's format by capture()'s rule: its first character with a
+  // paragraph tag, else the held format, else the paragraph above's.
+  std::vector<Paragraph> paragraphs(starts.size());
+  list_lines_.resize(starts.size());
+  for (size_t i = 0; i < starts.size(); ++i) {
+    ParaFormat format;
+    bool found = false;
+    for (auto iter = buffer_->get_iter_at_offset(starts[i]); !iter.is_end(); ++iter) {
+      if (auto tag = para_tag_at(iter)) {
+        if (parse_para(tag_name(tag), format)) {
+          found = true;
+          break;
+        }
+      }
+      if (iter.get_char() == '\n')
+        break;
+    }
+    if (!found) {
+      if (pending_para_set_)
+        format = pending_para_;
+      else if (i > 0)
+        format = list_lines_[i - 1].format;
+      else
+        format = ParaFormat{};
+    }
+    list_lines_[i].format = format;
+    list_lines_[i].line = lines[i];
+    paragraphs[i].list = format.list;
+  }
+  const std::vector<int> numbers = list_numbers(paragraphs);
+  list_lines_any_ = false;
+  list_lines_centred_ = false;
+  for (size_t i = 0; i < list_lines_.size(); ++i) {
+    const ParaFormat& format = list_lines_[i].format;
+    list_lines_[i].number = numbers[i];
+    if (format.list.kind != ListKind::None)
+      list_lines_any_ = true;
+    if (format.align == Align::Center && clamp_list(format.list).kind != ListKind::None)
+      list_lines_centred_ = true;
+  }
+  list_lines_valid_ = true;
+  list_lines_pending_set_ = pending_para_set_;
+  list_lines_pending_ = pending_para_;
+  return list_lines_;
+}
+
+bool MainWindow::any_list() const
+{
+  // Every paragraph's format is a tag's or the held one (capture()'s rule),
+  // so with neither carrying a list there is none.
+  if (pending_para_set_ && pending_para_.list.kind != ListKind::None)
+    return true;
+  bool any = false;
+  const auto begin = buffer_->begin();
+  buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (any)
+      return;
+    ParaFormat format;
+    if (!parse_para(tag_name(tag), format) || format.list.kind == ListKind::None)
+      return;
+    auto it = begin;
+    if (begin.has_tag(tag) || it.forward_to_tag_toggle(tag))
+      any = true;
+  });
+  return any;
+}
+
+Paragraph MainWindow::label_paragraph(size_t index, int offset) const
+{
+  const ParaFormat& format = list_lines_[index].format;
+  Paragraph paragraph;
+  paragraph.indents = format.indents;
+  paragraph.align = format.align;
+  paragraph.list = format.list;
+  paragraph.style = format.style;
+  paragraph.direct = format.direct;
+  // What capture() would give list_label_layout(): the first run's format,
+  // an empty paragraph's mark, or neither.
+  const auto iter = buffer_->get_iter_at_offset(offset);
+  if (iter.is_end()) {
+    if (pending_mark_set_)
+      paragraph.mark = pending_mark_;
+  } else if (iter.get_char() == '\n') {
+    if (has_fmt(iter))
+      paragraph.mark = format_of(iter);
+  } else {
+    paragraph.runs.push_back(format_of(iter));
+  }
+  return paragraph;
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,
@@ -2931,44 +3149,51 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   // first-line indent, in the font of the paragraph's first character.
   if (!buffer_)
     return false;
-  const Document doc = capture();
-  const bool any = std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(),
-                               [](const Paragraph& p) { return p.list.kind != ListKind::None; });
-  if (!any)
+  if (!any_list())
     return false;
-  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  const std::vector<ListLine>& lines = list_lines();
+  if (!list_lines_any_)
+    return false;
   Gdk::Rectangle visible;
   text_.get_visible_rect(visible);
   const Gdk::RGBA color = text_.get_style_context()->get_color(text_.get_state_flags());
-  int offset = 0;
-  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
-    const Paragraph& paragraph = doc.paragraphs[i];
-    int length = 0;
-    for (const Run& run : paragraph.runs)
-      length += static_cast<int>(Glib::ustring(run.text).length());
+  // Only the items in view are measured and drawn. Paragraphs go down the
+  // page in order: start one before the last paragraph to begin at or above
+  // the view's top line, and stop at the first one below its bottom.
+  Gtk::TextIter top;
+  int top_y = 0;
+  text_.get_line_at_y(top, visible.get_y(), top_y);
+  const int top_line = top.get_line();
+  size_t first = static_cast<size_t>(
+      std::upper_bound(lines.begin(), lines.end(), top_line,
+                       [](int line, const ListLine& item) { return line < item.line; }) -
+      lines.begin());
+  first = first >= 2 ? first - 2 : 0;
+  for (size_t i = first; i < lines.size(); ++i) {
+    const ParaFormat& format = lines[i].format;
+    if (format.list.kind == ListKind::None)
+      continue;
+    const auto start = buffer_->get_iter_at_line(lines[i].line);
     Gdk::Rectangle where;
-    if (paragraph.list.kind != ListKind::None)
-      text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
+    text_.get_iter_location(start, where);
+    if (where.get_y() > visible.get_y() + visible.get_height())
+      break;
+    if (where.get_y() + where.get_height() < visible.get_y())
+      continue;
+    const int offset = start.get_offset();
     Glib::RefPtr<Pango::Layout> layout;
     int x = 0;
-    // Only the items in view are measured and drawn.
-    if (paragraph.list.kind != ListKind::None &&
-        where.get_y() + where.get_height() >= visible.get_y() &&
-        where.get_y() <= visible.get_y() + visible.get_height()) {
-      if (list_label_place(paragraph, offset, numbers[i], layout, x, where)) {
-        int width = 0;
-        int height = 0;
-        layout->get_pixel_size(width, height);
-        int wx = 0;
-        int wy = 0;
-        text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
-        cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(),
-                            color.get_alpha());
-        cr->move_to(wx, wy + where.get_height() - height);
-        layout->show_in_cairo_context(cr);
-      }
+    if (list_label_place(label_paragraph(i, offset), offset, lines[i].number, layout, x, where)) {
+      int width = 0;
+      int height = 0;
+      layout->get_pixel_size(width, height);
+      int wx = 0;
+      int wy = 0;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
+      cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(), color.get_alpha());
+      cr->move_to(wx, wy + where.get_height() - height);
+      layout->show_in_cairo_context(cr);
     }
-    offset += length + 1;
   }
   return false;
 }
