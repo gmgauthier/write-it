@@ -461,6 +461,7 @@ void MainWindow::build_editor()
     queue_list_tabs();
   };
   buffer_->signal_apply_tag().connect(lists_on_tag);
+  buffer_->signal_apply_tag().connect(sigc::mem_fun(*this, &MainWindow::on_tag_applied));
   buffer_->signal_remove_tag().connect(lists_on_tag);
   // Text edits mark their range too; a new or removed paragraph renumbers.
   buffer_->signal_insert().connect(
@@ -1346,19 +1347,24 @@ void MainWindow::finish_pending()
       i = j;
     }
   }
-  // Text inserted inside an existing run inherits that run's tag. That is the
-  // surrounding format, not formatting the user pasted in.
-  std::vector<std::string> inherited;
-  if (start > 0) {
-    auto prev = buffer_->get_iter_at_offset(start - 1);
-    if (prev.get_char() != '\n') {
-      for (const auto& tag : prev.get_tags()) {
-        Run run;
-        if (parse_fmt(tag_name(tag), run))
-          inherited.push_back(tag_name(tag));
-      }
-    }
+  // One character format per character. GTK gives text inserted inside a
+  // tag's range that tag too, so pasted or dropped text inside a run comes
+  // with the run's format on top of the one its source gave it. The format
+  // applied over the new text in this action (the source's, copied by a
+  // paste or drop of this document's text, or Replace's) is the one it
+  // keeps; text that got none (typing, plain text from another program)
+  // takes the format being typed. Either way every other format tag on it
+  // goes first (set_fmt()).
+  std::vector<int> applied(static_cast<size_t>(std::max(0, end - start)), -1);
+  for (size_t r = 0; r < applied_fmt_.size(); ++r) {
+    const AppliedFmt& rec = applied_fmt_[r];
+    const int from = std::max(start, rec.from->get_iter().get_offset());
+    const int to = std::min(end, rec.to->get_iter().get_offset());
+    for (int k = from; k < to; ++k)
+      if (buffer_->get_iter_at_offset(k).has_tag(rec.tag))
+        applied[static_cast<size_t>(k - start)] = static_cast<int>(r);
   }
+  auto applied_at = [&](int k) { return applied[static_cast<size_t>(k - start)]; };
   for (int i = start; i < end;) {
     auto iter = buffer_->get_iter_at_offset(i);
     if (iter.get_char() == '\n') {
@@ -1368,48 +1374,53 @@ void MainWindow::finish_pending()
     int j = i;
     while (j < end && buffer_->get_iter_at_offset(j).get_char() != '\n')
       ++j;
-    bool foreign = false;
-    for (int k = i; k < j && !foreign; ++k) {
-      for (const auto& tag : buffer_->get_iter_at_offset(k).get_tags()) {
-        Run run;
-        if (!parse_fmt(tag_name(tag), run))
-          continue;
-        if (std::find(inherited.begin(), inherited.end(), tag_name(tag)) == inherited.end())
-          foreign = true;
-      }
+    int heading = heading_near(i);
+    // Text typed into an empty paragraph takes its style's outline level,
+    // which an empty paragraph has nowhere to hold in the buffer.
+    if (heading == 0 && paragraph_start(i) == i &&
+        (j >= buffer_->get_char_count() || buffer_->get_iter_at_offset(j).get_char() == '\n')) {
+      const std::vector<Style> styles = sheet();
+      if (const Style* style = find_style(styles, para_at(i).style))
+        heading = style->heading;
     }
-    if (!foreign) {
-      auto from = buffer_->get_iter_at_offset(i);
-      auto to = buffer_->get_iter_at_offset(j);
-      strip_fmt(from, to);
-      from = buffer_->get_iter_at_offset(i);
-      to = buffer_->get_iter_at_offset(j);
-      buffer_->apply_tag(format_tag(typing_), from, to);
-      int heading = heading_near(i);
-      // Text typed into an empty paragraph takes its style's outline level,
-      // which an empty paragraph has nowhere to hold in the buffer.
-      if (heading == 0 && paragraph_start(i) == i &&
-          (j >= buffer_->get_char_count() || buffer_->get_iter_at_offset(j).get_char() == '\n')) {
-        const std::vector<Style> styles = sheet();
-        if (const Style* style = find_style(styles, para_at(i).style))
-          heading = style->heading;
+    for (int a = i; a < j;) {
+      const int want = applied_at(a);
+      int b = a + 1;
+      while (b < j && applied_at(b) == want)
+        ++b;
+      const auto from = buffer_->get_iter_at_offset(a);
+      const auto to = buffer_->get_iter_at_offset(b);
+      if (want >= 0) {
+        set_fmt(from, to, applied_fmt_[static_cast<size_t>(want)].tag);
+      } else {
+        set_fmt(from, to, format_tag(typing_));
+        if (heading > 0)
+          buffer_->apply_tag(heading_tag(heading), buffer_->get_iter_at_offset(a),
+                             buffer_->get_iter_at_offset(b));
       }
-      if (heading > 0)
-        buffer_->apply_tag(heading_tag(heading), from, to);
+      a = b;
     }
     i = j;
   }
   // A new empty line (Enter on an empty line or at the start of one) takes
   // the format being typed, as Word's new paragraph mark does. A newline
-  // pasted with a format of its own keeps it.
+  // pasted with a format of its own keeps it, and only it.
   for (int n = start; n < end; ++n) {
     auto iter = buffer_->get_iter_at_offset(n);
-    if (iter.get_char() != '\n' || has_fmt(iter))
+    if (iter.get_char() != '\n')
+      continue;
+    const auto next = buffer_->get_iter_at_offset(n + 1);
+    if (applied_at(n) >= 0) {
+      set_fmt(iter, next, applied_fmt_[static_cast<size_t>(applied_at(n))].tag);
+      continue;
+    }
+    if (has_fmt(iter))
       continue;
     if (n > 0 && buffer_->get_iter_at_offset(n - 1).get_char() != '\n')
       continue;
-    buffer_->apply_tag(format_tag(typing_), iter, buffer_->get_iter_at_offset(n + 1));
+    set_fmt(iter, next, format_tag(typing_));
   }
+  clear_applied_fmt();
   tag_line_breaks(start, end);
 }
 
@@ -1649,6 +1660,37 @@ void MainWindow::strip_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to)
     buffer_->remove_tag(tag, from, to);
 }
 
+void MainWindow::set_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to,
+                         const Glib::RefPtr<Gtk::TextTag>& tag)
+{
+  // Offsets, since removing tags can leave the iterators invalid.
+  const int a = from.get_offset();
+  const int b = to.get_offset();
+  strip_fmt(buffer_->get_iter_at_offset(a), buffer_->get_iter_at_offset(b));
+  buffer_->apply_tag(tag, buffer_->get_iter_at_offset(a), buffer_->get_iter_at_offset(b));
+}
+
+void MainWindow::on_tag_applied(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& from,
+                                const Gtk::TextIter& to)
+{
+  if (!pending_insert_ || !in_user_ || loading_ || restoring_)
+    return;
+  Run ignored;
+  if (!parse_fmt(tag_name(tag), ignored))
+    return;
+  // Text inserted later at either end is not inside this range.
+  applied_fmt_.push_back({tag, buffer_->create_mark(from, false), buffer_->create_mark(to, true)});
+}
+
+void MainWindow::clear_applied_fmt()
+{
+  for (const AppliedFmt& rec : applied_fmt_) {
+    buffer_->delete_mark(rec.from);
+    buffer_->delete_mark(rec.to);
+  }
+  applied_fmt_.clear();
+}
+
 Run MainWindow::line_break_mark(int newline) const
 {
   int begin = newline;
@@ -1714,11 +1756,7 @@ void MainWindow::tag_line_breaks(int start, int end)
       continue;
     auto from_it = buffer_->get_iter_at_offset(n);
     auto to_it = buffer_->get_iter_at_offset(n + 1);
-    strip_fmt(from_it, to_it);
-    const Run mark = line_break_mark(n);
-    from_it = buffer_->get_iter_at_offset(n);
-    to_it = buffer_->get_iter_at_offset(n + 1);
-    buffer_->apply_tag(format_tag(mark), from_it, to_it);
+    set_fmt(from_it, to_it, format_tag(line_break_mark(n)));
   }
 }
 
@@ -1743,9 +1781,7 @@ void MainWindow::apply_run_edit(const std::function<void(Run&)>& edit)
       if (i == 0 || buffer_->get_iter_at_offset(i - 1).get_char() == '\n') {
         Run mark = format_of(iter);
         edit(mark);
-        strip_fmt(iter, buffer_->get_iter_at_offset(i + 1));
-        buffer_->apply_tag(format_tag(mark), buffer_->get_iter_at_offset(i),
-                           buffer_->get_iter_at_offset(i + 1));
+        set_fmt(iter, buffer_->get_iter_at_offset(i + 1), format_tag(mark));
       }
       ++i;
       continue;
@@ -1761,8 +1797,7 @@ void MainWindow::apply_run_edit(const std::function<void(Run&)>& edit)
     edit(run);
     auto from = buffer_->get_iter_at_offset(i);
     auto to = buffer_->get_iter_at_offset(j);
-    strip_fmt(from, to);
-    buffer_->apply_tag(format_tag(run), from, to);
+    set_fmt(from, to, format_tag(run));
     i = j;
   }
   tag_line_breaks(start, end);
@@ -3341,10 +3376,9 @@ void MainWindow::replace_once()
         // match's own format as the only character tag on the new text.
         auto from = buffer_->get_iter_at_offset(at);
         auto to = buffer_->get_iter_at_offset(at + len);
-        strip_fmt(from, to);
+        set_fmt(from, to, format_tag(format));
         from = buffer_->get_iter_at_offset(at);
         to = buffer_->get_iter_at_offset(at + len);
-        buffer_->apply_tag(format_tag(format), from, to);
         if (heading > 0)
           buffer_->apply_tag(heading_tag(heading), from, to);
       }
