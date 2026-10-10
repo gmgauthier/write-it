@@ -317,6 +317,16 @@ write_it_style_direct_tests = executable(
 )
 test('style-direct', write_it_style_direct_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: capture() reads formats only where they
+# change, builds exactly what the per-character reading built, and reads
+# 1000 paragraphs quickly.
+write_it_capture_tests = executable(
+  'write-it-capture-tests',
+  'tests/test_capture.cpp',
+  dependencies: [writeit_dep],
+)
+test('capture', write_it_capture_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: long style names keep the style boxes
 # and Format > Style... narrow, the Style box is blank over mixed styles,
 # and a heading's list label is bold.
@@ -455,3 +465,21 @@ write_it_undo_fuzz_tests = executable(
   dependencies: [writeit_dep],
 )
 test('undo-fuzz', write_it_undo_fuzz_tests, timeout: 1800, is_parallel: false)
+# The real window under a display: capture() copies the whole document, so
+# a keystroke may call it only for undo (at most twice), and a redraw not at
+# all. A test-only count in the window.
+write_it_capture_count_tests = executable(
+  'write-it-capture-count-tests',
+  'tests/test_capture_count.cpp',
+  dependencies: [writeit_dep],
+)
+test('capture-count', write_it_capture_count_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: the unsaved-changes state after typing,
+# Save, Save As, Undo, Redo, New and Open, from the undo state id.
+write_it_dirty_state_tests = executable(
+  'write-it-dirty-state-tests',
+  'tests/test_dirty_state.cpp',
+  dependencies: [writeit_dep],
+)
+test('dirty-state', write_it_dirty_state_tests, timeout: 60, is_parallel: false)

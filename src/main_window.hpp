@@ -156,7 +156,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool write_rtf(const std::string& path);
 
   Document capture() const;
+  // Calls of capture(), for the tests: a keystroke makes at most undo's two.
+  mutable long captures_ = 0;
   void replace_buffer(const Document& doc, int offset);
+  // The undo state differs from the one saved, opened or made new.
   bool dirty() const;
   void update_title();
   void update_actions();
@@ -281,6 +284,27 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  // Each paragraph's format and list number, as capture() and list_numbers()
+  // give them, and the GTK line it starts on, without copying the document:
+  // for the labels on_text_draw() draws and update_list_shifts(). Rebuilt
+  // from the paragraph tags when a paragraph format changes, a line comes or
+  // goes, or the empty last paragraph's held format changes; typing inside a
+  // paragraph leaves it as it is.
+  struct ListLine {
+    ParaFormat format;
+    int line = 0;
+    int number = 0;
+  };
+  const std::vector<ListLine>& list_lines();
+  // Whether any paragraph is a list item, from the tag table without
+  // walking the paragraphs: a paragraph tag with a list that is in the
+  // buffer, or a held format with one. A document with no list does no list
+  // work on a draw.
+  bool any_list() const;
+  // The paragraph list_label_layout() measures for paragraph `index` of
+  // list_lines(), starting at buffer `offset`: its format, and its first
+  // character's format (or its mark's) as the label's.
+  Paragraph label_paragraph(size_t index, int offset) const;
   // A list item's label, for the paragraph that starts at buffer `offset`:
   // its layout, its buffer x, and the first character's location. False for
   // a plain paragraph.
@@ -462,6 +486,14 @@ class MainWindow : public Gtk::ApplicationWindow {
     int number = 0;
   };
   std::vector<TabLine> tab_lines_;
+  // list_lines()' cache: valid until a change it depends on, with the held
+  // format of the empty last paragraph it was built with.
+  std::vector<ListLine> list_lines_;
+  bool list_lines_valid_ = false;
+  bool list_lines_any_ = false;
+  bool list_lines_centred_ = false;
+  bool list_lines_pending_set_ = false;
+  ParaFormat list_lines_pending_;
   bool tabs_full_ = true;
   bool tabs_renumber_ = false;
   bool tabs_noted_ = false;
