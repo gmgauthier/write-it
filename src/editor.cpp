@@ -1046,6 +1046,13 @@ Document MainWindow::capture() const
       flush_paragraph();
       continue;
     }
+    // Tags change only where one starts or ends, so between toggles the
+    // format (and the heading) are the previous character's. Reading them at
+    // every character cost most of a keystroke in a long document.
+    if (in_run && !iter.toggles_tag()) {
+      run.text += Glib::ustring(1, ch).raw();
+      continue;
+    }
     if (heading == 0)
       heading = heading_of(iter);
     const Run format = format_of(iter);

@@ -316,6 +316,16 @@ write_it_style_direct_tests = executable(
 )
 test('style-direct', write_it_style_direct_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: capture() reads formats only where they
+# change, builds exactly what the per-character reading built, and reads
+# 1000 paragraphs quickly.
+write_it_capture_tests = executable(
+  'write-it-capture-tests',
+  'tests/test_capture.cpp',
+  dependencies: [writeit_dep],
+)
+test('capture', write_it_capture_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: long style names keep the style boxes
 # and Format > Style... narrow, the Style box is blank over mixed styles,
 # and a heading's list label is bold.
