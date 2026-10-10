@@ -501,6 +501,23 @@ void MainWindow::build_editor()
   raise_headings();
 
   buffer_->signal_begin_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_begin));
+  // What normalise_paragraphs() must look at.
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
+        note_touched(end.get_offset() - static_cast<int>(text.length()), end.get_offset());
+      },
+      true);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter&) {
+        note_touched(start.get_offset(), start.get_offset());
+      },
+      true);
+  auto touched_tag = [this](const Glib::RefPtr<Gtk::TextTag>&, const Gtk::TextIter& start,
+                            const Gtk::TextIter& end) {
+    note_touched(start.get_offset(), end.get_offset());
+  };
+  buffer_->signal_apply_tag().connect(touched_tag, true);
+  buffer_->signal_remove_tag().connect(touched_tag, true);
   buffer_->signal_end_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_end));
   buffer_->signal_insert().connect(sigc::mem_fun(*this, &MainWindow::on_inserted));
   buffer_->signal_erase().connect(sigc::mem_fun(*this, &MainWindow::on_erase), false);
@@ -1319,6 +1336,7 @@ void MainWindow::on_user_begin()
   if (loading_ || restoring_)
     return;
   in_user_ = true;
+  touched_ = false;
   open_step();
 }
 
@@ -2242,14 +2260,48 @@ ParaFormat MainWindow::destination_para(int start, int end) const
   return ParaFormat{};
 }
 
+void MainWindow::note_touched(int from, int to)
+{
+  if (loading_ || restoring_ || normalising_ || !in_user_ || !buffer_)
+    return;
+  if (!touched_start_) {
+    touched_start_ = buffer_->create_mark(buffer_->begin(), true);
+    touched_end_ = buffer_->create_mark(buffer_->begin(), false);
+  }
+  if (!touched_) {
+    touched_ = true;
+    buffer_->move_mark(touched_start_, buffer_->get_iter_at_offset(from));
+    buffer_->move_mark(touched_end_, buffer_->get_iter_at_offset(to));
+    return;
+  }
+  if (from < touched_start_->get_iter().get_offset())
+    buffer_->move_mark(touched_start_, buffer_->get_iter_at_offset(from));
+  if (to > touched_end_->get_iter().get_offset())
+    buffer_->move_mark(touched_end_, buffer_->get_iter_at_offset(to));
+}
+
 void MainWindow::normalise_paragraphs()
 {
   // A deleted newline joins two paragraphs. The joined paragraph keeps the
   // first one's indents, alignment and list, as AbiWord and LibreOffice do.
+  // Only the paragraphs the action touched can have come apart: the others
+  // were whole after the last action, so typing costs a paragraph, not the
+  // document.
+  if (!touched_)
+    return;
+  touched_ = false;
   const int count = buffer_->get_char_count();
-  Glib::RefPtr<Gtk::TextTag> carry = para_tag(ParaFormat{});
-  int begin = 0;
-  while (begin < count) {
+  int begin = paragraph_start(touched_start_->get_iter().get_offset());
+  const int last = paragraph_end(touched_end_->get_iter().get_offset());
+  // The paragraph above is whole: its tag is the one an untagged paragraph
+  // follows.
+  Glib::RefPtr<Gtk::TextTag> carry;
+  if (begin > 0)
+    carry = para_tag_at(buffer_->get_iter_at_offset(paragraph_start(begin - 1)));
+  if (!carry)
+    carry = para_tag(ParaFormat{});
+  normalising_ = true;
+  while (begin < count && begin <= last) {
     Glib::RefPtr<Gtk::TextTag> chosen;
     std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
     bool uniform = true;
@@ -2280,6 +2332,7 @@ void MainWindow::normalise_paragraphs()
     carry = chosen;
     begin = end;
   }
+  normalising_ = false;
 }
 
 void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,

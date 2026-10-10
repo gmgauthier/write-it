@@ -240,7 +240,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   int paragraph_start(int offset) const;
   int paragraph_end(int offset) const;
   bool final_paragraph_empty() const;
+  // Gives each paragraph the user action touched one paragraph tag over all
+  // of it; the rest are as the last action left them.
   void normalise_paragraphs();
+  // Widens the range normalise_paragraphs() looks at to [from, to).
+  void note_touched(int from, int to);
   void on_erase(const Gtk::TextBuffer::iterator& from, const Gtk::TextBuffer::iterator& to);
   // Edits the format of every paragraph the selection touches, each from
   // its own current format.
@@ -419,6 +423,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool restoring_ = false;
   bool suppress_format_ = false;
   bool in_user_ = false;
+  // The range the current user action changed (note_touched()).
+  Glib::RefPtr<Gtk::TextMark> touched_start_;
+  Glib::RefPtr<Gtk::TextMark> touched_end_;
+  bool touched_ = false;
+  bool normalising_ = false;
   bool pending_insert_ = false;
   bool sizing_ = false;
   // The idle that sizes the page again after a layout: to a new pasteboard
