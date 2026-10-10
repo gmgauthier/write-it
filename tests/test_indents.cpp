@@ -139,6 +139,8 @@ void rtf_round_trip()
   body.runs.push_back(bold);
   mixed.paragraphs.push_back(heading);
   mixed.paragraphs.push_back(body);
+  // The heading in its Heading style, as since named styles.
+  writeit::adopt_heading_styles(mixed, "Sans", 11);
   CHECK(import(writeit::rtf_export(mixed)) == mixed);
 
   // The ceiling round-trips.

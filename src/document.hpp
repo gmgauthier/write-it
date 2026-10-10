@@ -14,7 +14,18 @@ struct Run {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  // What was set directly rather than by the paragraph's style (kDirect*
+  // bits). A style applied or edited leaves these alone. Not saved: a file
+  // holds only values, and a reader takes what differs from the style as
+  // direct, as Word does.
+  unsigned direct = 0;
 };
+
+constexpr unsigned kDirectFont = 1;
+constexpr unsigned kDirectSize = 2;
+constexpr unsigned kDirectBold = 4;
+constexpr unsigned kDirectItalic = 8;
+constexpr unsigned kDirectUnderline = 16;
 
 // Paragraph indents in twips (1/1440 inch), the unit RTF writes. `first` is
 // the first line relative to `left`. A negative `first` is a hanging indent.
@@ -76,20 +87,63 @@ constexpr int kListHang = 360;
 // Word 97's default tab stops: every half inch from the left margin.
 constexpr int kDefaultTab = 720;
 
+// A named paragraph style, as Word 97's Format > Style: a character format
+// and a paragraph format the paragraphs using it share. Paragraphs keep their
+// own resolved formatting too; a style is applied to them, and an edit to a
+// style is carried to them, attribute by attribute (see apply_style()).
+struct Style {
+  std::string name;
+  // The style this one is built on, or empty. An edit to the base carries to
+  // every attribute this style shares with it.
+  std::string based_on;
+  // The style Enter gives the next paragraph; empty for this one.
+  std::string next;
+  // Font, size, bold, italic and underline. The text is unused.
+  Run format;
+  Indents indents;
+  Align align = Align::Left;
+  // The outline level the style gives: 0 for body text, 1 through 6.
+  int heading = 0;
+};
+
+constexpr const char* kNormalStyle = "Normal";
+// Enough for any real document; a hostile file cannot grow the sheet further.
+constexpr size_t kMaxStyles = 4096;
+// Style names are capped at this many bytes of UTF-8.
+constexpr size_t kMaxStyleName = 255;
+// A style's largest size in points, Word's largest.
+constexpr int kMaxStyleSize = 1638;
+
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.
   int heading = 0;
+  // The name of the paragraph's style. A name the sheet does not know is
+  // treated as Normal.
+  std::string style = kNormalStyle;
   Indents indents;
   Align align = Align::Left;
   ListFormat list;
   std::vector<Run> runs;
+  // The paragraph format set directly (kDirect* bits below), as Run's.
+  unsigned direct = 0;
 };
+
+constexpr unsigned kDirectLeft = 1;
+constexpr unsigned kDirectRight = 2;
+constexpr unsigned kDirectFirst = 4;
+constexpr unsigned kDirectAlign = 8;
 
 struct Document {
   std::vector<Paragraph> paragraphs;
+  // The style sheet. Empty means the built-in sheet in Sans 11, which is
+  // what a file without a \stylesheet reads as.
+  std::vector<Style> styles;
 };
 
+// Same values and the same direct bits: runs that may be one run.
 bool same_format(const Run& a, const Run& b);
+// Same values, whatever was set directly: what a reader would see.
+bool same_look(const Run& a, const Run& b);
 bool operator==(const Indents& a, const Indents& b);
 bool operator!=(const Indents& a, const Indents& b);
 bool operator==(const ListFormat& a, const ListFormat& b);
@@ -97,6 +151,8 @@ bool operator!=(const ListFormat& a, const ListFormat& b);
 bool operator==(const Run& a, const Run& b);
 bool operator==(const Paragraph& a, const Paragraph& b);
 bool operator==(const Document& a, const Document& b);
+bool operator==(const Style& a, const Style& b);
+bool operator!=(const Style& a, const Style& b);
 
 // Left and right stay between 0 and kMaxIndent. The first line may hang back
 // to the left margin and no further, and may indent up to kMaxIndent.
@@ -173,6 +229,56 @@ int list_label_space(const Indents& indents);
 ListKind toggle_list(std::vector<Paragraph>& paragraphs, ListKind kind);
 // Moves a list item to another level, and its indents with it.
 void set_list_level(Paragraph& paragraph, int level);
+
+// Word 97's and AbiWord's basic set: Normal; Heading 1 through 6, one per
+// Markdown heading level and outline level, each based on Normal with Normal
+// next; Block Text, indented an inch each side as in Word 97; and Plain Text,
+// in Monospace a point smaller, as Word 97's Plain Text is Courier New.
+std::vector<Style> builtin_styles(const std::string& font, int size);
+// The document's sheet: its own, or the built-in one in Sans 11.
+const std::vector<Style>& style_sheet(const Document& doc);
+// builtin_styles("Sans", 11), the sheet of a document without its own.
+const std::vector<Style>& default_styles();
+// A sheet holding every built-in style, Normal first: the built-ins a sheet
+// lacks are added in the font and size of its Normal.
+std::vector<Style> complete_sheet(std::vector<Style> sheet);
+// By name, ignoring case for ASCII letters. Null when the sheet has none.
+const Style* find_style(const std::vector<Style>& sheet, const std::string& name);
+// A clean style name: valid UTF-8 without control characters, trimmed, and
+// at most kMaxStyleName bytes. Empty when nothing is left.
+std::string clean_style_name(const std::string& name);
+// `wanted`, or "wanted (2)", "wanted (3)"... whichever the sheet lacks.
+std::string unique_style_name(const std::vector<Style>& sheet, const std::string& wanted);
+// The style Enter gives the paragraph after one in `name`.
+std::string next_style(const std::vector<Style>& sheet, const std::string& name);
+// Moves a run from one style to another: each attribute equal to `from`'s
+// takes `to`'s, so direct formatting survives.
+void restyle_run(Run& run, const Style& from, const Style& to);
+// Gives paragraphs `first` through `last` the style `name`, each attribute
+// that matched its old style taking the new one's: the runs' character
+// format, the indents (a list item's indents belong to the list, so its own
+// remembered indents move instead), the alignment and the outline level.
+// False when the sheet has no such style.
+bool apply_style(Document& doc, size_t first, size_t last, const std::string& name);
+// Replaces the style `name` with `changed` and carries the change to the
+// paragraphs using it and to the styles based on it, the same attribute by
+// attribute way. A new name renames it everywhere. False, changing nothing,
+// for an unknown style, an empty or taken name, renaming Normal, a base or
+// next style the sheet lacks, or a base that would make a circle.
+bool update_style(Document& doc, const std::string& name, const Style& changed);
+// Adds a new style. False for an empty or taken name, an unknown base or
+// next style, or a full sheet.
+bool add_style(Document& doc, const Style& style);
+// Gives a document without a sheet the built-in one, in the font and size
+// of most of its text (font and size when it has none). The editor does this
+// when such a document first takes a style.
+void adopt_sheet(Document& doc, const std::string& font, int size);
+// Headings from before styles (M1 wrote \\outlinelevel on body-size text and
+// showed it scaled): a document without a sheet whose paragraphs have
+// outline levels adopts the built-in sheet and gives each heading paragraph
+// in Normal its Heading 1-6 style, so headings keep their heading size. A
+// document with a sheet, or without headings, is left alone.
+void adopt_heading_styles(Document& doc, const std::string& font, int size);
 
 Document blank_document(const std::string& font, int size);
 Document plain_import(const std::string& text, const std::string& font, int size);
