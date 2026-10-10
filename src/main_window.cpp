@@ -797,23 +797,33 @@ void MainWindow::scroll_to_caret()
   };
   // On the first line, all the way to the top: the page's edge and the gray
   // above it show. On the last line, all the way to the bottom only when
-  // that line is already within a screen of the sheet's foot, so the edge
-  // and the gray under it show, not a margin short of them. A short page's
-  // last line sits near the top of the sheet; jumping to the foot would
-  // hide the line just typed.
+  // that line is the foot of the sheet, so the edge and the gray under it
+  // show, not a margin short of them. The text view is as tall as the sheet,
+  // so a short page's last line is the end of the buffer and still near the
+  // top: the empty page below it is not the foot. A window only a little
+  // shorter than the sheet would otherwise count that line as "within one
+  // screen of the foot" and jump there, hiding the line just typed.
   Gdk::Rectangle first;
   Gdk::Rectangle last;
   text_.get_iter_location(buffer_->begin(), first);
   text_.get_iter_location(buffer_->end(), last);
   auto v = paste_.get_vadjustment();
   const double page = v->get_page_size();
+  // Buffer y starts under the top margin, so the gap from the line to the
+  // bottom of the text view includes both margins when the line is the last
+  // one of a page the text fills.
+  const int gap = text_.get_allocated_height() - (rect.get_y() + rect.get_height());
+  const int slack =
+      text_.get_top_margin() + text_.get_bottom_margin() + std::max(rect.get_height(), 1);
+  const bool line_at_foot = gap <= slack;
   // `y` is the caret line in the board's coordinates, which is what the
-  // pasteboard's adjustment measures. At the foot, scrolling to the bottom
-  // still leaves that line on screen.
-  const bool last_at_foot = page > 0 && v->get_upper() - static_cast<double>(y) <= page;
+  // pasteboard's adjustment measures. Scrolling to the bottom has to leave
+  // that line on screen (a footer below the body can be taller than the
+  // window).
+  const bool bottom_shows_line = page > 0 && v->get_upper() - static_cast<double>(y) <= page;
   if (rect.get_y() <= first.get_y())
     v->set_value(v->get_lower());
-  else if (rect.get_y() >= last.get_y() && last_at_foot)
+  else if (rect.get_y() >= last.get_y() && line_at_foot && bottom_shows_line)
     v->set_value(std::max(v->get_lower(), v->get_upper() - page));
   else
     reveal(v, y, rect.get_height());

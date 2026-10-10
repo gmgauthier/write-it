@@ -289,7 +289,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 183;
+constexpr int kChecks = 186;
 
 int main(int argc, char* argv[])
 {
@@ -329,6 +329,35 @@ int main(int argc, char* argv[])
     CHECK(v->get_upper() - v->get_page_size() > v->get_lower() + 1);
     CHECK(caret_visible(window, "short page Return"));
     CHECK(at_top(window, "short page Return"));
+    window.hide();
+    settle();
+  }
+
+  // Same short page at 150%, in a window only a little shorter than the
+  // sheet. The whole page is then within one screen of its foot. Enter
+  // still leaves the new line at the top.
+  {
+    writeit::MainWindow window;
+    window.show();
+    settle();
+    MainWindowProbe::zoom(window, 150);
+    settle();
+    auto v = MainWindowProbe::scroller(window).get_vadjustment();
+    int ww = 0;
+    int wh = 0;
+    window.get_size(ww, wh);
+    const int chrome = wh - static_cast<int>(v->get_page_size());
+    const int sheet = MainWindowProbe::text(window).get_allocated_height() + 36;
+    window.resize(ww > 640 ? ww : 640, chrome + sheet - 40);
+    settle();
+    MainWindowProbe::text(window).grab_focus();
+    settle();
+    key(window, GDK_KEY_h);
+    key(window, GDK_KEY_i);
+    key(window, GDK_KEY_Return);
+    CHECK(caret_line(window) == 1);
+    CHECK(caret_visible(window, "short page 150% Return"));
+    CHECK(at_top(window, "short page 150% Return"));
     window.hide();
     settle();
   }
