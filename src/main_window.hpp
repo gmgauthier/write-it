@@ -22,6 +22,8 @@
 
 namespace writeit {
 
+class TableSheet;
+
 // What a paragraph tag carries: the paragraph's indents, alignment, list,
 // and style.
 struct ParaFormat {
@@ -99,6 +101,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The window tests in tests/ drive the real window and read back what GTK
   // made of it.
   friend struct MainWindowProbe;
+  friend class TableSheet;
 
   // What an undo step keeps of the state the buffer cannot hold: the empty
   // last paragraph's format and character format.
@@ -325,6 +328,30 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_delete_column();
   void on_footnote();
   void on_picture();
+  // A table is one child widget in the body, not a paragraph per cell.
+  // The newline after that widget, when another paragraph follows, is only
+  // a separator: capture() does not make a paragraph out of it.
+  void mount_table(const std::vector<Paragraph>& cells, bool separator);
+  void append_table(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor,
+                    std::vector<Paragraph>& out) const;
+  int table_paragraph_count(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor) const;
+  TableSheet* focused_sheet() const;
+  TableSheet* sheet_at_cursor() const;
+  void relayout_tables();
+  void fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs);
+  std::vector<Paragraph> read_cell(const Gtk::TextView& view,
+                                   const std::vector<Paragraph>& forms) const;
+  void restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer);
+  void on_cell_begin();
+  void on_cell_end();
+  // Tab in the last cell adds a row, as in Word 97.
+  void extend_table(TableSheet& sheet);
+  Glib::RefPtr<Gtk::TextTag> format_tag_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                                           const Run& run);
+  size_t document_index_at(int offset) const;
+  // After a document command, the caret sits on the table's anchor. Move
+  // the keyboard into its first cell.
+  void focus_table_caret();
   void on_header_footer();
   void on_story_end(std::vector<Paragraph>* story);
   void on_notes_end();
@@ -674,6 +701,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Pictures in the body, keyed by the pixbuf the buffer is showing. The
   // value is the file's bytes; the pixbuf may be a scaled copy.
   std::map<GdkPixbuf*, Image> image_pix_;
+  // The document as a cell edit began, so that edit is one undo step.
+  Document cell_before_;
+  bool cell_step_ = false;
+  // capture() ignores this buffer range for one call. A delete that covers a
+  // table anchor is applied to the document, because the anchor character
+  // alone cannot bring the grid back.
+  int capture_skip_from_ = -1;
+  int capture_skip_to_ = -1;
   // View > Header and Footer. Not saved. A file that has either opens with
   // it on, until the user has toggled the item (stories_chosen_).
   bool stories_on_ = false;

@@ -4,6 +4,7 @@
 #include "document.hpp"
 #include "view.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -160,6 +161,84 @@ void tables()
   CHECK(!writeit::delete_table_column(doc.paragraphs, 0));
 }
 
+std::string paragraph_text(const writeit::Paragraph& paragraph)
+{
+  std::string text;
+  for (const writeit::Run& run : paragraph.runs)
+    text += run.text;
+  return text;
+}
+
+// The sample in Documents: a 4 by 4 table Write-It saved, with tab characters
+// inside cells. Those tabs stay in the cells they were saved in.
+void sample_table()
+{
+  const char* rtf =
+      "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n"
+      "{\\fonttbl{\\f0\\fswiss Sans;}}\n"
+      "\\pard\\f0\\fs22\\b0\\i0\\ulnone This is a test\\par\n"
+      "\\pard\\f0\\fs22\\b0\\i0\\ulnone\\par\n"
+      "\\pard\\f0\\fs22\\b0\\i0\\ulnone This is a test\\par\n"
+      "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\f0\\fs22\\b0\\i0"
+      "\\ulnone asdfasfdsafddsf\\tab sdadasdf\\tab asdasfdasfd\\tab \\tab dsfadfasdf\\tab "
+      "\\cell\\pard\\intbl\\cell\\pard\\intbl\\cell\\pard\\intbl\\f0\\fs22\\b0\\i0\\ulnone "
+      "sdasfsafdasdf\\tab \\tab wsdfasdfsafdasdfasdfasdfasdfasdfasdf\\cell\\row\n"
+      "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\cell\\pard"
+      "\\intbl\\cell\\pard\\intbl\\cell\\pard\\intbl\\cell\\row\n"
+      "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\cell\\pard"
+      "\\intbl\\f0\\fs22\\b0\\i0\\ulnone asdfasfasdfasfd\\cell\\pard\\intbl\\cell\\pard\\intbl"
+      "\\cell\\row\n"
+      "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\cell\\pard"
+      "\\intbl\\cell\\pard\\intbl\\cell\\pard\\intbl\\cell\\row\n"
+      "\\pard\\par\n"
+      "}";
+  writeit::Document doc;
+  CHECK(writeit::rtf_import(rtf, doc));
+  int cells = 0;
+  int ids = 0;
+  int rows = 0;
+  int columns = 0;
+  bool widths = true;
+  bool row1_empty = true;
+  std::string top_left;
+  std::string top_right;
+  std::string third_row;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table == 0)
+      continue;
+    ++cells;
+    if (ids == 0)
+      ids = paragraph.cell.table;
+    else if (paragraph.cell.table != ids)
+      ids = -1;
+    rows = std::max(rows, paragraph.cell.rows);
+    columns = std::max(columns, paragraph.cell.columns);
+    if (paragraph.cell.widths.size() != 4)
+      widths = false;
+    const std::string text = paragraph_text(paragraph);
+    if (paragraph.cell.row == 0 && paragraph.cell.column == 0)
+      top_left = text;
+    if (paragraph.cell.row == 0 && paragraph.cell.column == 3)
+      top_right = text;
+    if (paragraph.cell.row == 2 && paragraph.cell.column == 1)
+      third_row = text;
+    if (paragraph.cell.row == 1 && !text.empty())
+      row1_empty = false;
+  }
+  CHECK(cells == 16);
+  CHECK(ids > 0 && rows == 4 && columns == 4);
+  CHECK(widths);
+  const std::string saved_left = std::string("asdfasfdsafddsf\tsdadasdf\tasdasfdasfd\t\tdsfadfasdf\t");
+  if (top_left != saved_left)
+    std::cerr << "top left cell: [" << top_left << "]\n";
+  CHECK(top_left == saved_left);
+  CHECK(top_right == "sdasfsafdasdf\t\twsdfasdfsafdasdfasdfasdfasdfasdfasdf");
+  CHECK(third_row == "asdfasfasdfasfd");
+  CHECK(!doc.paragraphs.empty() && paragraph_text(doc.paragraphs.front()) == "This is a test" &&
+        doc.paragraphs.front().cell.table == 0 && doc.paragraphs.back().cell.table == 0 &&
+        row1_empty);
+}
+
 void stories()
 {
   writeit::Document doc;
@@ -276,7 +355,7 @@ void geometry()
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 90;
+constexpr int kChecks = 98;
 
 int main()
 {
@@ -284,6 +363,7 @@ int main()
   page_setup();
   clamp_limits();
   tables();
+  sample_table();
   stories();
   images();
   geometry();

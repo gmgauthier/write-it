@@ -90,6 +90,11 @@ class UndoHistory {
   // A change outside the buffer, as part of the open step. `seen` false: the
   // window's own state only, not an edit on its own (see close()).
   void record_custom(std::function<void()> undo, std::function<void()> redo, bool seen = true);
+  // While suspended, buffer changes are not recorded and do not count as
+  // stray edits. A table rebuild replaces the whole buffer and keeps the
+  // step as a custom undo instead, because a child widget is not in the
+  // buffer's own history.
+  void suspend(bool on);
   // Closes the open step. A step that is no edit (no text inserted or
   // deleted, every character's tags as before, no seen custom change) adds
   // no step: its ops join the step below and state_id() stays. Text erased
@@ -151,6 +156,7 @@ class UndoHistory {
   std::vector<std::unique_ptr<Step>> stashed_redo_;
   bool open_ = false;
   bool replaying_ = false;
+  bool suspended_ = false;
   std::uint64_t next_id_ = 2;
   std::uint64_t base_id_ = 1;
   long stray_ = 0;
