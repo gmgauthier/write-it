@@ -310,49 +310,49 @@ void UndoHistory::note_tag_shape(const std::vector<std::pair<int, int>>& ranges)
   }
 }
 
-UndoHistory::Seen UndoHistory::seen(const Step& step) const
+bool UndoHistory::is_edit(const Step& step) const
 {
-  const auto is_tag = [](const Op& op) {
-    return op.kind == Op::Kind::Apply || op.kind == Op::Kind::Remove;
-  };
-  bool maybe = false;
-  for (size_t i = 0; i < step.ops.size(); ++i) {
-    const Op& op = step.ops[i];
-    if (op.kind == Op::Kind::Custom) {
-      maybe = maybe || op.seen;
-      continue;
-    }
-    if (op.kind == Op::Kind::Erase) {
-      // Erased and put back: the tags that follow may or may not restore it.
-      if (i + 1 < step.ops.size() && step.ops[i + 1].kind == Op::Kind::Insert &&
-          step.ops[i + 1].start == op.start && step.ops[i + 1].text == op.text) {
-        maybe = true;
-        ++i;
-        continue;
-      }
-      return Seen::Yes;
-    }
-    if (op.kind == Op::Kind::Insert)
-      return Seen::Yes;
-    if (i + 1 < step.ops.size()) {
-      const Op& next = step.ops[i + 1];
-      if (is_tag(next) && next.kind != op.kind && next.ranges == op.ranges && same_tag_) {
-        bool same = true;
-        for (const auto& range : op.ranges)
-          same = same && same_tag_(op.tag, next.tag, range.first, range.second);
-        if (same) {
-          ++i;
-          continue;
+  // Greg's rule: an action is an edit if it inserted or deleted text, even
+  // text that puts back what was there (typing or pasting over a selection
+  // with the same text), or if it left some character's tags other than
+  // they were. A tag taken off and put back, or put on and taken off, is
+  // not. Only the window's own state changing (seen == false) is not either.
+  std::map<Gtk::TextTag*, std::vector<std::pair<int, int>>> toggles;
+  for (const Op& op : step.ops) {
+    switch (op.kind) {
+      case Op::Kind::Insert:
+      case Op::Kind::Erase:
+        return true;
+      case Op::Kind::Custom:
+        if (op.seen)
+          return true;
+        break;
+      case Op::Kind::Apply:
+      case Op::Kind::Remove: {
+        // Each range is where the tag really changed (on_tag()), and a step
+        // with no text change keeps every offset: a character ends up
+        // changed exactly when an odd number of them cover it.
+        auto& points = toggles[op.tag.get()];
+        for (const auto& range : op.ranges) {
+          points.emplace_back(range.first, 1);
+          points.emplace_back(range.second, -1);
         }
+        break;
       }
     }
-    bool unseen = static_cast<bool>(unseen_tag_);
-    for (const auto& range : op.ranges)
-      unseen = unseen && unseen_tag_(op.tag, range.first, range.second);
-    if (!unseen)
-      maybe = true;
   }
-  return maybe ? Seen::Maybe : Seen::No;
+  for (auto& entry : toggles) {
+    auto& points = entry.second;
+    std::sort(points.begin(), points.end());
+    int depth = 0;
+    for (size_t i = 0; i < points.size(); ++i) {
+      depth += points[i].second;
+      const bool more = i + 1 < points.size();
+      if (depth % 2 != 0 && more && points[i + 1].first > points[i].first)
+        return true;
+    }
+  }
+  return false;
 }
 
 UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
@@ -363,19 +363,7 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
   std::unique_ptr<Step> step = std::move(current_);
   if (step->ops.empty())
     return Closed::Dropped;
-  const Seen shows = seen(*step);
-  bool hidden = shows == Seen::No;
-  if (shows == Seen::Maybe && looks_same_) {
-    Step& probe = *step;
-    std::vector<std::pair<int, int>> ranges;
-    bool whole = false;
-    for (const Op& op : probe.ops) {
-      whole = whole || op.kind == Op::Kind::Custom || op.kind == Op::Kind::Erase;
-      ranges.insert(ranges.end(), op.ranges.begin(), op.ranges.end());
-    }
-    hidden = looks_same_([this, &probe] { play(probe, false); },
-                         [this, &probe] { play(probe, true); }, ranges, whole);
-  }
+  const bool hidden = !is_edit(*step);
   if (hidden) {
     // Undoing the step below takes this back too; with none, nothing older
     // can be replayed over it.

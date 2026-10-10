@@ -43,38 +43,6 @@ class UndoHistory {
   UndoHistory& operator=(const UndoHistory&) = delete;
 
   void attach(const Glib::RefPtr<Gtk::TextBuffer>& buffer, IgnoreTag ignore);
-  // Two tags the document cannot tell apart (a paragraph format and the same
-  // format with other "set directly" bits). A step that only swaps tags for
-  // ones like them changes nothing the document shows: it joins the step
-  // below, not a step of its own, and leaves state_id() as it was.
-  // Asked of each range the swap covers, after it.
-  using SameTag = std::function<bool(const Glib::RefPtr<Gtk::TextTag>&,
-                                     const Glib::RefPtr<Gtk::TextTag>&, int start, int end)>;
-  void set_same_tag(SameTag same)
-  {
-    same_tag_ = std::move(same);
-  }
-  // A tag put on or taken off a range where the document cannot show it (a
-  // character format on the newline of a paragraph that has text). A step
-  // made only of such changes, swaps of like tags and unseen custom changes
-  // joins the step below as well.
-  using UnseenTag = std::function<bool(const Glib::RefPtr<Gtk::TextTag>&, int start, int end)>;
-  void set_unseen_tag(UnseenTag unseen)
-  {
-    unseen_tag_ = std::move(unseen);
-  }
-  // For a step those rules cannot settle: whether the document looks the
-  // same after `back` (the step undone) as before it; `forth` must then
-  // redo it. `ranges` are the step's tag ranges; `whole` says the step also
-  // erased text and put it back or changed the window's own state, so only
-  // the whole document will do. Never asked of typing.
-  using LooksSame =
-      std::function<bool(const std::function<void()>& back, const std::function<void()>& forth,
-                         const std::vector<std::pair<int, int>>& ranges, bool whole)>;
-  void set_looks_same(LooksSame looks_same)
-  {
-    looks_same_ = std::move(looks_same);
-  }
   void detach();
 
   // --- The saved-state hook. ---
@@ -120,9 +88,13 @@ class UndoHistory {
     return open_;
   }
   // A change outside the buffer, as part of the open step. `seen` false: the
-  // document does not show it (see set_same_tag()).
+  // window's own state only, not an edit on its own (see close()).
   void record_custom(std::function<void()> undo, std::function<void()> redo, bool seen = true);
-  // Closes the open step. An empty step is dropped. With `may_merge` (typing
+  // Closes the open step. A step that is no edit (no text inserted or
+  // deleted, every character's tags as before, no seen custom change) adds
+  // no step: its ops join the step below and state_id() stays. Text erased
+  // and put back, as typing or pasting the same text over a selection, IS
+  // an edit and its own step (Greg's rule). With `may_merge` (typing
   // inside the coalescing window) a step that continues the top step's
   // insertion, Backspace run or Delete run joins it, under a fresh id.
   Closed close(int caret, bool may_merge);
@@ -158,8 +130,7 @@ class UndoHistory {
   void on_erase(const Gtk::TextIter& start, const Gtk::TextIter& end);
   void on_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
               const Gtk::TextIter& end, bool apply);
-  enum class Seen { Yes, No, Maybe };
-  Seen seen(const Step& step) const;
+  bool is_edit(const Step& step) const;
   void note_tag_shape(const std::vector<std::pair<int, int>>& ranges);
   void play(Step& step, bool forward);
   void emit()
@@ -169,9 +140,6 @@ class UndoHistory {
 
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   IgnoreTag ignore_;
-  SameTag same_tag_;
-  UnseenTag unseen_tag_;
-  LooksSame looks_same_;
   std::vector<sigc::connection> connections_;
   std::vector<std::unique_ptr<Step>> undo_;
   std::vector<std::unique_ptr<Step>> redo_;

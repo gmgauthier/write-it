@@ -355,6 +355,7 @@ enum class Kind {
   Cut,
   CopyPaste,
   PasteOver,
+  SameOver,
   Flag,
   Size,
   Font,
@@ -384,6 +385,7 @@ const Weighted kOps[] = {
     {Kind::Cut, 3, "cut"},
     {Kind::CopyPaste, 6, "copy, paste elsewhere"},
     {Kind::PasteOver, 3, "paste over selection"},
+    {Kind::SameOver, 3, "same text typed or pasted over itself"},
     {Kind::Flag, 8, "bold/italic/underline"},
     {Kind::Size, 5, "size box"},
     {Kind::Font, 2, "font box"},
@@ -491,6 +493,29 @@ class Run_ {
   // After an edit action: no step if nothing changed, one step, or a merge
   // allowed by the burst rules.
   enum class Burst { None, Insert, Back, Delete };
+  bool text_changed_ = false;
+  bool buffer_edit_ = false;
+
+  // Every character's tags, but the screen-only list ones, stretch by
+  // stretch.
+  std::string tag_signature()
+  {
+    auto buffer = MainWindowProbe::buffer(*w_);
+    std::string out;
+    for (auto it = buffer->begin(); !it.is_end();) {
+      out += std::to_string(it.get_offset()) + ':';
+      for (const auto& tag : it.get_tags()) {
+        const std::string name = tag->property_name().get_value();
+        if (name.rfind("list-shift\x1f", 0) == 0 || name.rfind("list-tab\x1f", 0) == 0)
+          continue;
+        out += name + '|';
+      }
+      out += '\n';
+      if (!it.forward_to_tag_toggle(Glib::RefPtr<Gtk::TextTag>()))
+        break;
+    }
+    return out;
+  }
   void after_edit(size_t steps_before, const State& before, Burst burst, int caret_before)
   {
     settle();
@@ -502,7 +527,7 @@ class Run_ {
       ++doubled_actions;
     if (!MainWindowProbe::buffer(*w_)->get_has_selection() && !MainWindowProbe::buttons_agree(*w_))
       fail("B/I/U buttons disagree with the format typed next");
-    if (same(now, before)) {
+    if (same(now, before) && !buffer_edit_) {
       if (steps != steps_before)
         fail("an action that changed nothing added an undo step");
       // As the snapshot undo did, a user action forgets redo even when it
@@ -699,7 +724,21 @@ class Run_ {
     const State before = record();
     before_rtf_ = before.rtf;
     const int caret = MainWindowProbe::caret(*w_);
+    // Whether the action is an edit by section 5.5: it put text in or took
+    // it out, or left some character's tags other than they were. Then it
+    // is a step and the * even when the document comes out the same.
+    auto buffer = MainWindowProbe::buffer(*w_);
+    const std::string tags_before = tag_signature();
+    text_changed_ = false;
+    sigc::connection inserted = buffer->signal_insert().connect(
+        [this](const Gtk::TextIter&, const Glib::ustring&, int) { text_changed_ = true; }, false);
+    sigc::connection erased = buffer->signal_erase().connect(
+        [this](const Gtk::TextIter&, const Gtk::TextIter&) { text_changed_ = true; }, false);
     act();
+    settle();
+    inserted.disconnect();
+    erased.disconnect();
+    buffer_edit_ = text_changed_ || tag_signature() != tags_before;
     after_edit(steps, before, burst, caret);
   }
 
@@ -793,6 +832,39 @@ class Run_ {
           break;
         MainWindowProbe::select(*w_, a, b);
         paste(Burst::None);
+        break;
+      }
+      case Kind::SameOver: {
+        // Section 5.5: an edit even though the document comes out the same.
+        const std::string text = MainWindowProbe::buffer(*w_)->get_text();
+        const int total = MainWindowProbe::length(*w_);
+        if (total == 0)
+          break;
+        const int a = static_cast<int>(r() % static_cast<std::uint64_t>(total));
+        if (r() % 2) {
+          const gunichar c = MainWindowProbe::buffer(*w_)->get_iter_at_offset(a).get_char();
+          if (c == '\n')
+            break;
+          detail << "type " << c << " over [" << a << ", " << a + 1 << ')';
+          MainWindowProbe::select(*w_, a, a + 1);
+          edit(Burst::None, [&] { key(*w_, gdk_unicode_to_keyval(c)); });
+          break;
+        }
+        const int b = std::min(total, a + 1 + static_cast<int>(r() % 6));
+        detail << "copy [" << a << ", " << b << ") paste over it";
+        MainWindowProbe::select(*w_, a, b);
+        key(*w_, GDK_KEY_c, GDK_CONTROL_MASK);
+        auto clipboard = Gtk::Clipboard::get();
+        wait_for([&] {
+          return clipboard->wait_is_rich_text_available(MainWindowProbe::buffer(*w_)) ||
+                 clipboard->wait_is_text_available();
+        });
+        wait_for([&] { return MainWindowProbe::paste_ready(*w_); });
+        MainWindowProbe::select(*w_, a, b);
+        edit(Burst::None, [&] {
+          key(*w_, GDK_KEY_v, GDK_CONTROL_MASK);
+          wait_for([&] { return text_changed_; });
+        });
         break;
       }
       case Kind::Flag: {
