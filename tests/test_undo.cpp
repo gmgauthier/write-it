@@ -104,6 +104,15 @@ struct MainWindowProbe {
   {
     w.buffer_->insert_interactive_at_cursor(text, true);
   }
+  // A key typed over a selection, as the text view does it: one user
+  // action that deletes the selection and inserts the key.
+  static void type_over(MainWindow& w, const char* text)
+  {
+    w.buffer_->begin_user_action();
+    w.buffer_->erase_selection(true, true);
+    w.buffer_->insert_interactive_at_cursor(text, true);
+    w.buffer_->end_user_action();
+  }
   // Backspace and Delete at the caret, as the text view does them.
   static void backspace(MainWindow& w)
   {
@@ -175,6 +184,17 @@ struct MainWindowProbe {
   static void underline(MainWindow& w)
   {
     w.toggle_flag(MainWindow::TextFlag::Underline);
+  }
+  // Bold switched on over the selection, as Ctrl+B does over text that is
+  // not all bold yet (the same path, without the toggle's all-bold test).
+  static void bold_on(MainWindow& w)
+  {
+    w.apply_run_edit([](Run& run) { run.bold = true; });
+  }
+  // File > Save As to a path: the real write.
+  static bool save_as(MainWindow& w, const std::string& path)
+  {
+    return w.write_rtf(path);
   }
   static void font(MainWindow& w, const char* name)
   {
@@ -396,6 +416,70 @@ void dirty_rule(writeit::MainWindow& w, const Document& start)
   MainWindowProbe::caret(w, 0);
   MainWindowProbe::type(w, " ");
   CHECK(MainWindowProbe::dirty(w) && w.get_title().find('*') != Glib::ustring::npos);
+}
+
+// Greg's rule, both ways (undo_fuzz.md sections 4 and 5.5). An action that
+// inserted or deleted text is an edit even when the result is identical: its
+// own step, and the *. One that never inserted, deleted or re-tagged anything
+// adds no step and leaves the mark as it was. Twelve checks.
+void same_text_edits(writeit::MainWindow& w, const std::string& path)
+{
+  const auto starred = [&w] { return w.get_title().find('*') != Glib::ustring::npos; };
+  const auto typed_abc = [&] {
+    MainWindowProbe::load(w, writeit::blank_document("Sans", 11));
+    MainWindowProbe::caret(w, 0);
+    MainWindowProbe::type(w, "abc");
+    CHECK(MainWindowProbe::save_as(w, path) && !MainWindowProbe::dirty(w) && !starred());
+  };
+
+  // Type abc, Save As, Shift+Left over the c, type c.
+  typed_abc();
+  const Document abc = MainWindowProbe::doc(w);
+  MainWindowProbe::select(w, 3, 2);
+  MainWindowProbe::type_over(w, "c");
+  CHECK(MainWindowProbe::doc(w) == abc && MainWindowProbe::steps(w) == 2);
+  CHECK(MainWindowProbe::dirty(w) && starred());
+  // Ctrl+Z takes back the c typed over, not the earlier typing.
+  MainWindowProbe::undo(w);
+  CHECK(MainWindowProbe::doc(w) == abc && MainWindowProbe::steps(w) == 1 &&
+        !MainWindowProbe::dirty(w) && !starred());
+
+  // The same with Ctrl+C, Ctrl+V over the selected c.
+  typed_abc();
+  MainWindowProbe::select(w, 3, 2);
+  MainWindowProbe::copy(w);
+  settle();
+  MainWindowProbe::paste(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == abc && MainWindowProbe::steps(w) == 2);
+  CHECK(MainWindowProbe::dirty(w) && starred());
+
+  // True no-ops: no step, still clean.
+  const Document start = document({para("Hello"), para("world")});
+  const auto unchanged = [&] {
+    return MainWindowProbe::doc(w) == start && MainWindowProbe::steps(w) == 0 &&
+           !MainWindowProbe::dirty(w) && !starred();
+  };
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 0);
+  MainWindowProbe::backspace(w);
+  CHECK(unchanged());
+  MainWindowProbe::caret(w, MainWindowProbe::length(w));
+  MainWindowProbe::del(w);
+  CHECK(unchanged());
+  Document bold = start;
+  bold.paragraphs[0].runs[0].bold = true;
+  MainWindowProbe::load(w, bold);
+  MainWindowProbe::select(w, 0, 5);
+  MainWindowProbe::bold_on(w);
+  CHECK(MainWindowProbe::doc(w) == bold && MainWindowProbe::steps(w) == 0 &&
+        !MainWindowProbe::dirty(w) && !starred());
+  MainWindowProbe::load(w, start);
+  MainWindowProbe::caret(w, 2);
+  MainWindowProbe::style(w, "Normal");
+  CHECK(unchanged());
+  MainWindowProbe::level(w, -1);
+  CHECK(unchanged());
 }
 
 // Typing: one step per burst, the caret back where it began, the saved
@@ -896,6 +980,7 @@ int main(int argc, char* argv[])
     settle();
     typing(window);
     merged_after_save(window);
+    same_text_edits(window, Glib::build_filename(home, "saved.rtf"));
     delete_and_paste(window);
     formats(window);
     paragraphs(window);
@@ -907,6 +992,7 @@ int main(int argc, char* argv[])
     window.hide();
     settle();
   }
+  g_remove(Glib::build_filename(home, "saved.rtf").c_str());
   g_rmdir(home.c_str());
-  return suite_test::done("undo", 175);
+  return suite_test::done("undo", 187);
 }
