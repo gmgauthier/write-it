@@ -1182,17 +1182,20 @@ UndoHistory::Closed MainWindow::close_step(bool may_merge)
                     before.pending_mark_set == after.pending_mark_set &&
                     same_format(before.pending_mark, after.pending_mark);
   if (!same) {
-    // capture() reads the pending formats only for an empty last paragraph,
-    // and not their "set directly" bits.
-    ParaFormat x = before.pending_para;
-    x.direct = after.pending_para.direct;
-    const bool looks_same = before.pending_para_set == after.pending_para_set &&
-                            x == after.pending_para &&
-                            before.pending_mark_set == after.pending_mark_set &&
-                            same_format(before.pending_mark, after.pending_mark);
+    // The window's own state, not the buffer: an edit only where capture()
+    // reads it differently, for an empty last paragraph (which follows the
+    // paragraph above when no format is pending).
+    bool seen = false;
+    if (final_paragraph_empty()) {
+      const int count = buffer_->get_char_count();
+      const ParaFormat above = count > 0 ? para_at(count - 1) : ParaFormat{};
+      const ParaFormat& was = before.pending_para_set ? before.pending_para : above;
+      const ParaFormat& now = after.pending_para_set ? after.pending_para : above;
+      seen = !(was == now) || before.pending_mark_set != after.pending_mark_set ||
+             (after.pending_mark_set && !(before.pending_mark == after.pending_mark));
+    }
     undo_.record_custom([this, before] { set_side_state(before); },
-                        [this, after] { set_side_state(after); },
-                        final_paragraph_empty() && !looks_same);
+                        [this, after] { set_side_state(after); }, seen);
   }
   return undo_.close(cursor_offset(), may_merge);
 }
