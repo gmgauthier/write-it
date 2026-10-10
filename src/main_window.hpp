@@ -217,6 +217,24 @@ class MainWindow : public Gtk::ApplicationWindow {
   int heading_near(int offset) const;
   bool has_fmt(const Gtk::TextIter& iter) const;
   void strip_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to);
+  // The only way a character format goes on: every other fmt tag on the
+  // range comes off first, so no character ever carries two
+  // (first_doubled_format_tag() in format_tags.hpp checks it).
+  void set_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to,
+               const Glib::RefPtr<Gtk::TextTag>& tag);
+  void on_tag_applied(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& from,
+                      const Gtk::TextIter& to);
+  void clear_applied_fmt();
+  // The start-end choice for a paste (see finish_pending()): which format the
+  // paragraph a paste's first end closes takes, the copied paragraph's
+  // (Word's paragraph mark) or the landing paragraph's.
+  Glib::RefPtr<Gtk::TextTag> first_end_para(const Glib::RefPtr<Gtk::TextTag>& copied,
+                                            const Glib::RefPtr<Gtk::TextTag>& landing) const;
+  // The only way finish_pending() sets a paragraph format: every other para
+  // tag on [from, to) comes off first.
+  void set_para(int from, int to, const Glib::RefPtr<Gtk::TextTag>& tag);
+  // [from, to)'s text takes outline level `level` (0 for none) and no other.
+  void set_heading(int from, int to, int level);
   Run line_break_mark(int newline) const;
   void tag_line_breaks(int start, int end);
   void apply_run_edit(const std::function<void(Run&)>& edit);
@@ -603,6 +621,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   int next_style_from_ = -1;
   Glib::RefPtr<Gtk::TextMark> insert_start_;
   Glib::RefPtr<Gtk::TextMark> insert_end_;
+  // Character formats applied over the text inserted in this user action:
+  // a paste or drop of this document's text copying its source's tags, or
+  // Replace giving the match's format. finish_pending() keeps these on the
+  // new text and nothing else GTK gave it from around the insertion point.
+  struct AppliedFmt {
+    Glib::RefPtr<Gtk::TextTag> tag;
+    Glib::RefPtr<Gtk::TextMark> from;
+    Glib::RefPtr<Gtk::TextMark> to;
+  };
+  std::vector<AppliedFmt> applied_fmt_;
+  // Paragraph formats applied likewise: a paste's or drop's source tags.
+  std::vector<AppliedFmt> applied_para_;
 
   std::unique_ptr<Gtk::Dialog> find_dialog_;
   Gtk::Entry* find_entry_ = nullptr;

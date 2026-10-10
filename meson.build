@@ -40,6 +40,7 @@ writeit_core_sources = files(
   'src/editor.cpp',
   'src/filename.cpp',
   'src/font_sizes.cpp',
+  'src/format_tags.cpp',
   'src/main_window.cpp',
   'src/narrow_combo.cpp',
   'src/open_plan.cpp',
@@ -365,6 +366,16 @@ write_it_clipboard_paste_tests = executable(
   dependencies: [writeit_dep],
 )
 test('clipboard-paste', write_it_clipboard_paste_tests, timeout: 60, is_parallel: false)
+
+# The real window under a display: pasted text keeps the character format it
+# was copied with, and no character carries two format tags, after paste,
+# drag and drop, undo, redo, bold and a named style.
+write_it_paste_format_tests = executable(
+  'write-it-paste-format-tests',
+  'tests/test_paste_format.cpp',
+  dependencies: [writeit_dep],
+)
+test('paste-format', write_it_paste_format_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: what overflows the toolbars at 960 px and
 # at the narrowest reaches the overflow menus with its label, and does there
