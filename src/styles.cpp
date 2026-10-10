@@ -348,10 +348,31 @@ void MainWindow::on_style_dialog()
   auto* font = Gtk::manage(new Gtk::ComboBoxText());
   fill_font_combo(*font, work[current].format.font);
   // Half points, as the size box and RTF's \fsN: 10.5 stays 10.5. Shown as
-  // the size box shows a size, "11" and "10.5".
+  // the size box shows a size, "11" and "10.5". A typed size is read as the
+  // toolbar's size box reads it (parse_size()), never rounded or clamped
+  // into one: what the box refuses stays in the field as typed, for OK,
+  // another style or New... to refuse with the box's message.
   auto* size = Gtk::manage(
       new Gtk::SpinButton(Gtk::Adjustment::create(11, 1, kMaxStyleSize, 0.5, 2), 0.5, 1));
-  size->signal_output().connect([size] {
+  size->set_update_policy(Gtk::UPDATE_IF_VALID);
+  // Set by a refused entry, so the redraw GTK then asks for keeps its text.
+  bool keep_typed = false;
+  size->signal_input().connect(
+      [size, &keep_typed](double* value) {
+        const double parsed = parse_size(size->get_text().raw());
+        if (parsed == 0) {
+          keep_typed = true;
+          return GTK_INPUT_ERROR;
+        }
+        *value = parsed;
+        return 1;
+      },
+      true);
+  size->signal_output().connect([size, &keep_typed] {
+    if (keep_typed) {
+      keep_typed = false;
+      return true;
+    }
     size->set_text(size_text(size->get_value()));
     return true;
   });
@@ -464,6 +485,21 @@ void MainWindow::on_style_dialog()
     first_shown = first->get_value();
     filling = false;
   };
+  // Whether the size field holds what the toolbar's size box would refuse.
+  // If so, says why in the box's words (size_refusal()) and gives the field
+  // back the keyboard, its text selected to type over.
+  auto size_refused = [&] {
+    const std::string refusal = size_refusal(size->get_text().raw());
+    if (refusal.empty())
+      return false;
+    Gtk::MessageDialog message(dialog, refusal, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+    message.set_title("Write-It");
+    message.run();
+    message.hide();
+    size->grab_focus();
+    size->select_region(0, -1);
+    return true;
+  };
   auto store = [&](size_t index) {
     Style& style = work[index];
     left->update();
@@ -492,11 +528,21 @@ void MainWindow::on_style_dialog()
   chooser->signal_changed().connect([&] {
     if (filling || chooser->get_active_row_number() < 0)
       return;
+    // A refused size keeps the dialog on its style, as OK keeps it open.
+    if (!size_refusal(size->get_text().raw()).empty()) {
+      filling = true;
+      chooser->set_active(static_cast<int>(current));
+      filling = false;
+      size_refused();
+      return;
+    }
     store(current);
     current = static_cast<size_t>(chooser->get_active_row_number());
     load(current);
   });
   make->signal_clicked().connect([&] {
+    if (size_refused())
+      return;
     store(current);
     Gtk::Dialog ask("New Style", dialog, true);
     ask.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
@@ -554,6 +600,9 @@ void MainWindow::on_style_dialog()
       text_.grab_focus();
       return;
     }
+    // Refused: nothing changes, and the dialog stays open.
+    if (size_refused())
+      continue;
     store(current);
     Document after = base;
     std::string failed;
