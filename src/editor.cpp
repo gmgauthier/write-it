@@ -495,6 +495,8 @@ void MainWindow::build_editor()
         start.backward_chars(static_cast<int>(text.length()));
         if (start.get_line() != end.get_line())
           list_lines_valid_ = false;
+        if (in_user_ && !loading_ && !restoring_ && !text.empty())
+          text_touched_ = true;
         note_change({});
       },
       true);
@@ -502,6 +504,8 @@ void MainWindow::build_editor()
       [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
         if (start.get_line() != end.get_line())
           list_lines_valid_ = false;
+        if (in_user_ && !loading_ && !restoring_ && start.get_offset() != end.get_offset())
+          text_touched_ = true;
         note_change({});
       },
       false);
@@ -514,6 +518,11 @@ void MainWindow::build_editor()
   };
   buffer_->signal_apply_tag().connect(changes_on_tag);
   buffer_->signal_remove_tag().connect(changes_on_tag);
+  // Before the tag goes on or comes off: what it covered.
+  auto tag_before = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                           const Gtk::TextIter& end) { note_tag_before(tag, start, end); };
+  buffer_->signal_apply_tag().connect(tag_before, false);
+  buffer_->signal_remove_tag().connect(tag_before, false);
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
   // The clipboard outlives the window: ~MainWindow disconnects this. It is
   // asked again on every change, and when the window comes back to the
@@ -1107,6 +1116,34 @@ bool MainWindow::dirty() const
   return undo_state_.state_id() != saved_id_;
 }
 
+void MainWindow::note_tag_before(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                                 const Gtk::TextIter& end)
+{
+  // Once text has gone in or out the action is an edit anyway, and the
+  // offsets noted no longer hold.
+  if (!in_user_ || loading_ || restoring_ || text_touched_)
+    return;
+  const std::string name = tag_name(tag);
+  if (is_list_shift(name) || is_list_tab(name))
+    return;
+  std::map<int, bool>& had = tags_before_[tag];
+  for (auto iter = start; iter.compare(end) < 0; ++iter)
+    had.emplace(iter.get_offset(), iter.has_tag(tag));
+}
+
+bool MainWindow::edited() const
+{
+  if (text_touched_)
+    return true;
+  for (const auto& [tag, had] : tags_before_) {
+    for (const auto& [offset, on] : had) {
+      if (buffer_->get_iter_at_offset(offset).has_tag(tag) != on)
+        return true;
+    }
+  }
+  return false;
+}
+
 void MainWindow::note_change(const Glib::RefPtr<Gtk::TextTag>& tag)
 {
   // A load sets the state itself (New, Open), and undo and redo put back
@@ -1261,6 +1298,8 @@ void MainWindow::on_user_begin()
   snap.offset = cursor_offset();
   snap.state = undo_state_.state_id();
   begin_id_ = snap.state;
+  text_touched_ = false;
+  tags_before_.clear();
   undo_.push_back(std::move(snap));
   redo_.clear();
 }
@@ -1278,9 +1317,14 @@ void MainWindow::on_user_end()
     pending_mark_set_ = false;
   apply_next_style();
   const Document current = capture();
-  if (!undo_.empty() && undo_.back().doc == current) {
+  // An action that inserted, deleted or re-tagged something is an edit and
+  // a step, even if the document comes out the same (typing "c" over a
+  // selected "c"). One that did none of these is not: the tags it stripped
+  // and put back leave the state as it was.
+  const bool edit = edited();
+  tags_before_.clear();
+  if (!edit && !undo_.empty() && undo_.back().doc == current) {
     undo_.pop_back();
-    // Nothing changed after all: the state before the action.
     if (undo_state_.state_id() != begin_id_)
       undo_state_.restore(begin_id_);
   } else {
