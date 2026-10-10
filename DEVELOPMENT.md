@@ -31,6 +31,12 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 | An imported `.txt` or `.md` opens unmodified | Merged |
 | Window size, maximised state, and zoom remembered | Merged |
 
+Known issues after M2, to be fixed in a later milestone:
+
+- Typing slows as the document grows, because every keystroke re-reads the whole document.
+- A word copied from a Heading 1 and pasted into a Normal paragraph saves with `\outlinelevel0` but no `\s1`, so the paragraph is marked as a heading while its style is still Normal.
+- The Format → Style… list shows style names longer than the 32 characters the Named styles item allows.
+
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
 ## 1. Locked decisions
