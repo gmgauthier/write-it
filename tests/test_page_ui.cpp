@@ -125,10 +125,43 @@ void activate(Gtk::MenuItem* item)
   settle();
 }
 
+// One left click in a cell's text window, through GTK's event path.
+void click_view(Gtk::TextView& view, double x, double y, guint time)
+{
+  auto text_win = view.get_window(Gtk::TEXT_WINDOW_TEXT);
+  if (!text_win)
+    return;
+  int origin_x = 0;
+  int origin_y = 0;
+  text_win->get_origin(origin_x, origin_y);
+  auto pointer = text_win->get_display()->get_default_seat()->get_pointer();
+  auto send = [&](GdkEventType type) {
+    GdkEvent* event = gdk_event_new(type);
+    event->button.window = GDK_WINDOW(g_object_ref(text_win->gobj()));
+    event->button.send_event = TRUE;
+    event->button.time = time;
+    event->button.x = x;
+    event->button.y = y;
+    event->button.x_root = origin_x + x;
+    event->button.y_root = origin_y + y;
+    event->button.button = 1;
+    event->button.state = type == GDK_BUTTON_RELEASE ? GDK_BUTTON1_MASK : 0;
+    if (pointer) {
+      event->button.device = pointer->gobj();
+      gdk_event_set_source_device(event, pointer->gobj());
+    }
+    gtk_main_do_event(event);
+    gdk_event_free(event);
+  };
+  send(GDK_BUTTON_PRESS);
+  send(GDK_BUTTON_RELEASE);
+  settle();
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 42;
+constexpr int kChecks = 50;
 
 int main(int argc, char* argv[])
 {
@@ -310,6 +343,52 @@ int main(int argc, char* argv[])
     }
     CHECK(cell_views == 16);
     CHECK(top_left);
+
+    Gtk::TextView* cell = nullptr;
+    Gtk::TextView* other = nullptr;
+    if (body) {
+      for (Gtk::Widget* child : body->get_children()) {
+        walk(*child, [&](Gtk::Widget& widget) {
+          auto* view = dynamic_cast<Gtk::TextView*>(&widget);
+          if (!view || view == body)
+            return;
+          const std::string text = view->get_buffer()->get_text().raw();
+          if (!cell && text.compare(0, 15, "asdfasfdsafddsf") == 0)
+            cell = view;
+          else if (!other && text.empty())
+            other = view;
+        });
+      }
+    }
+    CHECK(cell != nullptr);
+    CHECK(other != nullptr);
+    bool cell_focus = false;
+    bool still_cell = false;
+    bool other_focus = false;
+    bool cell_left = false;
+    bool same_doc = false;
+    int near = -1;
+    int far = -1;
+    if (cell && other) {
+      auto text_win = cell->get_window(Gtk::TEXT_WINDOW_TEXT);
+      const int width = text_win ? text_win->get_width() : 0;
+      click_view(*cell, 4, 4, 1000);
+      cell_focus = cell->has_focus();
+      near = cell->get_buffer()->get_insert()->get_iter().get_offset();
+      click_view(*cell, std::max(8, width - 4), 4, 2000);
+      still_cell = cell->has_focus();
+      far = cell->get_buffer()->get_insert()->get_iter().get_offset();
+      click_view(*other, 4, 4, 3000);
+      other_focus = other->has_focus();
+      cell_left = !cell->has_focus();
+      same_doc = writeit::MainWindowProbe::doc(window) == sample;
+    }
+    CHECK(cell_focus);
+    CHECK(still_cell);
+    CHECK(near != far);
+    CHECK(other_focus);
+    CHECK(cell_left);
+    CHECK(same_doc);
   }
   return suite_test::done("page-ui", kChecks);
 }
