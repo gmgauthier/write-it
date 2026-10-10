@@ -1179,11 +1179,343 @@ Document plain_import(const std::string& text, const std::string& font, double s
   return doc;
 }
 
+namespace {
+
+std::string trim_copy(const std::string& text)
+{
+  size_t begin = 0;
+  while (begin < text.size() && (text[begin] == ' ' || text[begin] == '\t'))
+    ++begin;
+  size_t end = text.size();
+  while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t'))
+    --end;
+  return text.substr(begin, end - begin);
+}
+
+// Columns of leading spaces. A tab advances to the next multiple of 4, as
+// CommonMark does.
+int leading_columns(const std::string& line, size_t& i)
+{
+  int columns = 0;
+  i = 0;
+  while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) {
+    if (line[i] == '\t')
+      columns += 4 - (columns % 4);
+    else
+      ++columns;
+    ++i;
+  }
+  return columns;
+}
+
+bool odd_backslash(const std::string& text, size_t index)
+{
+  size_t slashes = 0;
+  while (index > 0 && text[index - 1] == '\\') {
+    --index;
+    ++slashes;
+  }
+  return slashes % 2 == 1;
+}
+
+// Cells of a pipe row. A leading or trailing | is the border. \| is a pipe
+// in the cell, and a tab stays in the cell: it is not another column.
+bool split_row(const std::string& line, std::vector<std::string>& cells)
+{
+  std::string text = trim_copy(line);
+  if (text.find('|') == std::string::npos)
+    return false;
+  if (!text.empty() && text.front() == '|')
+    text.erase(text.begin());
+  if (!text.empty() && text.back() == '|' && !odd_backslash(text, text.size() - 1))
+    text.pop_back();
+  cells.clear();
+  std::string current;
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '\\' && i + 1 < text.size()) {
+      current.push_back(text[i + 1]);
+      ++i;
+      continue;
+    }
+    if (text[i] == '|') {
+      cells.push_back(trim_copy(current));
+      current.clear();
+      continue;
+    }
+    current.push_back(text[i]);
+  }
+  cells.push_back(trim_copy(current));
+  return true;
+}
+
+bool delimiter_cell(const std::string& cell)
+{
+  size_t i = 0;
+  if (i < cell.size() && cell[i] == ':')
+    ++i;
+  size_t hyphens = 0;
+  while (i < cell.size() && cell[i] == '-') {
+    ++hyphens;
+    ++i;
+  }
+  if (i < cell.size() && cell[i] == ':')
+    ++i;
+  return i == cell.size() && hyphens >= 3;
+}
+
+bool delimiter_row(const std::string& line)
+{
+  std::vector<std::string> cells;
+  if (!split_row(line, cells) || cells.empty())
+    return false;
+  for (const std::string& cell : cells) {
+    if (!delimiter_cell(cell))
+      return false;
+  }
+  return true;
+}
+
+bool starts_with_pipe(const std::string& line)
+{
+  size_t i = 0;
+  while (i < line.size() && (line[i] == ' ' || line[i] == '\t'))
+    ++i;
+  return i < line.size() && line[i] == '|';
+}
+
+struct ListMark {
+  bool ok = false;
+  ListKind kind = ListKind::None;
+  int level = 0;
+  int content_column = 0;
+  long long number = 1;
+  std::string body;
+};
+
+ListMark list_mark(const std::string& line)
+{
+  ListMark mark;
+  size_t i = 0;
+  const int indent = leading_columns(line, i);
+  if (i >= line.size())
+    return mark;
+  if (line[i] == '-' || line[i] == '*' || line[i] == '+') {
+    ++i;
+    mark.kind = ListKind::Bullet;
+    mark.content_column = indent + 2;
+  } else if (std::isdigit(static_cast<unsigned char>(line[i]))) {
+    long long number = 0;
+    int digits = 0;
+    while (i < line.size() && std::isdigit(static_cast<unsigned char>(line[i]))) {
+      if (digits >= 9)
+        return mark;
+      number = number * 10 + (line[i] - '0');
+      ++i;
+      ++digits;
+    }
+    if (digits == 0 || i >= line.size() || (line[i] != '.' && line[i] != ')'))
+      return mark;
+    ++i;
+    mark.kind = ListKind::Number;
+    mark.number = number;
+    mark.content_column = indent + digits + 2;
+  } else {
+    return mark;
+  }
+  if (i < line.size() && line[i] != ' ' && line[i] != '\t')
+    return mark;
+  mark.ok = true;
+  mark.level = std::min(kListLevels - 1, indent / 2);
+  mark.body = trim_copy(line.substr(i));
+  return mark;
+}
+
+bool table_at(const std::vector<std::string>& lines, size_t index)
+{
+  if (index + 1 >= lines.size())
+    return false;
+  std::vector<std::string> header;
+  std::vector<std::string> delim;
+  if (!split_row(lines[index], header) || !split_row(lines[index + 1], delim))
+    return false;
+  if (header.empty() || header.size() != delim.size() || header.size() > kMaxTableColumns)
+    return false;
+  for (const std::string& cell : delim) {
+    if (!delimiter_cell(cell))
+      return false;
+  }
+  return true;
+}
+
+bool starts_block(const std::vector<std::string>& lines, size_t index)
+{
+  if (index >= lines.size() || lines[index].empty())
+    return false;
+  int level = 0;
+  std::string body;
+  if (heading_marks(lines[index], level, body))
+    return true;
+  if (list_mark(lines[index]).ok)
+    return true;
+  return table_at(lines, index);
+}
+
+std::string escape_cell(const std::string& text)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (char c : text) {
+    if (c == '\\' || c == '|')
+      out.push_back('\\');
+    if (c == '\n' || c == '\r') {
+      out.push_back(' ');
+      continue;
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+// The numbered lists seen so far. Blank lines stay inside a list. A
+// paragraph, a heading, a table, or a bullet ends it, and the next number
+// starts a new one at the marker it writes. Later markers in the same list
+// are decorative, as in CommonMark; each level keeps its first marker.
+struct OrderedLists {
+  bool open = false;
+  bool any = false;
+  int fresh = 2;
+  std::array<int, kListLevels> seen{};
+
+  OrderedLists()
+  {
+    seen.fill(0);
+  }
+
+  void close()
+  {
+    open = false;
+  }
+
+  void apply(ListFormat& list, int level, long long marker)
+  {
+    if (!open) {
+      seen.fill(0);
+      open = true;
+      list.list = any ? fresh++ : 0;
+      any = true;
+    } else {
+      list.list = 0;
+    }
+    if (seen[static_cast<size_t>(level)] == 0) {
+      const long long capped = std::min(marker, static_cast<long long>(kMaxListStart));
+      list.start = static_cast<int>(std::max<long long>(0, capped));
+    } else {
+      list.start = 1;
+    }
+    for (int deeper = level; deeper < kListLevels; ++deeper)
+      seen[static_cast<size_t>(deeper)] = deeper == level ? 1 : 0;
+  }
+};
+
+bool append_table(Document& doc, const std::vector<std::string>& lines, size_t& index,
+                  const std::string& font, double size)
+{
+  std::vector<std::string> header;
+  if (!split_row(lines[index], header) || header.empty() || header.size() > kMaxTableColumns)
+    return false;
+  const bool bordered = starts_with_pipe(lines[index]);
+  const int columns = static_cast<int>(header.size());
+  std::vector<std::vector<std::string>> grid(1);
+  grid[0] = std::move(header);
+  // The delimiter is the next line; table_at already checked it.
+  index += 2;
+  while (index < lines.size() && grid.size() < static_cast<size_t>(kMaxTableRows)) {
+    if (lines[index].empty() || starts_block(lines, index) || delimiter_row(lines[index]))
+      break;
+    if (bordered && !starts_with_pipe(lines[index]))
+      break;
+    std::vector<std::string> cells;
+    if (!split_row(lines[index], cells))
+      break;
+    if (cells.size() < static_cast<size_t>(columns))
+      cells.resize(static_cast<size_t>(columns));
+    else if (cells.size() > static_cast<size_t>(columns))
+      cells.resize(static_cast<size_t>(columns));
+    grid.push_back(std::move(cells));
+    ++index;
+  }
+  const int rows = static_cast<int>(grid.size());
+  const bool was_empty = doc.paragraphs.empty();
+  const size_t at = doc.paragraphs.size();
+  if (!insert_table(doc.paragraphs, at, rows, columns, page_text_twips(doc.page)))
+    return false;
+  if (was_empty && !doc.paragraphs.empty() && doc.paragraphs.back().cell.table == 0)
+    doc.paragraphs.pop_back();
+  const size_t base = was_empty ? 0 : at;
+  for (int row = 0; row < rows; ++row) {
+    for (int column = 0; column < columns; ++column) {
+      const size_t slot = base + static_cast<size_t>(row * columns + column);
+      Paragraph parsed =
+          parse_inlines(grid[static_cast<size_t>(row)][static_cast<size_t>(column)], font, size, 0);
+      parsed.cell = doc.paragraphs[slot].cell;
+      doc.paragraphs[slot] = std::move(parsed);
+    }
+  }
+  return true;
+}
+
+std::string cell_text(const Document& doc, const std::vector<Style>& sheet, size_t begin,
+                      size_t end, int row, int column)
+{
+  std::string text;
+  for (size_t i = begin; i < end; ++i) {
+    const Paragraph& paragraph = doc.paragraphs[i];
+    if (paragraph.cell.row != row || paragraph.cell.column != column)
+      continue;
+    const std::string part = inline_export(paragraph, paragraph_style(sheet, paragraph).format);
+    if (part.empty())
+      continue;
+    if (!text.empty())
+      text.push_back(' ');
+    text += part;
+  }
+  return escape_cell(text);
+}
+
+std::string table_markdown(const Document& doc, const std::vector<Style>& sheet, size_t begin,
+                           size_t end)
+{
+  const int rows = doc.paragraphs[begin].cell.rows;
+  const int columns = doc.paragraphs[begin].cell.columns;
+  if (rows < 1 || columns < 1 || begin >= end)
+    return {};
+  std::string out;
+  auto write_row = [&](int row, bool delimiter) {
+    out.push_back('|');
+    for (int column = 0; column < columns; ++column) {
+      out.push_back(' ');
+      out += delimiter ? "---" : cell_text(doc, sheet, begin, end, row, column);
+      out += " |";
+    }
+  };
+  write_row(0, false);
+  out.push_back('\n');
+  write_row(0, true);
+  for (int row = 1; row < rows; ++row) {
+    out.push_back('\n');
+    write_row(row, false);
+  }
+  return out;
+}
+
+}  // namespace
+
 Document markdown_import(const std::string& text, const std::string& font, double size)
 {
   Document doc;
   doc.styles = builtin_styles(font, size);
   const std::vector<std::string> lines = lines_of(text);
+  OrderedLists numbers;
   size_t i = 0;
   while (i < lines.size()) {
     if (lines[i].empty()) {
@@ -1194,6 +1526,7 @@ Document markdown_import(const std::string& text, const std::string& font, doubl
     std::string body;
     if (heading_marks(lines[i], level, body)) {
       // A heading takes its Heading style, as if applied to body text.
+      numbers.close();
       Paragraph paragraph = parse_inlines(body, font, size, level);
       const std::string name = "Heading " + std::to_string(level);
       restyle_paragraph(paragraph, doc.styles.front(), *find_style(doc.styles, name));
@@ -1201,10 +1534,46 @@ Document markdown_import(const std::string& text, const std::string& font, doubl
       ++i;
       continue;
     }
-    std::string joined;
-    while (i < lines.size() && !lines[i].empty() && !heading_marks(lines[i], level, body)) {
-      if (!joined.empty())
-        joined.push_back(' ');
+    const ListMark mark = list_mark(lines[i]);
+    if (mark.ok) {
+      std::string item_body = mark.body;
+      const int content_column = mark.content_column;
+      ++i;
+      while (i < lines.size() && !lines[i].empty() && !starts_block(lines, i)) {
+        size_t at = 0;
+        if (leading_columns(lines[i], at) < content_column)
+          break;
+        const std::string more = trim_copy(lines[i]);
+        if (!more.empty()) {
+          item_body.push_back(' ');
+          item_body += more;
+        }
+        ++i;
+      }
+      Paragraph paragraph = parse_inlines(item_body, font, size, 0);
+      paragraph.list.kind = mark.kind;
+      paragraph.list.level = mark.level;
+      if (mark.kind == ListKind::Bullet)
+        numbers.close();
+      else
+        numbers.apply(paragraph.list, mark.level, mark.number);
+      paragraph.list = clamp_list(paragraph.list);
+      paragraph.indents = list_indents(paragraph.list.level);
+      doc.paragraphs.push_back(paragraph);
+      continue;
+    }
+    if (table_at(lines, i)) {
+      numbers.close();
+      const size_t before = i;
+      if (append_table(doc, lines, i, font, size) && i > before)
+        continue;
+      i = before;
+    }
+    numbers.close();
+    std::string joined = lines[i];
+    ++i;
+    while (i < lines.size() && !lines[i].empty() && !starts_block(lines, i)) {
+      joined.push_back(' ');
       joined += lines[i];
       ++i;
     }
@@ -1220,18 +1589,51 @@ std::string markdown_export(const Document& doc)
   std::string out;
   bool any = false;
   const std::vector<Style> sheet = style_sheet(doc);
-  for (const Paragraph& paragraph : doc.paragraphs) {
-    const std::string body = inline_export(paragraph, paragraph_style(sheet, paragraph).format);
-    if (paragraph.heading == 0 && body.empty())
-      continue;
+  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  auto block = [&](const std::string& text) {
+    if (text.empty())
+      return;
     if (any)
       out += "\n\n";
     any = true;
-    if (paragraph.heading >= 1 && paragraph.heading <= 6) {
-      out.append(static_cast<size_t>(paragraph.heading), '#');
-      out += " ";
+    out += text;
+  };
+  for (size_t index = 0; index < doc.paragraphs.size();) {
+    const Paragraph& paragraph = doc.paragraphs[index];
+    if (paragraph.cell.table != 0) {
+      const int id = paragraph.cell.table;
+      size_t end = index + 1;
+      while (end < doc.paragraphs.size() && doc.paragraphs[end].cell.table == id)
+        ++end;
+      block(table_markdown(doc, sheet, index, end));
+      index = end;
+      continue;
     }
-    out += body;
+    const std::string body = inline_export(paragraph, paragraph_style(sheet, paragraph).format);
+    const ListFormat list = clamp_list(paragraph.list);
+    if (list.kind == ListKind::None && paragraph.heading == 0 && body.empty()) {
+      ++index;
+      continue;
+    }
+    std::string line;
+    if (list.kind != ListKind::None) {
+      // The counted label, not the a. / i. drawn at deeper levels: Markdown
+      // ordered lists are decimal, and the level is the indent.
+      line.append(static_cast<size_t>(list.level) * 2, ' ');
+      if (list.kind == ListKind::Bullet)
+        line += "- ";
+      else
+        line += std::to_string(numbers[index]) + ". ";
+      line += body;
+    } else {
+      if (paragraph.heading >= 1 && paragraph.heading <= 6) {
+        line.append(static_cast<size_t>(paragraph.heading), '#');
+        line += " ";
+      }
+      line += body;
+    }
+    block(line);
+    ++index;
   }
   return out;
 }

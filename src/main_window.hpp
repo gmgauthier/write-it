@@ -155,6 +155,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void connect_format();
   void fill_font_combo(Gtk::ComboBoxText& combo, const std::string& active);
   bool new_document(bool prompt);
+  void on_new_from_template();
+  // Loads a shipped RTF starter as a new unsaved document. The starter is
+  // not the file Save writes.
+  bool apply_template(const std::string& path);
   void open_document();
   bool open_path(const std::string& path, OpenKind fallback);
   bool save_document();
@@ -319,6 +323,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   void install_stories(const Document& doc);
   void refresh_stories();
   void on_page_setup();
+  // File → Print… and the toolbar button. The system dialog; the page view
+  // is what it draws, including when the window is showing Draft.
+  void on_print();
+  // The same drawing, written to a PDF. Tests use this. No dialog.
+  bool export_page(const std::string& path);
+  bool run_print(Gtk::PrintOperationAction action, const std::string& path, std::string& error);
+  int print_page_count() const;
+  void draw_print_page(const Glib::RefPtr<Gtk::PrintContext>& context, int page_nr);
   void on_columns();
   void on_page_break();
   void on_insert_table();
@@ -469,6 +481,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void find_next();
   void replace_once();
   void on_options();
+  void on_spelling();
   void tell(const std::string& sentence);
 
   Settings settings_;
@@ -511,11 +524,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::array<Gtk::RadioMenuItem*, 6> zoom_status_{};
 
   Gtk::MenuItem* new_item_ = nullptr;
+  Gtk::MenuItem* template_item_ = nullptr;
   Gtk::MenuItem* open_item_ = nullptr;
   Gtk::MenuItem* recent_item_ = nullptr;
   Gtk::MenuItem* save_item_ = nullptr;
   Gtk::MenuItem* save_as_item_ = nullptr;
   Gtk::MenuItem* export_item_ = nullptr;
+  Gtk::MenuItem* print_item_ = nullptr;
   Gtk::MenuItem* close_item_ = nullptr;
   Gtk::MenuItem* undo_item_ = nullptr;
   Gtk::MenuItem* redo_item_ = nullptr;
@@ -537,6 +552,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
   Gtk::MenuItem* justify_item_ = nullptr;
+  Gtk::MenuItem* spelling_item_ = nullptr;
   Gtk::MenuItem* options_item_ = nullptr;
   Gtk::MenuItem* page_setup_item_ = nullptr;
   Gtk::MenuItem* picture_item_ = nullptr;
@@ -561,6 +577,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToolButton* new_tool_ = nullptr;
   Gtk::ToolButton* open_tool_ = nullptr;
   Gtk::ToolButton* save_tool_ = nullptr;
+  Gtk::ToolButton* print_tool_ = nullptr;
   Gtk::ToolButton* cut_tool_ = nullptr;
   Gtk::ToolButton* copy_tool_ = nullptr;
   Gtk::ToolButton* paste_tool_ = nullptr;

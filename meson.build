@@ -50,6 +50,8 @@ writeit_core_sources = files(
   'src/para_check.cpp',
   'src/rtf.cpp',
   'src/settings.cpp',
+  'src/spelling.cpp',
+  'src/templates.cpp',
   'src/styles.cpp',
   'src/undo.cpp',
   'src/units.cpp',
@@ -87,6 +89,11 @@ install_data(
   install_dir: get_option('datadir') / 'write-it',
 )
 
+install_data(
+  'data/templates/Letter.rtf',
+  install_dir: get_option('datadir') / 'write-it' / 'templates',
+)
+
 write_it_open_tests = executable(
   'write-it-open-tests',
   'tests/test_open.cpp',
@@ -107,6 +114,13 @@ write_it_settings_tests = executable(
   dependencies: [writeit_dep],
 )
 test('settings', write_it_settings_tests)
+
+write_it_spelling_tests = executable(
+  'write-it-spelling-tests',
+  'tests/test_spelling.cpp',
+  dependencies: [writeit_dep],
+)
+test('spelling', write_it_spelling_tests)
 
 # Every test that opens a GTK window passes is_parallel: false. They all
 # share the one Xvfb display, and with it the X PRIMARY selection and the
@@ -403,6 +417,24 @@ write_it_toolbar_overflow_tests = executable(
   dependencies: [writeit_dep],
 )
 test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: Print writes the page view at the
+# document's paper size. Draft is put back afterwards.
+write_it_print_tests = executable(
+  'write-it-print-tests',
+  'tests/test_print.cpp',
+  dependencies: [writeit_dep, dependency('zlib')],
+)
+test('print', write_it_print_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: New from Template loads a shipped RTF
+# starter as an unsaved document.
+write_it_template_tests = executable(
+  'write-it-template-tests',
+  'tests/test_template.cpp',
+  dependencies: [writeit_dep],
+)
+test('template', write_it_template_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: a file with half-point sizes and an empty
 # 20 pt line, opened, shown in the size box, typed in and saved back.
