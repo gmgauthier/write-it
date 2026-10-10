@@ -117,11 +117,16 @@ std::string tag_name(const Glib::RefPtr<Tag>& tag)
 
 std::string fmt_name(const Run& run)
 {
-  // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag.
-  return std::string("fmt") + '\x1f' + run.font + '\x1f' +
-         std::to_string(half_points_of(run.size)) + '\x1f' + (run.bold ? "1" : "0") + '\x1f' +
-         (run.italic ? "1" : "0") + '\x1f' + (run.underline ? "1" : "0") + '\x1f' +
-         std::to_string(run.direct);
+  // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag. A
+  // footnote marker adds its 1-based index; a run without one keeps the
+  // seven-part tag it has always had.
+  std::string name = std::string("fmt") + '\x1f' + run.font + '\x1f' +
+                     std::to_string(half_points_of(run.size)) + '\x1f' + (run.bold ? "1" : "0") +
+                     '\x1f' + (run.italic ? "1" : "0") + '\x1f' + (run.underline ? "1" : "0") +
+                     '\x1f' + std::to_string(run.direct);
+  if (run.note != 0)
+    name += '\x1f' + std::to_string(run.note);
+  return name;
 }
 
 bool parse_fmt(const std::string& name, Run& run)
@@ -137,12 +142,13 @@ bool parse_fmt(const std::string& name, Run& run)
     }
   }
   parts.push_back(current);
-  if (parts.size() != 7 || parts[0] != "fmt")
+  if ((parts.size() != 7 && parts.size() != 8) || parts[0] != "fmt")
     return false;
   try {
     run.font = parts[1];
     run.size = size_from_half_points(std::stoi(parts[2]));
     run.direct = static_cast<unsigned>(std::stoul(parts[6]));
+    run.note = parts.size() == 8 ? std::stoi(parts[7]) : 0;
   } catch (const std::exception&) {
     return false;
   }
@@ -150,6 +156,7 @@ bool parse_fmt(const std::string& name, Run& run)
   run.italic = parts[4] == "1";
   run.underline = parts[5] == "1";
   run.text.clear();
+  run.image.reset();
   return true;
 }
 
@@ -158,6 +165,12 @@ bool parse_fmt(const std::string& name, Run& run)
 // and redo keep them, and last the style's name (which has no controls, so
 // no \x1f). Every character of a paragraph, its newline included, carries
 // exactly one.
+void append_field(std::string& name, int value)
+{
+  name += '\x1f';
+  name += std::to_string(value);
+}
+
 std::string para_name(const ParaFormat& format)
 {
   const Indents& indents = format.indents;
@@ -166,10 +179,24 @@ std::string para_name(const ParaFormat& format)
   for (const int value :
        {indents.left, indents.right, indents.first, static_cast<int>(format.align),
         static_cast<int>(list.kind), list.level, list.has_own ? 1 : 0, list.own.left,
-        list.own.right, list.own.first, list.list, list.start, static_cast<int>(format.direct)}) {
+        list.own.right, list.own.first, list.list, list.start, static_cast<int>(format.direct)})
+    append_field(name, value);
+  // A plain paragraph keeps the fourteen-part tag it has always had.
+  const bool plain = !format.page_break && format.cell.table == 0 && format.cell.widths.empty();
+  if (plain) {
     name += '\x1f';
-    name += std::to_string(value);
+    name += format.style;
+    return name;
   }
+  append_field(name, format.page_break ? 1 : 0);
+  append_field(name, format.cell.table);
+  append_field(name, format.cell.row);
+  append_field(name, format.cell.column);
+  append_field(name, format.cell.rows);
+  append_field(name, format.cell.columns);
+  append_field(name, static_cast<int>(format.cell.widths.size()));
+  for (int width : format.cell.widths)
+    append_field(name, width);
   name += '\x1f';
   name += format.style;
   return name;
@@ -190,17 +217,31 @@ bool parse_para(const std::string& name, ParaFormat& format)
       current.push_back(name[i]);
     }
   }
-  // Thirteen numbers, then the style's name.
-  if (parts.size() != 14)
-    return false;
+  // Thirteen numbers, then the style's name. A page break or a table cell
+  // adds its own numbers before the style.
+  const bool legacy = parts.size() == 14;
+  int nwidths = 0;
+  if (!legacy) {
+    if (parts.size() < 21)
+      return false;
+    try {
+      nwidths = std::stoi(parts[19]);
+    } catch (const std::exception&) {
+      return false;
+    }
+    if (nwidths < 0 || nwidths > kMaxTableColumns ||
+        parts.size() != static_cast<size_t>(21 + nwidths))
+      return false;
+  }
+  const size_t numbers = legacy ? 13 : static_cast<size_t>(20 + nwidths);
   std::vector<int> values;
   try {
-    for (size_t i = 0; i < 13; ++i)
+    for (size_t i = 0; i < numbers; ++i)
       values.push_back(std::stoi(parts[i]));
   } catch (const std::exception&) {
     return false;
   }
-  if (values.size() != 13 || values[12] < 0 || values[3] < 0 ||
+  if (values.size() != numbers || values[12] < 0 || values[3] < 0 ||
       values[3] > static_cast<int>(Align::Justify) || values[4] < 0 ||
       values[4] > static_cast<int>(ListKind::Number))
     return false;
@@ -215,7 +256,19 @@ bool parse_para(const std::string& name, ParaFormat& format)
   format.list.list = values[10];
   format.list.start = values[11];
   format.direct = static_cast<unsigned>(values[12]);
-  format.style = parts[13];
+  format.page_break = false;
+  format.cell = Cell{};
+  if (!legacy) {
+    format.page_break = values[13] != 0;
+    format.cell.table = values[14];
+    format.cell.row = values[15];
+    format.cell.column = values[16];
+    format.cell.rows = values[17];
+    format.cell.columns = values[18];
+    for (int i = 0; i < nwidths; ++i)
+      format.cell.widths.push_back(values[static_cast<size_t>(20 + i)]);
+  }
+  format.style = parts.back();
   return true;
 }
 
@@ -235,9 +288,13 @@ int heading_level_name(const std::string& name)
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  if (run.text.empty())
+  const bool keep = !run.text.empty() || run.image || run.note != 0;
+  if (!keep)
     return;
-  if (!paragraph.runs.empty() && same_format(paragraph.runs.back(), run))
+  const bool mergeable = !run.image && run.note == 0 && !paragraph.runs.empty() &&
+                         !paragraph.runs.back().image && paragraph.runs.back().note == 0 &&
+                         same_format(paragraph.runs.back(), run);
+  if (mergeable)
     paragraph.runs.back().text += run.text;
   else
     paragraph.runs.push_back(std::move(run));
@@ -961,12 +1018,17 @@ Document MainWindow::capture() const
         paragraph.list = pending_para_.list;
         paragraph.style = pending_para_.style;
         paragraph.direct = pending_para_.direct;
+        paragraph.page_break = pending_para_.page_break;
+        paragraph.cell = pending_para_.cell;
       } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
         paragraph.align = doc.paragraphs.back().align;
         paragraph.list = doc.paragraphs.back().list;
         paragraph.style = doc.paragraphs.back().style;
         paragraph.direct = doc.paragraphs.back().direct;
+        // A new paragraph in a cell stays in that cell. A page break belongs
+        // to the paragraph that has it, and is not copied onto the next one.
+        paragraph.cell = doc.paragraphs.back().cell;
       }
     }
     doc.paragraphs.push_back(paragraph);
@@ -985,9 +1047,25 @@ Document MainWindow::capture() const
           paragraph.list = format.list;
           paragraph.style = format.style;
           paragraph.direct = format.direct;
+          paragraph.page_break = format.page_break;
+          paragraph.cell = format.cell;
           have_para = true;
         }
       }
+    }
+    if (auto pix = iter.get_pixbuf()) {
+      flush_run();
+      Run image_run;
+      const auto found = image_pix_.find(pix->gobj());
+      if (found != image_pix_.end())
+        image_run.image = found->second;
+      else {
+        Image missing;
+        missing.alt = "image";
+        image_run.image = missing;
+      }
+      add_run(paragraph, std::move(image_run));
+      continue;
     }
     if (ch == '\n') {
       // An empty paragraph's own format rides on its newline.
@@ -1020,6 +1098,10 @@ Document MainWindow::capture() const
   if (doc.paragraphs.empty())
     doc.paragraphs.push_back(Paragraph{});
   doc.styles = styles_;
+  doc.page = page_setup_;
+  doc.header = header_;
+  doc.footer = footer_;
+  doc.notes = notes_;
   return doc;
 }
 
@@ -1028,6 +1110,14 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   label_geometry_.clear();
   loading_ = true;
   styles_ = doc.styles;
+  const PageSetup next_page = clamp_page(doc.page);
+  if (!(page_setup_ == next_page))
+    styled_zoom_ = -1;
+  page_setup_ = next_page;
+  header_ = doc.header;
+  footer_ = doc.footer;
+  notes_ = doc.notes;
+  image_pix_.clear();
   buffer_->set_text("");
   pending_para_set_ = false;
   pending_para_ = ParaFormat{};
@@ -1038,14 +1128,31 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
     const auto para = para_tag(para_format(paragraph));
     bool any = false;
     for (const Run& run : paragraph.runs) {
-      if (run.text.empty())
+      if (run.image) {
+        if (auto pix = pixbuf_for(*run.image)) {
+          image_pix_[pix->gobj()] = *run.image;
+          auto at = buffer_->insert_pixbuf(buffer_->end(), pix);
+          auto next = at;
+          if (at.get_pixbuf())
+            next.forward_char();
+          buffer_->apply_tag(para, at, next);
+          if (paragraph.heading >= 1 && paragraph.heading <= 6)
+            buffer_->apply_tag(heading_tag(paragraph.heading), at, next);
+          any = true;
+          continue;
+        }
+      }
+      if (run.text.empty() && run.note == 0)
         continue;
+      Run shown = run;
+      if (shown.text.empty() && shown.note != 0)
+        shown.text = std::to_string(shown.note);
       std::vector<Glib::RefPtr<Gtk::TextTag>> tags;
-      tags.push_back(format_tag(run));
+      tags.push_back(format_tag(shown));
       if (paragraph.heading >= 1 && paragraph.heading <= 6)
         tags.push_back(heading_tag(paragraph.heading));
       tags.push_back(para);
-      buffer_->insert_with_tags(buffer_->end(), run.text, tags);
+      buffer_->insert_with_tags(buffer_->end(), shown.text, tags);
       any = true;
     }
     if (i + 1 < doc.paragraphs.size()) {
@@ -1056,8 +1163,9 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       else
         buffer_->insert_with_tag(buffer_->end(), "\n", para);
     } else if (!any) {
-      pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align,
-                                 clamp_list(paragraph.list), paragraph.style, paragraph.direct};
+      pending_para_ = para_format(paragraph);
+      pending_para_.indents = clamp_indents(paragraph.indents);
+      pending_para_.list = clamp_list(paragraph.list);
       pending_para_set_ = true;
       if (paragraph.mark) {
         pending_mark_ = *paragraph.mark;
@@ -1075,6 +1183,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   text_.scroll_to(buffer_->get_insert());
   loading_ = false;
   list_lines_valid_ = false;
+  refresh_stories();
   apply_page_size();
   // The sheet may be another one now: a file, a new document, undo.
   fill_style_combo();
@@ -1144,6 +1253,18 @@ void MainWindow::update_actions()
   sens(context_paste_, can_paste);
   sens(select_all_item_, any_text);
   sens(recent_item_, !settings_.recent.empty());
+  sens(page_setup_item_, true);
+  sens(columns_item_, true);
+  sens(picture_item_, true);
+  sens(insert_table_item_, true);
+  sens(table_insert_item_, true);
+  sens(page_break_item_, true);
+  sens(footnote_item_, notes_.size() < static_cast<size_t>(kMaxNotes));
+  const bool in_cell = buffer_ && para_at(cursor_offset()).cell.table != 0;
+  sens(table_row_item_, in_cell);
+  sens(table_column_item_, in_cell);
+  sens(table_delete_row_item_, in_cell);
+  sens(table_delete_column_item_, in_cell);
   updating_actions_ = false;
   --actions_depth_;
 }
@@ -1654,7 +1775,7 @@ void MainWindow::restyle_tags()
 
 ViewGeometry MainWindow::geometry() const
 {
-  return view_geometry(view_, zoom_factor());
+  return view_geometry(view_, zoom_factor(), page_setup_);
 }
 
 void MainWindow::set_view(ViewMode mode)
@@ -1682,6 +1803,7 @@ void MainWindow::set_view(ViewMode mode)
     page_.set_vexpand(true);
   page_.set_margin_top(g.gap);
   page_.set_margin_bottom(g.gap);
+  refresh_stories();
   apply_page_size();
   ruler_.queue_draw();
   text_.grab_focus();
@@ -1708,21 +1830,23 @@ void MainWindow::apply_margins()
   const int left = g.margin_left;
   const int right = g.margin_right;
   const int y = g.margin_y;
+  const int bottom = g.margin_bottom;
   if (text_.get_left_margin() != left)
     text_.set_left_margin(left);
   if (text_.get_right_margin() != right)
     text_.set_right_margin(right);
   if (text_.get_top_margin() != y)
     text_.set_top_margin(y);
-  if (text_.get_bottom_margin() != y)
-    text_.set_bottom_margin(y);
+  if (text_.get_bottom_margin() != bottom)
+    text_.set_bottom_margin(bottom);
 }
 
 double MainWindow::zoom_factor() const
 {
   if (settings_.zoom == 0) {
     const int width = std::max(120, paste_.get_allocated_width() - 36);
-    return static_cast<double>(width) / static_cast<double>(kPageW);
+    const int page = std::max(1, view_geometry(ViewMode::Page, 1.0, page_setup_).page_width);
+    return static_cast<double>(width) / static_cast<double>(page);
   }
   return static_cast<double>(settings_.zoom) / 100.0;
 }
@@ -2211,6 +2335,8 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
   format.list = clamp_list(raw.list);
   format.style = raw.style;
   format.direct = raw.direct;
+  format.page_break = raw.page_break;
+  format.cell = raw.cell;
   const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
@@ -2225,6 +2351,12 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
 void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
                                 const ParaFormat& format) const
 {
+  if (format.cell.table != 0)
+    tag->property_paragraph_background() = "#f4f4f4";
+  // A page break is a gap above the paragraph. GTK's pixels-above is that
+  // gap, not space on every wrapped line. A plain paragraph leaves it unset.
+  if (format.page_break)
+    tag->property_pixels_above_lines() = 18;
   if (format.align == Align::Center)
     tag->property_justification() = Gtk::JUSTIFY_CENTER;
   else if (format.align == Align::Right)
@@ -2411,7 +2543,15 @@ void MainWindow::normalise_paragraphs()
         break;
     }
     if (!chosen) {
-      chosen = carry;
+      // Enter copies the paragraph above. The page break stays on the one
+      // that had it; the new paragraph does not take a second break.
+      ParaFormat carried;
+      if (parse_para(tag_name(carry), carried) && carried.page_break) {
+        carried.page_break = false;
+        chosen = para_tag(carried);
+      } else {
+        chosen = carry;
+      }
       uniform = false;
     }
     if (!uniform) {
@@ -2430,6 +2570,15 @@ void MainWindow::normalise_paragraphs()
 void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
                           const Gtk::TextBuffer::iterator& to)
 {
+  // A deleted picture leaves the buffer. Drop its bytes while the pixbuf is
+  // still alive. Undo of that delete does not bring the picture back: the
+  // buffer restores the object character without this map entry.
+  if (!loading_ && !restoring_ && from != to) {
+    for (auto iter = from; iter.compare(to) < 0; ++iter) {
+      if (auto pix = iter.get_pixbuf())
+        image_pix_.erase(pix->gobj());
+    }
+  }
   // Erasing through to the end of the buffer from the start of a line leaves
   // an empty last paragraph. Like Word's surviving paragraph mark, it keeps
   // the format of the last paragraph that was there.
@@ -2495,6 +2644,8 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     paragraph.list = format.list;
     paragraph.style = format.style;
     paragraph.direct = format.direct;
+    paragraph.page_break = format.page_break;
+    paragraph.cell = format.cell;
     paragraphs.push_back(paragraph);
   }
   edit(paragraphs);
@@ -2522,8 +2673,9 @@ void MainWindow::tag_paragraph(int start, const ParaFormat& format)
   const int end = paragraph_end(start);
   if (start == end) {
     // The empty last paragraph has nothing to tag. Hold its format aside.
-    pending_para_ = ParaFormat{clamp_indents(format.indents), format.align, clamp_list(format.list),
-                               format.style, format.direct};
+    pending_para_ = format;
+    pending_para_.indents = clamp_indents(format.indents);
+    pending_para_.list = clamp_list(format.list);
     pending_para_set_ = true;
     return;
   }

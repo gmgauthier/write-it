@@ -291,30 +291,62 @@ void MainWindow::apply_next_style()
   restyle_run(typing_, old ? *old : styles.front(), *to);
 }
 
-void MainWindow::commit_document(const Document& before, const Document& after)
+void MainWindow::commit_document(const Document& before, const Document& after, int caret)
 {
   if (before == after) {
     text_.grab_focus();
     return;
   }
-  const int insert = buffer_->get_insert()->get_iter().get_offset();
-  const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
+  const int insert = caret >= 0 ? caret : buffer_->get_insert()->get_iter().get_offset();
+  const int bound = caret >= 0 ? caret : buffer_->get_selection_bound()->get_iter().get_offset();
   // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
   // so the rebuild's operations stand for the whole document this once.
   open_step();
   const std::vector<Style> old_styles = styles_;
+  const PageSetup old_page = page_setup_;
+  const std::vector<Paragraph> old_header = header_;
+  const std::vector<Paragraph> old_footer = footer_;
+  const std::vector<std::vector<Paragraph>> old_notes = notes_;
   restoring_ = true;
   // With the text the same (a style or a style's format changed), only the
   // paragraphs that changed are retagged, so the step records them and not
-  // the whole document.
+  // the whole document. Page setup and the stories are not in the buffer.
   if (!retag_paragraphs(before, after))
     replace_buffer(after, insert);
-  buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
+  else
+    install_stories(after);
+  const int count = buffer_->get_char_count();
+  const int at = std::max(0, std::min(insert, count));
+  const int to = std::max(0, std::min(bound, count));
+  buffer_->select_range(buffer_->get_iter_at_offset(at), buffer_->get_iter_at_offset(to));
   restoring_ = false;
   if (!(old_styles == styles_)) {
     const std::vector<Style> new_styles = styles_;
     undo_.record_custom([this, old_styles] { styles_ = old_styles; },
                         [this, new_styles] { styles_ = new_styles; });
+  }
+  if (!(old_page == page_setup_)) {
+    const PageSetup new_page = page_setup_;
+    undo_.record_custom([this, old_page] { apply_document_page(old_page); },
+                        [this, new_page] { apply_document_page(new_page); });
+  }
+  if (old_header != header_ || old_footer != footer_ || old_notes != notes_) {
+    const std::vector<Paragraph> new_header = header_;
+    const std::vector<Paragraph> new_footer = footer_;
+    const std::vector<std::vector<Paragraph>> new_notes = notes_;
+    undo_.record_custom(
+        [this, old_header, old_footer, old_notes] {
+          header_ = old_header;
+          footer_ = old_footer;
+          notes_ = old_notes;
+          refresh_stories();
+        },
+        [this, new_header, new_footer, new_notes] {
+          header_ = new_header;
+          footer_ = new_footer;
+          notes_ = new_notes;
+          refresh_stories();
+        });
   }
   close_step(false);
   // A style change is its own undo step, never merged into typing.
@@ -397,8 +429,9 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
       if (!any && paragraph.mark)
         buffer_->apply_tag(format_tag(*paragraph.mark), from, to);
     } else if (!any) {
-      pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align,
-                                 clamp_list(paragraph.list), paragraph.style, paragraph.direct};
+      pending_para_ = para_format(paragraph);
+      pending_para_.indents = clamp_indents(paragraph.indents);
+      pending_para_.list = clamp_list(paragraph.list);
       pending_para_set_ = true;
       if (paragraph.mark) {
         pending_mark_ = *paragraph.mark;

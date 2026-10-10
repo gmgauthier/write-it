@@ -8,8 +8,9 @@
 
 namespace writeit {
 
-// Tools > Options... measurement units. Only the Paragraph dialog uses them.
-// The document always holds twips, so the unit never changes a file.
+// Tools > Options... measurement units. The Paragraph, Page Setup, and
+// Columns dialogs use them. The document always holds twips, so the unit
+// never changes a file.
 enum class Units { Inches, Centimetres };
 
 // "in" or "cm". Anything else, including nothing, is inches.

@@ -46,9 +46,15 @@ std::vector<std::string> lines_of(const std::string& text)
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  if (run.text.empty())
+  // A picture has no text, and neither it nor a footnote marker merges into
+  // the run beside it.
+  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0;
+  if (!held)
     return;
-  if (!paragraph.runs.empty() && same_format(paragraph.runs.back(), run))
+  const bool sticky = !run.image.has_value() && run.note == 0 && !paragraph.runs.empty() &&
+                      !paragraph.runs.back().image.has_value() && paragraph.runs.back().note == 0 &&
+                      same_format(paragraph.runs.back(), run);
+  if (sticky)
     paragraph.runs.back().text += run.text;
   else
     paragraph.runs.push_back(std::move(run));
@@ -87,6 +93,27 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, double
     buf.clear();
   };
   for (size_t i = 0; i < text.size();) {
+    if (text[i] == '!' && i + 1 < text.size() && text[i + 1] == '[') {
+      const size_t alt_end = text.find("](", i + 2);
+      const size_t path_end =
+          alt_end == std::string::npos ? std::string::npos : text.find(')', alt_end + 2);
+      if (alt_end != std::string::npos && path_end != std::string::npos) {
+        flush();
+        Run run;
+        run.font = font;
+        run.size = size;
+        run.bold = bold;
+        run.italic = italic;
+        Image image;
+        image.alt = text.substr(i + 2, alt_end - (i + 2));
+        image.path = text.substr(alt_end + 2, path_end - (alt_end + 2));
+        load_image_file(image.path, image);
+        run.image = std::move(image);
+        paragraph.runs.push_back(std::move(run));
+        i = path_end + 1;
+        continue;
+      }
+    }
     if (text.compare(i, 3, "***") == 0 || text.compare(i, 3, "___") == 0) {
       flush();
       bold = !bold;
@@ -120,13 +147,23 @@ std::string inline_export(const Paragraph& paragraph, const Run& style)
   // Runs that look alike are one run here, so emphasis is not broken up.
   std::vector<Run> runs;
   for (const Run& run : paragraph.runs) {
-    if (!runs.empty() && runs.back().bold == run.bold && runs.back().italic == run.italic)
+    if (run.image.has_value()) {
+      runs.push_back(run);
+      continue;
+    }
+    if (!runs.empty() && !runs.back().image.has_value() && runs.back().bold == run.bold &&
+        runs.back().italic == run.italic)
       runs.back().text += run.text;
     else
       runs.push_back(run);
   }
   std::string out;
   for (const Run& run : runs) {
+    if (run.image.has_value()) {
+      if (!run.image->path.empty())
+        out += "![" + run.image->alt + "](" + run.image->path + ")";
+      continue;
+    }
     const bool bold = run.bold && !style.bold;
     const bool italic = run.italic && !style.italic;
     if (bold && italic)
@@ -327,10 +364,20 @@ void carry_style(Document& doc, std::vector<Style>& sheet, size_t index, const S
 
 }  // namespace
 
+bool same_image(const std::optional<Image>& a, const std::optional<Image>& b)
+{
+  if (a.has_value() != b.has_value())
+    return false;
+  if (!a)
+    return true;
+  return a->path == b->path && a->alt == b->alt && a->type == b->type && a->data == b->data &&
+         a->width == b->width && a->height == b->height;
+}
+
 bool same_look(const Run& a, const Run& b)
 {
   return a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
-         a.underline == b.underline;
+         a.underline == b.underline && a.note == b.note && same_image(a.image, b.image);
 }
 
 bool same_format(const Run& a, const Run& b)
@@ -361,9 +408,12 @@ static bool same_runs(const std::vector<Run>& a, const std::vector<Run>& b)
   auto looks = [](const std::vector<Run>& runs) {
     std::vector<Run> out;
     for (const Run& run : runs) {
-      if (run.text.empty())
+      if (run.text.empty() && !run.image.has_value() && run.note == 0)
         continue;
-      if (!out.empty() && same_look(out.back(), run))
+      const bool sticky = !run.image.has_value() && run.note == 0 && !out.empty() &&
+                          !out.back().image.has_value() && out.back().note == 0 &&
+                          same_look(out.back(), run);
+      if (sticky)
         out.back().text += run.text;
       else
         out.push_back(run);
@@ -397,7 +447,8 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
-         a.align == b.align && a.list == b.list && same_runs(a.runs, b.runs) && same_mark(a, b);
+         a.align == b.align && a.list == b.list && a.cell == b.cell &&
+         a.page_break == b.page_break && same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
 bool indents_fit(const Indents& indents)
@@ -737,13 +788,16 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.style != y.style || x.indents != y.indents ||
         x.align != y.align || x.list.kind != y.list.kind || x.list.level != y.list.level ||
-        !same_runs(x.runs, y.runs) || !same_mark(x, y))
+        x.cell != y.cell || x.page_break != y.page_break || !same_runs(x.runs, y.runs) ||
+        !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
   // And the numbers they show, which is where the starts matter.
   if (numbered && (list_ids(a.paragraphs) != list_ids(b.paragraphs) ||
                    list_numbers(a.paragraphs) != list_numbers(b.paragraphs)))
+    return false;
+  if (!(a.page == b.page) || a.header != b.header || a.footer != b.footer || a.notes != b.notes)
     return false;
   return style_sheet(a) == style_sheet(b);
 }

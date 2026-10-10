@@ -8,6 +8,20 @@
 
 namespace writeit {
 
+// A picture. `data` is the file bytes (png or jpeg); `path` is where a
+// Markdown image came from, and may be empty for Insert > Picture. `width`
+// and `height` are twips, 0 when the file does not say.
+struct Image {
+  std::string path;
+  std::string alt;
+  std::string type;
+  std::string data;
+  int width = 0;
+  int height = 0;
+};
+
+constexpr std::size_t kMaxImageBytes = 8u * 1024u * 1024u;
+
 struct Run {
   std::string text;
   std::string font = "Sans";
@@ -16,6 +30,12 @@ struct Run {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  // 1-based index into Document::notes. 0 is not a footnote marker. The
+  // marker's text is the number the page shows.
+  int note = 0;
+  // A picture in the run. Its text is empty. Two pictures are never merged,
+  // even when the bytes match.
+  std::optional<Image> image;
   // What was set directly rather than by the paragraph's style (kDirect*
   // bits). A style applied or edited leaves these alone. Not saved: a file
   // holds only values, and a reader takes what differs from the style as
@@ -39,6 +59,41 @@ struct Indents {
 
 // The largest indent Word and RTF accept: 22 inches.
 constexpr int kMaxIndent = 31680;
+
+// Page setup, in twips, as RTF's \paperw and \margl. The defaults are the A4
+// page the window drew before Page Setup existed: 540 px is 11906 twips
+// across, and the insets that were 42 px and 36 px at 100% (926 and 794
+// twips). Columns are a section property; one column writes no \cols.
+struct PageSetup {
+  int paper_width = 11906;
+  int paper_height = 16838;
+  int margin_left = 926;
+  int margin_right = 926;
+  int margin_top = 794;
+  int margin_bottom = 794;
+  int columns = 1;
+  int column_gap = 720;
+  bool landscape = false;
+};
+
+constexpr PageSetup default_page()
+{
+  return {};
+}
+
+// Paper from about an inch to the indent ceiling. Margins stay inside the
+// sheet and leave at least a quarter inch of text. The reader accepts up to
+// twelve columns; the Columns dialog offers four.
+constexpr int kMinPaperTwips = 1440;
+constexpr int kMaxPaperTwips = kMaxIndent;
+constexpr int kMinTextTwips = 360;
+constexpr int kMaxColumns = 12;
+constexpr int kMaxColumnGap = 2880;
+
+constexpr int kMaxNotes = 200;
+constexpr int kMaxTableRows = 32;
+constexpr int kMaxTableColumns = 16;
+constexpr int kMinCellTwips = 200;
 
 // Word 97's Align Left, Center, Align Right and Justify. RTF's \ql, \qc, \qr
 // and \qj; Justify is GTK's JUSTIFY_FILL.
@@ -116,6 +171,18 @@ constexpr size_t kMaxStyleName = 255;
 // A style's largest size in points, Word's largest.
 constexpr int kMaxStyleSize = 1638;
 
+// One cell of a table. `table` 0 is an ordinary paragraph. `widths` is one
+// entry per column, in twips, shared by every cell of the table; empty means
+// the file did not say, and a new table fills them from the text width.
+struct Cell {
+  int table = 0;
+  int row = 0;
+  int column = 0;
+  int rows = 0;
+  int columns = 0;
+  std::vector<int> widths;
+};
+
 struct Paragraph {
   // 0 is body text. 1 through 6 are Markdown headings.
   int heading = 0;
@@ -134,6 +201,11 @@ struct Paragraph {
   std::optional<Run> mark;
   // The paragraph format set directly (kDirect* bits below), as Run's.
   unsigned direct = 0;
+  // A table cell, or table 0 for an ordinary paragraph. Several paragraphs
+  // may share a row and column: a cell holds more than one paragraph.
+  Cell cell;
+  // A page break before this paragraph, RTF's \page.
+  bool page_break = false;
 };
 
 constexpr unsigned kDirectLeft = 1;
@@ -146,6 +218,15 @@ struct Document {
   // The style sheet. Empty means the built-in sheet in Sans 11, which is
   // what a file without a \stylesheet reads as.
   std::vector<Style> styles;
+  // Paper, margins, and columns. The default is omitted from the file, so a
+  // document from before page setup still saves as the same bytes.
+  PageSetup page;
+  // The header and footer stories. Empty is omitted from the file.
+  std::vector<Paragraph> header;
+  std::vector<Paragraph> footer;
+  // Footnotes, in the order their markers cite. notes[i] belongs to a run
+  // whose note is i + 1.
+  std::vector<std::vector<Paragraph>> notes;
 };
 
 // Same values and the same direct bits: runs that may be one run.
@@ -155,6 +236,10 @@ bool same_look(const Run& a, const Run& b);
 // Two paragraphs' own formats (Paragraph::mark), which only empty paragraphs
 // have, compared as same_look(): true when either has text.
 bool same_mark(const Paragraph& a, const Paragraph& b);
+bool operator==(const PageSetup& a, const PageSetup& b);
+bool operator!=(const PageSetup& a, const PageSetup& b);
+bool operator==(const Cell& a, const Cell& b);
+bool operator!=(const Cell& a, const Cell& b);
 bool operator==(const Indents& a, const Indents& b);
 bool operator!=(const Indents& a, const Indents& b);
 bool operator==(const ListFormat& a, const ListFormat& b);
@@ -168,6 +253,28 @@ bool operator!=(const Style& a, const Style& b);
 // Left and right stay between 0 and kMaxIndent. The first line may hang back
 // to the left margin and no further, and may indent up to kMaxIndent.
 Indents clamp_indents(Indents indents);
+
+// Paper, margins, and columns brought inside the limits above. A landscape
+// flag does not swap the edges; the dialog and the RTF reader do that.
+PageSetup clamp_page(PageSetup page);
+// Paper, margins, and orientation are the defaults. Columns are separate:
+// a two-column A4 page still has the default sheet.
+bool page_metrics_default(const PageSetup& page);
+// The text width between the margins, at least a quarter inch.
+int page_text_twips(const PageSetup& page);
+
+// Inserts `rows` by `columns` empty cells at `at` (clamped to the vector).
+// Widths share `text_width`. False when the counts are out of range.
+bool insert_table(std::vector<Paragraph>& paragraphs, size_t at, int rows, int columns,
+                  int text_width);
+// The paragraph is a cell. Row and column edits use the cell at `index`.
+bool in_table(const std::vector<Paragraph>& paragraphs, size_t index);
+// Insert or delete the caret cell's row or column. False when `index` is
+// not a cell, or a delete would not change the table.
+bool insert_table_row(std::vector<Paragraph>& paragraphs, size_t index);
+bool delete_table_row(std::vector<Paragraph>& paragraphs, size_t index);
+bool insert_table_column(std::vector<Paragraph>& paragraphs, size_t index);
+bool delete_table_column(std::vector<Paragraph>& paragraphs, size_t index);
 
 // The Paragraph dialog's check, as Word 97 does it: false when the first
 // line would start left of the left margin (a hanging indent larger than
@@ -300,5 +407,12 @@ std::string markdown_export(const Document& doc);
 // character format this slice understands.
 bool rtf_import(const std::string& text, Document& doc);
 std::string rtf_export(const Document& doc);
+
+// "png", "jpeg", or "" when the bytes are neither.
+std::string image_type_of(const std::string& data);
+// Reads `path` into `image.data` when it is a png or jpeg within
+// kMaxImageBytes. Leaves path and alt alone. False when the file is missing
+// or not a picture this slice embeds.
+bool load_image_file(const std::string& path, Image& image);
 
 }  // namespace writeit
