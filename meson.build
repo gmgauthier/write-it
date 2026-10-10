@@ -48,6 +48,7 @@ writeit_core_sources = files(
   'src/rtf.cpp',
   'src/settings.cpp',
   'src/styles.cpp',
+  'src/undo.cpp',
   'src/units.cpp',
   'src/view.cpp',
 )
