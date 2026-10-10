@@ -151,6 +151,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool write_rtf(const std::string& path);
 
   Document capture() const;
+  // Calls of capture(), for the tests: a keystroke makes at most undo's two.
+  mutable long captures_ = 0;
   void replace_buffer(const Document& doc, int offset);
   bool dirty() const;
   void update_title();

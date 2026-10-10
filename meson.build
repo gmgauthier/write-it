@@ -430,3 +430,22 @@ test(
     meson.current_source_dir() / 'src' / 'editor.cpp',
   ],
 )
+
+# The real window under a display: capture() copies the whole document, so
+# a keystroke may call it only for undo (at most twice), and a redraw not at
+# all. A test-only count in the window.
+write_it_capture_count_tests = executable(
+  'write-it-capture-count-tests',
+  'tests/test_capture_count.cpp',
+  dependencies: [writeit_dep],
+)
+test('capture-count', write_it_capture_count_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: the unsaved-changes state after typing,
+# Save, Save As, Undo, Redo, New and Open, from the undo state id.
+write_it_dirty_state_tests = executable(
+  'write-it-dirty-state-tests',
+  'tests/test_dirty_state.cpp',
+  dependencies: [writeit_dep],
+)
+test('dirty-state', write_it_dirty_state_tests, timeout: 60, is_parallel: false)

@@ -926,6 +926,7 @@ void MainWindow::rebuild_recent()
 
 Document MainWindow::capture() const
 {
+  ++captures_;
   Document doc;
   Paragraph paragraph;
   Run run;
