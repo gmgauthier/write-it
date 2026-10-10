@@ -8,6 +8,8 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -276,7 +278,12 @@ struct State {
   Indents indents;
   Align align = Align::Left;
   ListMarks marks;
+  // The paragraph's style: an index into the style sheet.
+  int style = 0;
   bool ignore = false;
+  // Inside {\stylesheet ...}, and inside one of its entries.
+  bool in_sheet = false;
+  bool in_style = false;
   // Inside {\*\pn ...}, {\*\listtable ...} or {\*\listoverridetable ...}:
   // the text is ignored, but these words are still read.
   bool in_pn = false;
@@ -288,6 +295,58 @@ struct State {
   bool font_skip = false;
   bool pending_dest = false;
   int uc = 1;
+};
+
+// One {\s...} entry of the style sheet as read: only what it sets.
+// The level a built-in heading style's name stands for, else 0.
+int builtin_heading(const std::string& name)
+{
+  if (name.size() == 9 && name.compare(0, 8, "Heading ") == 0 && name[8] >= '1' && name[8] <= '6')
+    return name[8] - '0';
+  return 0;
+}
+
+// The level a "heading N" name stands for, in any case, else `otherwise`.
+int name_heading(const std::string& name, int otherwise)
+{
+  if (name.size() != 9 || name[8] < '1' || name[8] > '6')
+    return otherwise;
+  static const char kHeading[] = "heading ";
+  for (size_t i = 0; i < 8; ++i) {
+    if (std::tolower(static_cast<unsigned char>(name[i])) != kHeading[i])
+      return otherwise;
+  }
+  return name[8] - '0';
+}
+
+struct StyleEntry {
+  int index = 0;
+  bool paragraph = true;
+  int based_on = -1;
+  int next = -1;
+  std::string name;
+  bool name_done = false;
+  std::optional<int> font;
+  std::optional<int> half_points;
+  std::optional<bool> bold;
+  std::optional<bool> italic;
+  std::optional<bool> underline;
+  std::optional<int> left;
+  std::optional<int> right;
+  std::optional<int> first;
+  std::optional<Align> align;
+  std::optional<int> heading;
+};
+// A style resolved against its bases, in the reader's own terms.
+struct ReadStyle {
+  int font = 0;
+  int half_points = 22;
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
+  Indents indents;
+  Align align = Align::Left;
+  int heading = 0;
 };
 
 class Reader {
@@ -310,6 +369,12 @@ class Reader {
       if (c == '{') {
         stack_.push_back(state_);
         state_.pending_dest = true;
+        // Each group directly inside the style sheet is one style.
+        if (state_.in_sheet && !state_.in_style) {
+          state_.in_style = true;
+          entry_ = StyleEntry{};
+          entry_depth_ = stack_.size();
+        }
         ++i_;
         continue;
       }
@@ -320,6 +385,7 @@ class Reader {
           final_indents_ = state_.indents;
           final_align_ = state_.align;
           final_marks_ = state_.marks;
+          final_style_ = state_.style;
           closed_ = true;
         }
         if (!stack_.empty()) {
@@ -338,8 +404,16 @@ class Reader {
       literal(c);
       ++i_;
     }
+    // A file that ends inside its style sheet still gets the styles read.
+    if (state_.in_style)
+      commit_style();
+    if (saw_sheet_ && !sheet_resolved_)
+      resolve_styles();
     finish_paragraph(false);
     merge(doc);
+    // A file from before styles: its headings take Heading 1-6.
+    if (!saw_sheet_)
+      adopt_heading_styles(doc, font_name(0), 11);
     if (doc.paragraphs.empty())
       doc.paragraphs.push_back(Paragraph{});
     return true;
@@ -348,6 +422,11 @@ class Reader {
  private:
   void literal(char c)
   {
+    if (state_.in_style && c == ';') {
+      if (stack_.size() == entry_depth_)
+        entry_.name_done = true;
+      return;
+    }
     if (state_.in_fonttbl && !state_.font_skip && c == ';') {
       commit_font();
       return;
@@ -448,6 +527,12 @@ class Reader {
         state_.ignore = true;
         return;
       }
+      if (word == "stylesheet" && !state_.in_style) {
+        state_.in_sheet = true;
+        state_.ignore = true;
+        saw_sheet_ = true;
+        return;
+      }
       if (state_.in_fonttbl && (word == "panose" || word == "falt")) {
         state_.font_skip = true;
         return;
@@ -475,6 +560,15 @@ class Reader {
       skip_fallback(state_.uc);
       return;
     }
+    // A style's own words. Those in groups inside it, \*\keycode and the
+    // like, are not.
+    if (state_.in_style) {
+      if (stack_.size() == entry_depth_)
+        style_word(word, has_param, param);
+      return;
+    }
+    if (state_.in_sheet)
+      return;
     if (state_.in_pn) {
       pn_word(word, has_param, param);
       return;
@@ -499,10 +593,20 @@ class Reader {
       return;
     }
     if (word == "pard") {
-      state_.heading = 0;
-      state_.indents = Indents{};
-      state_.align = Align::Left;
+      // Back to Normal: its paragraph format, and its character format for
+      // whatever still matched the old style.
+      const ReadStyle& old = read_style(state_.style);
+      const ReadStyle& normal = read_style(0);
+      restyle_characters(old, normal);
+      state_.style = 0;
+      state_.heading = normal.heading;
+      state_.indents = normal.indents;
+      state_.align = normal.align;
       state_.marks = ListMarks{};
+      return;
+    }
+    if (word == "s") {
+      set_style(has_param ? param : 0);
       return;
     }
     // \qd, distributed, is East Asian Word's and has no Word 97 button: it
@@ -557,7 +661,8 @@ class Reader {
       return;
     }
     if (word == "outlinelevel" && has_param) {
-      const int level = std::max(0, std::min(5, param)) + 1;
+      // Level 9 is Word's body text.
+      const int level = outline_heading(param);
       state_.heading = level;
       if (!paragraph_.runs.empty())
         paragraph_.heading = level;
@@ -635,6 +740,8 @@ class Reader {
   // text outside ignored destinations.
   bool sink_open() const
   {
+    if (state_.in_style)
+      return stack_.size() == entry_depth_ && !entry_.name_done;
     return state_.in_fonttbl ? !state_.font_skip : !state_.ignore;
   }
 
@@ -646,6 +753,13 @@ class Reader {
   {
     if (!sink_open())
       return;
+    if (state_.in_style) {
+      // A style's name. Cleaned when the sheet is resolved; a name far past
+      // the cap stops growing here.
+      if (entry_.name.size() < kMaxStyleName * 4 + 16)
+        append_utf8(entry_.name, cp);
+      return;
+    }
     if (state_.in_fonttbl) {
       flush_lead();
       if (!is_control(cp))
@@ -830,6 +944,10 @@ class Reader {
   // A group closed. `closing` is the state that was in force inside it.
   void close_group(const State& closing)
   {
+    if (closing.in_style && !state_.in_style)
+      commit_style();
+    if (closing.in_sheet && !state_.in_sheet && !sheet_resolved_)
+      resolve_styles();
     // A {\*\pn ...} group describes the paragraph around it.
     if (closing.in_pn && !state_.in_pn)
       state_.marks.pn = closing.marks.pn;
@@ -911,6 +1029,276 @@ class Reader {
     return run;
   }
 
+  // The \outlinelevel a heading reads as: 0 through 5 are Heading 1 through
+  // 6, 9 (Word's body text) and anything past it is body text.
+  static int outline_heading(int param)
+  {
+    if (param >= 9)
+      return 0;
+    return std::max(0, std::min(5, param)) + 1;
+  }
+
+  // One word inside a style sheet entry.
+  void style_word(const std::string& word, bool has_param, int param)
+  {
+    StyleEntry& e = entry_;
+    if (word == "s") {
+      e.index = has_param ? param : 0;
+    } else if (word == "cs" || word == "ds" || word == "ts" || word == "tsrowd") {
+      // Character, section and table styles are not paragraph styles.
+      e.paragraph = false;
+    } else if (word == "sbasedon") {
+      e.based_on = has_param ? param : -1;
+    } else if (word == "snext") {
+      e.next = has_param ? param : -1;
+    } else if ((word == "li" || word == "lin") && has_param) {
+      e.left = param;
+    } else if ((word == "ri" || word == "rin") && has_param) {
+      e.right = param;
+    } else if (word == "fi" && has_param) {
+      e.first = param;
+    } else if (word == "ql" || word == "qd") {
+      // \qd, distributed, reads as left, as in a paragraph.
+      e.align = Align::Left;
+    } else if (word == "qj") {
+      e.align = Align::Justify;
+    } else if (word == "qc") {
+      e.align = Align::Center;
+    } else if (word == "qr") {
+      e.align = Align::Right;
+    } else if (word == "outlinelevel" && has_param) {
+      e.heading = outline_heading(param);
+    } else if (word == "f" && has_param) {
+      e.font = param;
+    } else if (word == "fs" && has_param) {
+      e.half_points = std::max(2, param);
+    } else if (word == "b") {
+      e.bold = !has_param || param != 0;
+    } else if (word == "i") {
+      e.italic = !has_param || param != 0;
+    } else if (word == "ul") {
+      e.underline = !has_param || param != 0;
+    } else if (word == "ulnone") {
+      e.underline = false;
+    } else if (word == "plain") {
+      e.bold = false;
+      e.italic = false;
+      e.underline = false;
+      e.font = 0;
+      e.half_points = 22;
+    } else if (word == "pard") {
+      e.left = 0;
+      e.right = 0;
+      e.first = 0;
+      e.align = Align::Left;
+    }
+  }
+
+  // An entry closed. The sheet stops growing at kMaxStyles. The first entry
+  // for a number is the one \sN means; a later one with the same number is
+  // kept too, under its own name, so its definition is not lost. It goes
+  // under a key no \s can name (the reader caps parameters well inside).
+  void commit_style()
+  {
+    if (!entry_.paragraph || styles_read_.size() >= kMaxStyles)
+      return;
+    if (styles_read_.count(entry_.index) != 0) {
+      const int key = kSpareStyle - static_cast<int>(spare_styles_.size());
+      spare_styles_.push_back(key);
+      styles_read_[key] = entry_;
+      return;
+    }
+    styles_read_[entry_.index] = entry_;
+  }
+
+  // Resolves each entry against the one it is based on, once the sheet is
+  // read: Word writes every attribute, LibreOffice only those that differ
+  // from the base, which may come later in the file. A base that is missing
+  // or would close a circle is dropped. Iterative, so a long chain of bases
+  // cannot exhaust the stack.
+  void resolve_styles()
+  {
+    sheet_resolved_ = true;
+    std::map<int, int> base;  // the base each entry keeps, if any
+    for (const auto& item : styles_read_) {
+      const int start = item.first;
+      if (resolved_.count(start) != 0)
+        continue;
+      std::vector<int> path;
+      std::set<int> on_path;
+      int at = start;
+      for (;;) {
+        path.push_back(at);
+        on_path.insert(at);
+        const int up = styles_read_.at(at).based_on;
+        if (up < 0 || styles_read_.count(up) == 0 || on_path.count(up) != 0)
+          break;
+        base[at] = up;
+        if (resolved_.count(up) != 0)
+          break;
+        at = up;
+      }
+      for (auto it = path.rbegin(); it != path.rend(); ++it) {
+        const auto found = base.find(*it);
+        const ReadStyle* from = found == base.end() ? nullptr : &resolved_.at(found->second);
+        resolved_[*it] = resolve_one(styles_read_.at(*it), from);
+      }
+    }
+    name_styles(base);
+  }
+
+  ReadStyle resolve_one(const StyleEntry& e, const ReadStyle* base) const
+  {
+    ReadStyle r = base ? *base : ReadStyle{};
+    if (e.font)
+      r.font = *e.font;
+    if (e.half_points)
+      r.half_points = *e.half_points;
+    if (e.bold)
+      r.bold = *e.bold;
+    if (e.italic)
+      r.italic = *e.italic;
+    if (e.underline)
+      r.underline = *e.underline;
+    if (e.left)
+      r.indents.left = *e.left;
+    if (e.right)
+      r.indents.right = *e.right;
+    if (e.first)
+      r.indents.first = *e.first;
+    r.indents = clamp_indents(r.indents);
+    if (e.align)
+      r.align = *e.align;
+    // A level from the file, else from a "heading N" name (LibreOffice
+    // writes none in its sheet), else the base's.
+    if (e.heading)
+      r.heading = *e.heading;
+    else if (e.index != 0)
+      r.heading = name_heading(clean_style_name(e.name), r.heading);
+    return r;
+  }
+
+  // Names, unique ignoring case, with the built-ins spelled as this program
+  // spells them and \s0 always Normal; then the model's sheet, in file order
+  // with Normal first and any missing built-ins after.
+  void name_styles(const std::map<int, int>& base)
+  {
+    const std::vector<Style>& kBuiltins = default_styles();
+    std::vector<int> order;
+    if (styles_read_.count(0) != 0)
+      order.push_back(0);
+    for (const auto& item : styles_read_) {
+      if (item.first != 0 && item.first > kSpareStyle)
+        order.push_back(item.first);
+    }
+    // Second entries for a number, in file order, after the rest.
+    order.insert(order.end(), spare_styles_.begin(), spare_styles_.end());
+    std::vector<Style> sheet;
+    if (styles_read_.count(0) == 0) {
+      Style normal = builtin_styles(font_name(0), 11).front();
+      sheet.push_back(normal);
+    }
+    for (int index : order) {
+      std::string name;
+      if (index == 0) {
+        name = kNormalStyle;
+      } else {
+        const std::string raw = clean_style_name(styles_read_.at(index).name);
+        name = raw.empty() ? "Style " + std::to_string(index) : raw;
+        if (const Style* builtin = find_style(kBuiltins, name))
+          name = builtin->name;
+        if (find_style(sheet, name))
+          name = unique_style_name(sheet, raw.empty() ? name : raw);
+      }
+      ReadStyle& r = resolved_.at(index);
+      // A heading style's name gives its level when the file gives none.
+      if (!styles_read_.at(index).heading && r.heading == 0)
+        r.heading = builtin_heading(name);
+      names_[index] = name;
+      Style style;
+      style.name = name;
+      style.format.font = font_name(r.font);
+      // Half points, as \fsN: a \fs21 style is 10.5 pt.
+      style.format.size = size_from_half_points(std::min(2 * kMaxStyleSize, r.half_points));
+      style.format.bold = r.bold;
+      style.format.italic = r.italic;
+      style.format.underline = r.underline;
+      style.indents = r.indents;
+      style.align = r.align;
+      style.heading = r.heading;
+      sheet.push_back(style);
+    }
+    // Bases and next styles by name, now every entry has one.
+    size_t at = styles_read_.count(0) == 0 ? 1 : 0;
+    for (int index : order) {
+      Style& style = sheet[at++];
+      const auto up = base.find(index);
+      if (up != base.end() && index != 0)
+        style.based_on = names_.at(up->second);
+      const int next = styles_read_.at(index).next;
+      if (next != index && names_.count(next) != 0)
+        style.next = names_.at(next);
+    }
+    sheet_ = complete_sheet(sheet);
+  }
+
+  // A style by number: one the sheet defines, else Normal, else the
+  // defaults this reader starts from.
+  const ReadStyle& read_style(int index) const
+  {
+    auto found = resolved_.find(index);
+    if (found == resolved_.end())
+      found = resolved_.find(0);
+    static const ReadStyle kDefault{};
+    return found == resolved_.end() ? kDefault : found->second;
+  }
+
+  std::string style_name(int index) const
+  {
+    const auto found = names_.find(index);
+    return found == names_.end() ? std::string(kNormalStyle) : found->second;
+  }
+
+  void restyle_characters(const ReadStyle& from, const ReadStyle& to)
+  {
+    if (state_.font == from.font)
+      state_.font = to.font;
+    if (state_.half_points == from.half_points)
+      state_.half_points = to.half_points;
+    if (state_.bold == from.bold)
+      state_.bold = to.bold;
+    if (state_.italic == from.italic)
+      state_.italic = to.italic;
+    if (state_.underline == from.underline)
+      state_.underline = to.underline;
+  }
+
+  // \sN: the paragraph takes the style, attribute by attribute, as
+  // apply_style() does, so words after it still win. A number the sheet does
+  // not define is Normal.
+  void set_style(int index)
+  {
+    if (resolved_.count(index) == 0)
+      index = 0;
+    const ReadStyle& from = read_style(state_.style);
+    const ReadStyle& to = read_style(index);
+    restyle_characters(from, to);
+    if (state_.indents.left == from.indents.left)
+      state_.indents.left = to.indents.left;
+    if (state_.indents.right == from.indents.right)
+      state_.indents.right = to.indents.right;
+    if (state_.indents.first == from.indents.first)
+      state_.indents.first = to.indents.first;
+    if (state_.align == from.align)
+      state_.align = to.align;
+    if (state_.heading == from.heading) {
+      state_.heading = to.heading;
+      if (!paragraph_.runs.empty())
+        paragraph_.heading = to.heading;
+    }
+    state_.style = index;
+  }
+
   void add_text(const std::string& utf8)
   {
     flush_lead();
@@ -938,6 +1326,7 @@ class Reader {
     char_seen_ = false;
     paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
     paragraph_.align = live ? state_.align : final_align_;
+    paragraph_.style = style_name(live ? state_.style : final_style_);
     paragraphs_.push_back(paragraph_);
     marks_.push_back(live ? state_.marks : final_marks_);
     paragraph_ = Paragraph{};
@@ -968,10 +1357,12 @@ class Reader {
   void merge(Document& doc)
   {
     doc.paragraphs.clear();
+    doc.styles = sheet_;
     for (size_t i = 0; i < paragraphs_.size(); ++i) {
       Paragraph& paragraph = paragraphs_[i];
       Paragraph merged;
       merged.heading = paragraph.heading;
+      merged.style = paragraph.style;
       merged.align = paragraph.align;
       merged.indents = paragraph.indents;
       merged.list = resolve(marks_[i]);
@@ -1057,6 +1448,18 @@ class Reader {
   ListDef building_;
   Override override_;
   bool closed_ = false;
+  int final_style_ = 0;
+  StyleEntry entry_;
+  size_t entry_depth_ = 0;
+  std::map<int, StyleEntry> styles_read_;
+  // The keys of later entries for a number already read, in file order.
+  static constexpr int kSpareStyle = -1100000000;
+  std::vector<int> spare_styles_;
+  std::map<int, ReadStyle> resolved_;
+  std::map<int, std::string> names_;
+  std::vector<Style> sheet_;
+  bool saw_sheet_ = false;
+  bool sheet_resolved_ = false;
   uint32_t lead_ = 0;
   // The last character was a CR line break, so an LF straight after it is
   // the same break.
@@ -1145,6 +1548,33 @@ std::string rtf_export(const Document& doc)
     if (const Run* mark = mark_of(paragraph))
       index_of(mark->font);
   }
+
+  // Styles. A document that only uses Normal from the default sheet, as
+  // every file before styles did, is written without a sheet, as before.
+  // Otherwise every style is written whole, so readers need not resolve
+  // \sbasedon; Normal is \s0 and the rest are numbered in sheet order.
+  const std::vector<Style>& given = style_sheet(doc);
+  bool any_style = given != default_styles();
+  for (size_t i = 0; i < doc.paragraphs.size() && !any_style; ++i) {
+    const std::string& name = doc.paragraphs[i].style;
+    const Style* style = name == kNormalStyle ? nullptr : find_style(given, name);
+    if (style != nullptr && style->name != kNormalStyle)
+      any_style = true;
+    // A heading in Normal needs the sheet too: read without one, it would be
+    // taken for an M1 heading and given its Heading style.
+    const int heading = doc.paragraphs[i].heading;
+    if (heading >= 1 && heading <= 6 && (style == nullptr || style->name == kNormalStyle))
+      any_style = true;
+  }
+  const std::vector<Style> sheet = any_style ? complete_sheet(given) : std::vector<Style>{};
+  auto style_index = [&](const std::string& name) {
+    const Style* style = find_style(sheet, name);
+    return style == nullptr ? -1 : static_cast<int>(style - sheet.data());
+  };
+  if (any_style) {
+    for (const Style& style : sheet)
+      index_of(style.format.font);
+  }
   if (fonts.empty())
     fonts.push_back("Sans");
 
@@ -1204,6 +1634,66 @@ std::string rtf_export(const Document& doc)
       out << "{\\listoverride\\listid" << n << "\\listoverridecount0\\ls" << n << "}";
     out << "}\n";
   }
+  if (any_style) {
+    out << "{\\stylesheet";
+    for (size_t i = 0; i < sheet.size(); ++i) {
+      const Style& style = sheet[i];
+      out << "{";
+      if (i != 0)
+        out << "\\s" << i;
+      const int base = style_index(style.based_on);
+      if (i != 0 && base >= 0)
+        out << "\\sbasedon" << base;
+      const int next = style_index(style.next);
+      out << "\\snext" << (next >= 0 ? next : static_cast<int>(i));
+      // Whole, but a reader still inherits what is not written, so whatever
+      // the base has and this style does not is written off.
+      const Style* up = base >= 0 ? &sheet[static_cast<size_t>(base)] : nullptr;
+      const Indents indents = clamp_indents(style.indents);
+      const Indents up_indents = up ? clamp_indents(up->indents) : Indents{};
+      if (indents.left != 0 || up_indents.left != 0)
+        out << "\\li" << indents.left;
+      if (indents.right != 0 || up_indents.right != 0)
+        out << "\\ri" << indents.right;
+      if (indents.first != 0 || up_indents.first != 0)
+        out << "\\fi" << indents.first;
+      if (style.align == Align::Center)
+        out << "\\qc";
+      else if (style.align == Align::Right)
+        out << "\\qr";
+      else if (style.align == Align::Justify)
+        out << "\\qj";
+      else if (up && up->align != Align::Left)
+        out << "\\ql";
+      if (style.heading >= 1 && style.heading <= 6)
+        out << "\\outlinelevel" << (style.heading - 1);
+      else if ((up && up->heading != 0) || builtin_heading(style.name) != 0)
+        out << "\\outlinelevel9";  // a reader would take one from the base or name
+      out << "\\f" << index_of(style.format.font) << "\\fs" << half_points_of(style.format.size);
+      if (style.format.bold)
+        out << "\\b";
+      else if (up && up->format.bold)
+        out << "\\b0";
+      if (style.format.italic)
+        out << "\\i";
+      else if (up && up->format.italic)
+        out << "\\i0";
+      if (style.format.underline)
+        out << "\\ul";
+      else if (up && up->format.underline)
+        out << "\\ulnone";
+      // ';' ends the name, so one inside it is written as a code point.
+      std::string name;
+      for (char c : escape_rtf(style.name, true)) {
+        if (c == ';')
+          name += "\\u59?";
+        else
+          name.push_back(c);
+      }
+      out << " " << name << ";}";
+    }
+    out << "}\n";
+  }
   bool wrote = false;
   for (size_t index = 0; index < doc.paragraphs.size(); ++index) {
     const Paragraph& paragraph = doc.paragraphs[index];
@@ -1211,38 +1701,52 @@ std::string rtf_export(const Document& doc)
     wrote = true;
     if (list.kind != ListKind::None) {
       // The label as plain text for readers without lists. Readers with them
-      // skip {\pntext ...}.
-      int label_font = 0;
-      double label_size = 11;
-      if (const Run* mark = mark_of(paragraph)) {
-        label_font = index_of(mark->font);
-        label_size = mark->size;
-      }
+      // skip {\pntext ...}. It is formatted as the item's first character,
+      // as the label is drawn, or for an empty item as its own format
+      // (Paragraph::mark), else its style: Word 97 formats it from the
+      // paragraph mark.
+      Run label;
+      label.size = 11;
+      if (const Style* own = any_style ? find_style(sheet, paragraph.style) : nullptr)
+        label = own->format;
+      if (const Run* mark = mark_of(paragraph))
+        label = *mark;
       for (const Run& run : paragraph.runs) {
         if (run.text.empty())
           continue;
-        label_font = index_of(run.font);
-        label_size = run.size;
+        label = run;
         break;
       }
-      out << "{\\pntext\\f" << label_font << "\\fs" << half_points_of(label_size) << " "
+      out << "{\\pntext\\f" << index_of(label.font) << "\\fs" << half_points_of(label.size)
+          << (label.bold ? "\\b" : "") << (label.italic ? "\\i" : "") << " "
           << label_rtf(list_label(list, numbers[index])) << "\\tab}";
     }
     out << "\\pard";
+    const int style = any_style ? style_index(paragraph.style) : -1;
+    if (style > 0)
+      out << "\\s" << style;
+    // Written whole after \\sN, as Word writes it: LibreOffice takes \\pard
+    // as flush left whatever the style says. Zero and left are written too
+    // where the style has otherwise.
+    const Style* given_style =
+        any_style ? &sheet[static_cast<size_t>(std::max(0, style))] : nullptr;
+    const Indents from = given_style ? clamp_indents(given_style->indents) : Indents{};
     const Indents indents = clamp_indents(paragraph.indents);
-    if (indents.left != 0)
+    if (indents.left != 0 || indents.left != from.left)
       out << "\\li" << indents.left;
-    if (indents.right != 0)
+    if (indents.right != 0 || indents.right != from.right)
       out << "\\ri" << indents.right;
-    if (indents.first != 0)
+    if (indents.first != 0 || indents.first != from.first)
       out << "\\fi" << indents.first;
-    // Left is the default and is not written.
     if (paragraph.align == Align::Center)
       out << "\\qc";
     else if (paragraph.align == Align::Right)
       out << "\\qr";
     else if (paragraph.align == Align::Justify)
       out << "\\qj";
+    // Left is RTF's default, written only where the style has otherwise.
+    else if (given_style && given_style->align != Align::Left)
+      out << "\\ql";
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.
@@ -1250,43 +1754,56 @@ std::string rtf_export(const Document& doc)
     }
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
       out << "\\outlinelevel" << (paragraph.heading - 1);
+    else if (given_style && given_style->heading != 0)
+      out << "\\outlinelevel9";  // body text in a heading style
     bool first = true;
     int font = -1;
     int size = -1;
     bool bold = false;
     bool italic = false;
     bool underline = false;
-    // Only what changes from the run before, all of it for the first.
+    // Only what changes from the run before, all of it for the first. True
+    // when it wrote a control word, which the text after needs a delimiter
+    // after: a run that looks like the one before (its direct bits aside)
+    // carries straight on.
     auto format = [&](const Run& run) {
+      bool word = first;
       const int fi = index_of(run.font);
       if (first || fi != font) {
         out << "\\f" << fi;
         font = fi;
+        word = true;
       }
       const int half = half_points_of(run.size);
       if (first || half != size) {
         out << "\\fs" << half;
         size = half;
+        word = true;
       }
       if (first || run.bold != bold) {
         out << (run.bold ? "\\b" : "\\b0");
         bold = run.bold;
+        word = true;
       }
       if (first || run.italic != italic) {
         out << (run.italic ? "\\i" : "\\i0");
         italic = run.italic;
+        word = true;
       }
       if (first || run.underline != underline) {
         out << (run.underline ? "\\ul" : "\\ulnone");
         underline = run.underline;
+        word = true;
       }
       first = false;
+      return word;
     };
     for (const Run& run : paragraph.runs) {
       if (run.text.empty())
         continue;
-      format(run);
-      out << " " << escape_rtf(run.text);
+      if (format(run))
+        out << " ";
+      out << escape_rtf(run.text);
     }
     // An empty paragraph's own format goes before its \par, as Word writes
     // it, so an empty 20 pt line reopens at 20 pt.

@@ -398,7 +398,7 @@ void MainWindow::build_menus()
   align_right_item_ = add_item(*format_menu, "Align _Right", true);
   justify_item_ = add_item(*format_menu, "_Justify", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*format_menu, "_Style…", false);
+  style_item_ = add_item(*format_menu, "_Style…", true);
   bullets_item_ = add_item(*format_menu, "Bull_ets", true);
   numbering_item_ = add_item(*format_menu, "_Numbering", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
@@ -498,9 +498,6 @@ void MainWindow::build_toolbars()
     size_combo_.append(std::to_string(size));
   size_choices_shown_.assign(preset_sizes().begin(), preset_sizes().end());
   size_combo_.set_active_text("11");
-  style_combo_.append("Body text");
-  style_combo_.set_active(0);
-  style_combo_.set_sensitive(false);
   style_combo_.set_size_request(110, -1);
   style_combo_.set_tooltip_text("Style");
 
@@ -574,7 +571,7 @@ void MainWindow::build_page()
   ruler_.get_style_context()->add_class("ruler");
   ruler_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_ruler_draw));
 
-  page_.set_size_request(kScreenPageWidth, kScreenPageHeight);
+  page_.set_size_request(kScreenPageWidth, page_sheet_height(1.0));
   page_.get_style_context()->add_class("page");
   page_.add_events(Gdk::BUTTON_PRESS_MASK);
   page_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
@@ -634,6 +631,13 @@ void MainWindow::build_page()
     text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
     if (nat_h > allocation.get_height()) {
       grow_page_ = true;
+      queue_page_size();
+    } else if (page_height_stale()) {
+      // The text came out shorter than the height the page was last sized
+      // to. apply_page_size() measures the text before a zoom has rewrapped
+      // it, so the request it sets from Fit width to 50% is the old, taller
+      // layout's; left there, the sheet only ever grew and its height
+      // depended on the zooms before. Size it again to the text as it is.
       queue_page_size();
     }
     scroll_to_caret();
@@ -839,15 +843,11 @@ void MainWindow::apply_page_size()
     return;
   sizing_ = true;
   const double z = zoom_factor();
-  const ViewGeometry g = geometry();
   // Recomputed from the zoom and the view every time, never kept from the
   // last layout: the text view asks for exactly this width, so a smaller
   // zoom is a narrower allocation and a narrower wrap.
   const int width = page_widths(view_, z).page;
   text_.set_layout_width(width);
-  // Draft's white area is at least as tall as the visible pasteboard, so
-  // the text starts at the top and there is no gray below it.
-  const int base_h = g.chrome ? g.page_height : std::max(1, paste_.get_allocated_height() - 4);
   apply_margins();
   // Paragraph tags carry the text inset in their margins, so they are
   // restyled when the zoom or the view changes it.
@@ -856,10 +856,7 @@ void MainWindow::apply_page_size()
     styled_view_ = view_;
     restyle_tags();
   }
-  int min_h = 0;
-  int nat_h = 0;
-  text_.get_preferred_height_for_width(std::max(1, width - (g.chrome ? 2 : 0)), min_h, nat_h);
-  const int height = std::max(base_h, nat_h);
+  const int height = page_height();
   int current_w = 0;
   int current_h = 0;
   page_.get_size_request(current_w, current_h);
@@ -867,6 +864,30 @@ void MainWindow::apply_page_size()
     page_.set_size_request(width, height);
   sizing_ = false;
   queue_page_status();
+}
+
+// The page's height for the view, the zoom, the window and the text as they
+// are now, and nothing else: the least height (A4 in Page, the pasteboard's
+// in Draft), or the text's own when it is taller.
+int MainWindow::page_height() const
+{
+  const ViewGeometry g = geometry();
+  // Draft's white area is at least as tall as the visible pasteboard, so
+  // the text starts at the top and there is no gray below it.
+  const int base_h = g.chrome ? g.page_height : std::max(1, paste_.get_allocated_height() - 4);
+  const int width = page_widths(view_, zoom_factor()).page;
+  int min_h = 0;
+  int nat_h = 0;
+  text_.get_preferred_height_for_width(std::max(1, width - (g.chrome ? 2 : 0)), min_h, nat_h);
+  return std::max(base_h, nat_h);
+}
+
+bool MainWindow::page_height_stale() const
+{
+  int current_w = 0;
+  int current_h = 0;
+  page_.get_size_request(current_w, current_h);
+  return current_h != page_height();
 }
 
 void MainWindow::queue_page_size()

@@ -14,21 +14,33 @@
 #include <functional>
 #include <utility>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace writeit {
 
-// What a paragraph tag carries: the paragraph's indents, alignment, and list.
+// What a paragraph tag carries: the paragraph's indents, alignment, list,
+// and style.
 struct ParaFormat {
   Indents indents;
   Align align = Align::Left;
   ListFormat list;
+  std::string style = kNormalStyle;
+  // What of it was set directly (Paragraph::direct).
+  unsigned direct = 0;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
-  return a.indents == b.indents && a.align == b.align && a.list == b.list;
+  return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
+         a.direct == b.direct;
+}
+
+inline ParaFormat para_format(const Paragraph& paragraph)
+{
+  return ParaFormat{paragraph.indents, paragraph.align, paragraph.list, paragraph.style,
+                    paragraph.direct};
 }
 
 class MainWindow : public Gtk::ApplicationWindow {
@@ -168,6 +180,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   int margin_right() const;
   int indent_px(int twips) const;
   double zoom_factor() const;
+  // What apply_page_size() sizes the page's height to now, and whether the
+  // page's size request differs from it.
+  int page_height() const;
+  bool page_height_stale() const;
   Run format_of(const Gtk::TextIter& iter) const;
   int heading_of(const Gtk::TextIter& iter) const;
   int heading_near(int offset) const;
@@ -220,6 +236,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_align_toggled(Align align);
   void show_align();
   void on_paragraph();
+  // Named styles (styles.cpp).
+  std::vector<Style> sheet() const;
+  void fill_style_combo();
+  void show_style();
+  void on_style_chosen();
+  void apply_named_style(const std::string& name);
+  void apply_next_style();
+  void on_style_dialog();
+  int paragraph_index(int offset) const;
+  // One undo step from `before` to `after`, keeping the selection.
+  void commit_document(const Document& before, const Document& after);
   void toggle_list_kind(ListKind kind);
   // Tags the paragraph that starts at `start` with `format`, or holds the
   // format aside for the empty last paragraph.
@@ -256,8 +283,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   // only, through "list-tab" tags the document never sees; brought up to
   // date in an idle after edits, formatting, zoom, and the view.
   void queue_list_tabs();
+  // Notes that [start, end) changed, for the next update_list_tabs().
+  void note_list_tabs(const Gtk::TextIter& start, const Gtk::TextIter& end);
   Glib::RefPtr<Gtk::TextTag> list_tab_tag(int indent);
   void update_list_tabs();
+  // Tags paragraph `index` of tab_lines_, from buffer offset `start` to
+  // `end`, among the existing list-tab tags `old`.
+  Glib::RefPtr<Gtk::TextTag> retab_paragraph(size_t index, int start, int end,
+                                             const std::vector<Glib::RefPtr<Gtk::TextTag>>& old);
   void sync_list_controls();
 
   void build_find();
@@ -324,6 +357,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bullets_item_ = nullptr;
   Gtk::MenuItem* numbering_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
+  Gtk::MenuItem* style_item_ = nullptr;
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
   Gtk::MenuItem* align_right_item_ = nullptr;
@@ -387,6 +421,28 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The list-tab idle, likewise; tabbing_ while it retags.
   sigc::connection list_tabs_idle_;
   bool tabbing_ = false;
+  // Paragraphs update_list_tabs() has looked at, for the tests.
+  long list_tabs_evaluated_ = 0;
+  // Calls of update_list_tabs() and update_list_shifts(), for the tests:
+  // none while nothing changes.
+  long list_updates_ = 0;
+  // What update_list_tabs() last saw of each paragraph: its format and its
+  // list number. Typing changes neither, so only the typed-in paragraphs
+  // are looked at again; a new or removed paragraph, or a paragraph format
+  // change, renumbers (a walk of the paragraph tags, not a capture), and
+  // zoom, the view, the margins or a font change look at every paragraph.
+  struct TabLine {
+    ParaFormat format;
+    int number = 0;
+  };
+  std::vector<TabLine> tab_lines_;
+  bool tabs_full_ = true;
+  bool tabs_renumber_ = false;
+  bool tabs_noted_ = false;
+  Glib::RefPtr<Gtk::TextMark> tabs_from_;
+  Glib::RefPtr<Gtk::TextMark> tabs_to_;
+  // Label widths by font, size and text, at the current zoom.
+  std::map<std::string, int> tab_widths_;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
   // The buffer's mark-set. A window closed with text selected gives up the
@@ -417,6 +473,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<Snapshot> undo_;
   std::vector<Snapshot> redo_;
   gint64 last_typed_us_ = 0;
+  // The document's style sheet; empty for the default, as in Document.
+  std::vector<Style> styles_;
+  // Enter at the end of a paragraph: the new one takes the next style.
+  bool next_style_pending_ = false;
+  // apply_align() is under way: the alignment was chosen, so it is direct.
+  bool chose_align_ = false;
+  int next_style_from_ = -1;
   Glib::RefPtr<Gtk::TextMark> insert_start_;
   Glib::RefPtr<Gtk::TextMark> insert_end_;
 

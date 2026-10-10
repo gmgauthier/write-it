@@ -9,6 +9,8 @@
 #include "check.hpp"
 #include "view.hpp"
 
+#include <cmath>
+
 namespace {
 
 using writeit::page_count;
@@ -24,6 +26,18 @@ void heights()
   CHECK(page_text_height(2.0) == 1527 - 144);
   CHECK(page_text_height(0.75) > page_text_height(0.5));
   CHECK(page_text_height(0.01) >= 1);
+}
+
+void sheets()
+{
+  // The Page view's sheet is A4 at every zoom: its least height is the A4
+  // proportion of its width, and a page of the count is that sheet less the
+  // page's top and bottom insets, so the sheet and the count agree.
+  for (double z : {0.5, 0.75, 1.0, 2.0, 1.7333}) {
+    const auto g = writeit::view_geometry(writeit::ViewMode::Page, z);
+    CHECK(std::abs(g.page_height - g.page_width * 29.7 / 21.0) <= 1.5);
+    CHECK(page_text_height(z) == g.page_height - 2 * g.margin_y);
+  }
 }
 
 void counts()
@@ -66,11 +80,12 @@ void labels()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 29;
+constexpr int kChecks = 39;
 
 int main()
 {
   heights();
+  sheets();
   counts();
   zoom_free();
   labels();
