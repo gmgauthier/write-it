@@ -270,6 +270,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   int paragraph_index(int offset) const;
   // One undo step from `before` to `after`, keeping the selection.
   void commit_document(const Document& before, const Document& after);
+  // commit_document()'s retagging when the text is the same; false if not.
+  bool retag_paragraphs(const Document& before, const Document& after);
   void toggle_list_kind(ListKind kind);
   // Tags the paragraph that starts at `start` with `format`, or holds the
   // format aside for the empty last paragraph.

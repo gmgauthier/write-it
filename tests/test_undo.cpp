@@ -146,6 +146,33 @@ struct MainWindowProbe {
     buffer->delete_mark(source_start);
     buffer->delete_mark(source_end);
   }
+  // Whether the buffer is as replace_buffer() would build it from what it
+  // shows: the same tags on every character (the screen-only list tags
+  // aside) and the same capture(). Rebuilds the buffer, history cleared.
+  static bool canonical(MainWindow& w)
+  {
+    auto signature = [&w] {
+      std::string out;
+      for (auto it = w.buffer_->begin(); !it.is_end();) {
+        out += std::to_string(it.get_offset()) + ':';
+        for (const auto& tag : it.get_tags()) {
+          const std::string name = tag->property_name().get_value();
+          if (name.rfind(std::string("list-shift") + '\x1f', 0) == 0 ||
+              name.rfind(std::string("list-tab") + '\x1f', 0) == 0)
+            continue;
+          out += name + '|';
+        }
+        out += '\n';
+        if (!it.forward_to_tag_toggle(Glib::RefPtr<Gtk::TextTag>()))
+          break;
+      }
+      return out;
+    };
+    const Document shown = w.capture();
+    const std::string tags = signature();
+    load(w, shown);
+    return w.capture() == shown && signature() == tags;
+  }
   static void begin_action(MainWindow& w)
   {
     w.buffer_->begin_user_action();
@@ -722,6 +749,41 @@ void review(writeit::MainWindow& w)
   CHECK(text_of(MainWindowProbe::doc(w)) == "a");
 }
 
+// A style command retags only the paragraphs it changes; the buffer must
+// come out as a full rebuild would make it, and undo and redo exactly.
+// Twelve checks.
+void retag(writeit::MainWindow& w)
+{
+  Paragraph mixed;
+  mixed.runs = {run("plain "), run("bold", true), run(" big", false, true, 18)};
+  Paragraph item = para("item");
+  item.list.kind = ListKind::Bullet;
+  item.list.list = 1;
+  Paragraph empty;
+  Run mark = run("", true);
+  empty.mark = mark;
+  const Document start = document({mixed, item, item, empty, para("text"), Paragraph{}});
+  struct Case {
+    int from;
+    int to;
+    const char* style;
+  };
+  const Case cases[] = {{0, 0, "Heading 1"}, {13, 13, "Heading 2"}, {0, 25, "Block Text"},
+                        {-1, -1, "Heading 3"}};
+  for (const Case& c : cases) {
+    MainWindowProbe::load(w, start);
+    const int end = MainWindowProbe::length(w);
+    MainWindowProbe::select(w, c.from < 0 ? end : c.from, c.to < 0 ? end : c.to);
+    MainWindowProbe::style(w, c.style);
+    const Document after = MainWindowProbe::doc(w);
+    MainWindowProbe::undo(w);
+    CHECK(MainWindowProbe::doc(w) == start);
+    MainWindowProbe::redo(w);
+    CHECK(MainWindowProbe::doc(w) == after && !(after == start));
+    CHECK(MainWindowProbe::canonical(w));
+  }
+}
+
 // Typing: one step per burst, the caret back where it began, the saved
 // state found again.
 void typing(writeit::MainWindow& w)
@@ -1222,6 +1284,7 @@ int main(int argc, char* argv[])
     merged_after_save(window);
     same_text_edits(window, Glib::build_filename(home, "saved.rtf"));
     review(window);
+    retag(window);
     delete_and_paste(window);
     formats(window);
     paragraphs(window);
@@ -1235,5 +1298,5 @@ int main(int argc, char* argv[])
   }
   g_remove(Glib::build_filename(home, "saved.rtf").c_str());
   g_rmdir(home.c_str());
-  return suite_test::done("undo", 215);
+  return suite_test::done("undo", 227);
 }
