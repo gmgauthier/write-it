@@ -176,6 +176,14 @@ MainWindow::~MainWindow()
   list_shifts_idle_.disconnect();
   list_tabs_idle_.disconnect();
   clipboard_owner_.disconnect();
+  mark_set_.disconnect();
+  set_focus_.disconnect();
+  size_popup_idle_.disconnect();
+  // The text view gives PRIMARY back as it unrealizes, so it must hold it.
+  if (primary_lent_ && buffer_) {
+    buffer_->add_selection_clipboard(text_.get_clipboard("PRIMARY"));
+    primary_lent_ = false;
+  }
 }
 
 MainWindow::MainWindow()
@@ -485,11 +493,10 @@ void MainWindow::build_toolbars()
 
   font_combo_.set_size_request(128, -1);
   font_combo_.set_tooltip_text("Font");
-  size_combo_.set_size_request(52, -1);
   size_combo_.set_tooltip_text("Size");
   for (int size : preset_sizes())
     size_combo_.append(std::to_string(size));
-  size_choices_shown_ = preset_sizes();
+  size_choices_shown_.assign(preset_sizes().begin(), preset_sizes().end());
   size_combo_.set_active_text("11");
   style_combo_.set_size_request(110, -1);
   style_combo_.set_tooltip_text("Style");
@@ -501,7 +508,8 @@ void MainWindow::build_toolbars()
     return item;
   };
   auto* font_item = hold(font_combo_, 128);
-  auto* size_item = hold(size_combo_, 52);
+  // As wide as "1638" needs (NarrowCombo), not a fixed 52 px.
+  auto* size_item = hold(size_combo_, -1);
   format_bar_.append(*font_item);
   format_bar_.append(*size_item);
 

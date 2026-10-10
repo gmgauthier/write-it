@@ -2,6 +2,8 @@
 
 #include "document.hpp"
 
+#include "font_sizes.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -67,7 +69,7 @@ bool heading_marks(const std::string& line, int& level, std::string& body)
   return true;
 }
 
-Paragraph parse_inlines(const std::string& text, const std::string& font, int size, int heading)
+Paragraph parse_inlines(const std::string& text, const std::string& font, double size, int heading)
 {
   Paragraph paragraph;
   paragraph.heading = heading;
@@ -251,6 +253,9 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
       merged.push_back(std::move(run));
   }
   paragraph.runs = std::move(merged);
+  // An empty paragraph's own format (its mark) moves as its text would.
+  if (paragraph.mark)
+    restyle_run(*paragraph.mark, from, to);
   if (paragraph.list.kind == ListKind::None) {
     restyle_indents(paragraph.indents, paragraph.direct, from.indents, to.indents);
     paragraph.indents = clamp_indents(paragraph.indents);
@@ -333,6 +338,17 @@ bool same_format(const Run& a, const Run& b)
   return same_look(a, b) && a.direct == b.direct;
 }
 
+bool same_mark(const Paragraph& a, const Paragraph& b)
+{
+  // Only an empty paragraph has a format of its own; text has its runs'.
+  if (!a.runs.empty() || !b.runs.empty())
+    return true;
+  if (a.mark.has_value() != b.mark.has_value())
+    return false;
+  // By value, as runs compare: what was set directly is not saved.
+  return !a.mark || same_look(*a.mark, *b.mark);
+}
+
 // Runs compare as a reader would read them: by value, adjacent runs that
 // look alike counting as one.
 bool operator==(const Run& a, const Run& b)
@@ -381,7 +397,7 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
-         a.align == b.align && a.list == b.list && same_runs(a.runs, b.runs);
+         a.align == b.align && a.list == b.list && same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
 bool indents_fit(const Indents& indents)
@@ -721,7 +737,7 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.style != y.style || x.indents != y.indents ||
         x.align != y.align || x.list.kind != y.list.kind || x.list.level != y.list.level ||
-        !same_runs(x.runs, y.runs))
+        !same_runs(x.runs, y.runs) || !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -755,15 +771,16 @@ bool operator!=(const Style& a, const Style& b)
   return !(a == b);
 }
 
-std::vector<Style> builtin_styles(const std::string& font, int size)
+std::vector<Style> builtin_styles(const std::string& font, double size)
 {
   const std::string face = font.empty() ? "Sans" : font;
-  const int base = std::max(1, std::min(kMaxStyleSize, size));
-  auto style = [&](const char* name, int points, bool bold, bool italic) {
+  // In half points, as RTF's \fsN, so a 10.5 pt Normal stays 10.5 pt.
+  const int base = std::min(2 * kMaxStyleSize, half_points_of(size));
+  auto style = [&](const char* name, int half_points, bool bold, bool italic) {
     Style s;
     s.name = name;
     s.format.font = face;
-    s.format.size = std::min(kMaxStyleSize, points);
+    s.format.size = size_from_half_points(std::min(2 * kMaxStyleSize, half_points));
     s.format.bold = bold;
     s.format.italic = italic;
     if (std::string(name) != kNormalStyle)
@@ -777,7 +794,7 @@ std::vector<Style> builtin_styles(const std::string& font, int size)
   // and Word 97's Heading 4 is 12 pt bold over 10 pt Normal): bold, then bold
   // italic and italic for the last two, as AbiWord's and LibreOffice's sets
   // step down.
-  const int sizes[] = {base + 5, base + 3, base + 2, base + 1, base + 1, base + 1};
+  const int sizes[] = {base + 10, base + 6, base + 4, base + 2, base + 2, base + 2};
   const bool bolds[] = {true, true, true, true, true, false};
   const bool italics[] = {false, false, false, false, true, true};
   for (int level = 1; level <= 6; ++level) {
@@ -790,7 +807,7 @@ std::vector<Style> builtin_styles(const std::string& font, int size)
   Style block = style("Block Text", base, false, false);
   block.indents = Indents{1440, 1440, 0};
   sheet.push_back(block);
-  Style plain = style("Plain Text", std::max(1, base - 1), false, false);
+  Style plain = style("Plain Text", base - 2, false, false);
   plain.format.font = "Monospace";
   sheet.push_back(plain);
   return sheet;
@@ -927,7 +944,8 @@ bool update_style(Document& doc, const std::string& name, const Style& changed)
   const Style old = sheet[index];
   Style updated = changed;
   updated.name = clean_style_name(changed.name);
-  updated.format.size = std::max(1, std::min(kMaxStyleSize, updated.format.size));
+  updated.format.size =
+      size_from_half_points(std::min(2 * kMaxStyleSize, half_points_of(updated.format.size)));
   if (updated.name.empty())
     return false;
   if (same_name(old.name, kNormalStyle) && updated.name != kNormalStyle)
@@ -970,7 +988,8 @@ bool add_style(Document& doc, const Style& style)
   std::vector<Style> sheet = style_sheet(doc);
   Style added = style;
   added.name = clean_style_name(style.name);
-  added.format.size = std::max(1, std::min(kMaxStyleSize, added.format.size));
+  added.format.size =
+      size_from_half_points(std::min(2 * kMaxStyleSize, half_points_of(added.format.size)));
   if (added.name.empty() || find_style(sheet, added.name) || sheet.size() >= kMaxStyles)
     return false;
   if (!added.based_on.empty()) {
@@ -992,17 +1011,18 @@ bool add_style(Document& doc, const Style& style)
   return true;
 }
 
-void adopt_sheet(Document& doc, const std::string& font, int size)
+void adopt_sheet(Document& doc, const std::string& font, double size)
 {
   if (!doc.styles.empty())
     return;
-  // The font and size carrying the most characters, ties to the first.
+  // The font and size carrying the most characters, ties to the first. Sizes
+  // in half points, so 10.5 pt text gives a 10.5 pt sheet.
   std::vector<std::pair<std::pair<std::string, int>, size_t>> counts;
   for (const Paragraph& paragraph : doc.paragraphs) {
     for (const Run& run : paragraph.runs) {
       if (run.text.empty())
         continue;
-      const auto key = std::make_pair(run.font, run.size);
+      const auto key = std::make_pair(run.font, half_points_of(run.size));
       auto found = std::find_if(counts.begin(), counts.end(),
                                 [&key](const auto& item) { return item.first == key; });
       if (found == counts.end())
@@ -1012,7 +1032,7 @@ void adopt_sheet(Document& doc, const std::string& font, int size)
     }
   }
   std::string chosen_font = font;
-  int chosen_size = size;
+  int chosen_size = half_points_of(size);
   size_t best = 0;
   for (const auto& item : counts) {
     if (item.second > best) {
@@ -1021,10 +1041,10 @@ void adopt_sheet(Document& doc, const std::string& font, int size)
       chosen_size = item.first.second;
     }
   }
-  doc.styles = builtin_styles(chosen_font, chosen_size);
+  doc.styles = builtin_styles(chosen_font, size_from_half_points(chosen_size));
 }
 
-void adopt_heading_styles(Document& doc, const std::string& font, int size)
+void adopt_heading_styles(Document& doc, const std::string& font, double size)
 {
   if (!doc.styles.empty())
     return;
@@ -1062,7 +1082,7 @@ int list_label_space(const Indents& raw)
   return list_text_start(indents) - (indents.left + indents.first);
 }
 
-Document blank_document(const std::string& font, int size)
+Document blank_document(const std::string& font, double size)
 {
   Document doc;
   doc.styles = builtin_styles(font, size);
@@ -1070,7 +1090,7 @@ Document blank_document(const std::string& font, int size)
   return doc;
 }
 
-Document plain_import(const std::string& text, const std::string& font, int size)
+Document plain_import(const std::string& text, const std::string& font, double size)
 {
   Document doc;
   doc.styles = builtin_styles(font, size);
@@ -1105,7 +1125,7 @@ Document plain_import(const std::string& text, const std::string& font, int size
   return doc;
 }
 
-Document markdown_import(const std::string& text, const std::string& font, int size)
+Document markdown_import(const std::string& text, const std::string& font, double size)
 {
   Document doc;
   doc.styles = builtin_styles(font, size);

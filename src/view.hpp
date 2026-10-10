@@ -15,6 +15,18 @@ constexpr ViewMode kDefaultView = ViewMode::Page;
 constexpr int kScreenPageWidth = 540;
 constexpr int kScreenPageTwips = 11906;
 constexpr int kA4Twips = 16838;
+// Page view's text inset either side at 100%, in screen pixels: the page's
+// default margins until M3's Page Setup sets real ones.
+constexpr int kPageInsetPx = 42;
+// The width text has between those margins, in twips: A4's 11906 less the
+// two insets on the screen page's scale, 456 of its 540 px, rounded. That is
+// 10054 twips, 6.98" or 17.73 cm. Draft keeps it, and the zoom scales it
+// with everything else. The Paragraph dialog refuses indents that leave no
+// room in it.
+constexpr int kTextWidthTwips =
+    ((kScreenPageWidth - 2 * kPageInsetPx) * kScreenPageTwips + kScreenPageWidth / 2) /
+    kScreenPageWidth;
+static_assert(kTextWidthTwips == 10054, "A4 less the page view's insets");
 
 // Where the white area sits and how the text is inset in it, in pixels.
 struct ViewGeometry {

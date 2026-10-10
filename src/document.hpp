@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -10,7 +11,8 @@ namespace writeit {
 struct Run {
   std::string text;
   std::string font = "Sans";
-  int size = 11;
+  // Points, in half-point steps as RTF's \fsN: 10.5 is \fs21.
+  double size = 11;
   bool bold = false;
   bool italic = false;
   bool underline = false;
@@ -124,6 +126,12 @@ struct Paragraph {
   Align align = Align::Left;
   ListFormat list;
   std::vector<Run> runs;
+  // An empty paragraph's own character format, its paragraph mark's in Word:
+  // the size its line is drawn at and typing there starts in. Its text is
+  // empty. A paragraph with text takes its format from its runs, and this is
+  // neither written nor compared then. None is the document default, as an
+  // empty paragraph read from a file that gives it no format of its own.
+  std::optional<Run> mark;
   // The paragraph format set directly (kDirect* bits below), as Run's.
   unsigned direct = 0;
 };
@@ -144,6 +152,9 @@ struct Document {
 bool same_format(const Run& a, const Run& b);
 // Same values, whatever was set directly: what a reader would see.
 bool same_look(const Run& a, const Run& b);
+// Two paragraphs' own formats (Paragraph::mark), which only empty paragraphs
+// have, compared as same_look(): true when either has text.
+bool same_mark(const Paragraph& a, const Paragraph& b);
 bool operator==(const Indents& a, const Indents& b);
 bool operator!=(const Indents& a, const Indents& b);
 bool operator==(const ListFormat& a, const ListFormat& b);
@@ -234,7 +245,7 @@ void set_list_level(Paragraph& paragraph, int level);
 // Markdown heading level and outline level, each based on Normal with Normal
 // next; Block Text, indented an inch each side as in Word 97; and Plain Text,
 // in Monospace a point smaller, as Word 97's Plain Text is Courier New.
-std::vector<Style> builtin_styles(const std::string& font, int size);
+std::vector<Style> builtin_styles(const std::string& font, double size);
 // The document's sheet: its own, or the built-in one in Sans 11.
 const std::vector<Style>& style_sheet(const Document& doc);
 // builtin_styles("Sans", 11), the sheet of a document without its own.
@@ -272,17 +283,17 @@ bool add_style(Document& doc, const Style& style);
 // Gives a document without a sheet the built-in one, in the font and size
 // of most of its text (font and size when it has none). The editor does this
 // when such a document first takes a style.
-void adopt_sheet(Document& doc, const std::string& font, int size);
+void adopt_sheet(Document& doc, const std::string& font, double size);
 // Headings from before styles (M1 wrote \\outlinelevel on body-size text and
 // showed it scaled): a document without a sheet whose paragraphs have
 // outline levels adopts the built-in sheet and gives each heading paragraph
 // in Normal its Heading 1-6 style, so headings keep their heading size. A
 // document with a sheet, or without headings, is left alone.
-void adopt_heading_styles(Document& doc, const std::string& font, int size);
+void adopt_heading_styles(Document& doc, const std::string& font, double size);
 
-Document blank_document(const std::string& font, int size);
-Document plain_import(const std::string& text, const std::string& font, int size);
-Document markdown_import(const std::string& text, const std::string& font, int size);
+Document blank_document(const std::string& font, double size);
+Document plain_import(const std::string& text, const std::string& font, double size);
+Document markdown_import(const std::string& text, const std::string& font, double size);
 std::string markdown_export(const Document& doc);
 
 // False when the text is not RTF. Straightforward files keep the paragraphs and

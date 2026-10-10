@@ -7,6 +7,7 @@
 
 #include "check.hpp"
 #include "document.hpp"
+#include "font_sizes.hpp"
 
 #include <string>
 #include <vector>
@@ -1057,7 +1058,100 @@ void review_checks()
   CHECK(import(writeit::rtf_export(twice)) == twice);
 }
 
-constexpr int kChecks = 621;
+// Half points through styles (#36 with #19): a 10.5 pt style (\fs21 in the
+// \stylesheet) reads as 10.5, shows as 10.5 and is written back as \fs21; a
+// direct 10.5 pt run over a style and an empty styled paragraph's own size
+// (its mark) round-trip too. With whole-point style sizes the first check
+// below reads 10, not 10.5.
+void half_point_styles()
+{
+  const std::string rtf_in = std::string(kHead) +
+                             "{\\stylesheet{\\snext0\\f0\\fs22 Normal;}"
+                             "{\\s1\\sbasedon0\\snext0\\f0\\fs21 Small;}}"
+                             "\\pard\\s1\\f0\\fs21 Body\\par"
+                             "\\pard\\s1\\f0\\fs21 Mixed \\fs25 bigger\\par"
+                             "\\pard\\s1\\f0\\fs31\\par"
+                             "\\pard\\s1\\f0\\fs21\\par}";
+  const Document read = import(rtf_in);
+  const Style* small = writeit::find_style(read.styles, "Small");
+  CHECK(small != nullptr && small->format.size == 10.5);
+  CHECK(small != nullptr && writeit::size_text(small->format.size) == "10.5");
+  CHECK(read.paragraphs.size() == 4);
+  if (read.paragraphs.size() == 4) {
+    const Paragraph& body = read.paragraphs[0];
+    CHECK(body.style == "Small" && body.runs.size() == 1 && body.runs[0].size == 10.5);
+    // A direct 12.5 pt run beside the style's 10.5.
+    const Paragraph& mixed = read.paragraphs[1];
+    CHECK(mixed.style == "Small" && mixed.runs.size() == 2 && mixed.runs[0].size == 10.5 &&
+          mixed.runs[1].size == 12.5);
+    // Empty styled paragraphs keep their own size, the style's or not.
+    CHECK(read.paragraphs[2].style == "Small" && read.paragraphs[2].runs.empty() &&
+          read.paragraphs[2].mark && read.paragraphs[2].mark->size == 15.5);
+    CHECK(read.paragraphs[3].mark && read.paragraphs[3].mark->size == 10.5);
+  }
+  const std::string rtf = writeit::rtf_export(read);
+  CHECK(contains(rtf, "\\fs21 Small;}"));
+  const Document back = import(rtf);
+  const Style* small_back = writeit::find_style(back.styles, "Small");
+  CHECK(small_back != nullptr && small_back->format.size == 10.5);
+  CHECK(back.styles == read.styles);
+  CHECK(back == read);
+  CHECK(writeit::rtf_export(back) == rtf);
+
+  // Made in the model: a direct 10.5 pt run in a Heading 2 paragraph (14 pt),
+  // and an empty Heading 3 paragraph whose own size is 10.5.
+  Document doc = writeit::blank_document("Sans", 11);
+  doc.paragraphs = {para("Head"), Paragraph{}};
+  CHECK(writeit::apply_style(doc, 0, 0, "Heading 2"));
+  CHECK(writeit::apply_style(doc, 1, 1, "Heading 3"));
+  Run aside = doc.paragraphs[0].runs[0];
+  aside.text = " aside";
+  aside.size = 10.5;
+  aside.direct |= writeit::kDirectSize;
+  doc.paragraphs[0].runs.push_back(aside);
+  Run mark = writeit::find_style(writeit::style_sheet(doc), "Heading 3")->format;
+  mark.size = 10.5;
+  mark.direct |= writeit::kDirectSize;
+  doc.paragraphs[1].mark = mark;
+  const std::string made = writeit::rtf_export(doc);
+  CHECK(contains(made, "\\fs21  aside"));
+  const Document made_back = import(made);
+  CHECK(made_back == doc);
+  CHECK(made_back.paragraphs.size() == 2 && made_back.paragraphs[0].style == "Heading 2" &&
+        made_back.paragraphs[0].runs.size() == 2 && made_back.paragraphs[0].runs[1].size == 10.5);
+  CHECK(made_back.paragraphs.size() == 2 && made_back.paragraphs[1].style == "Heading 3" &&
+        made_back.paragraphs[1].mark && made_back.paragraphs[1].mark->size == 10.5);
+  // Another style keeps the direct size, on the run and on the empty mark.
+  CHECK(writeit::apply_style(doc, 0, 1, "Heading 1"));
+  CHECK(doc.paragraphs[0].runs.size() == 2 && doc.paragraphs[0].runs[0].size == 16 &&
+        doc.paragraphs[0].runs[1].size == 10.5);
+  CHECK(doc.paragraphs[1].mark && doc.paragraphs[1].mark->size == 10.5);
+  // An empty paragraph's mark at its style's size moves with the style.
+  Document follow = writeit::blank_document("Sans", 11);
+  follow.paragraphs = {Paragraph{}};
+  follow.paragraphs[0].mark = writeit::style_sheet(follow).front().format;
+  CHECK(writeit::apply_style(follow, 0, 0, "Heading 1"));
+  CHECK(follow.paragraphs[0].mark && follow.paragraphs[0].mark->size == 16);
+
+  // The built-in sheet, a sheet adopted from 10.5 pt text, and an edited
+  // style keep half points.
+  const std::vector<Style> sheet = writeit::builtin_styles("Sans", 10.5);
+  CHECK(sheet.front().format.size == 10.5);
+  CHECK(writeit::find_style(sheet, "Heading 1")->format.size == 15.5);
+  CHECK(writeit::find_style(sheet, "Plain Text")->format.size == 9.5);
+  Document plain;
+  plain.paragraphs = {para("Text")};
+  plain.paragraphs[0].runs[0].size = 10.5;
+  writeit::adopt_sheet(plain, "Sans", 11);
+  CHECK(!plain.styles.empty() && plain.styles.front().format.size == 10.5);
+  Style edited = *writeit::find_style(writeit::style_sheet(doc), "Normal");
+  edited.format.size = 12.5;
+  CHECK(writeit::update_style(doc, "Normal", edited));
+  CHECK(writeit::find_style(doc.styles, "Normal")->format.size == 12.5);
+  CHECK(contains(writeit::rtf_export(doc), "\\fs25 Normal;}"));
+}
+
+constexpr int kChecks = 654;
 
 int main()
 {
@@ -1074,5 +1168,6 @@ int main()
   justified_styles();
   direct_kept();
   review_checks();
+  half_point_styles();
   return suite_test::done("styles", kChecks);
 }
