@@ -513,6 +513,21 @@ class TableSheet : public Gtk::Grid {
           window_.update_actions();
           return false;
         });
+        // The cell places the caret, then this click bubbles to the body
+        // text view, whose gesture takes the focus back. Keep the click.
+        view->signal_button_press_event().connect([](GdkEventButton*) { return true; }, true);
+        view->signal_button_release_event().connect([](GdkEventButton*) { return true; }, true);
+        view->signal_motion_notify_event().connect([](GdkEventMotion*) { return true; }, true);
+        frame->add_events(Gdk::BUTTON_PRESS_MASK);
+        frame->signal_button_press_event().connect([view](GdkEventButton* event) {
+          if (!event || event->type != GDK_BUTTON_PRESS)
+            return false;
+          if (event->button == 1) {
+            view->grab_focus();
+            view->get_buffer()->place_cursor(view->get_buffer()->begin());
+          }
+          return true;
+        });
       }
     }
     relayout();
