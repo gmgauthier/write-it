@@ -554,7 +554,7 @@ class Run_ {
       fail("an edit kept redo");
     redo_.clear();
     const int caret = MainWindowProbe::caret(*w_);
-    now.caret_after = caret;
+    now.caret_after = burst == Burst::None ? -1 : caret;
     if (steps == steps_before + 1) {
       now.caret_before = caret_before;
       now.origin = std::to_string(step_) + " " + op_;
@@ -621,6 +621,8 @@ class Run_ {
       redo_.push_back(stack_.back());
       stack_.pop_back();
     } else {
+      // Checked for keys and pastes, whose caret after is where the text
+      // ends; a command over a selection may select it again afterwards.
       if (redo_.back().caret_after >= 0 && MainWindowProbe::caret(*w_) != redo_.back().caret_after)
         fail("redo put the caret at " + std::to_string(MainWindowProbe::caret(*w_)) + ", not " +
              std::to_string(redo_.back().caret_after) + " where the step left it " + where +

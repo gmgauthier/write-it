@@ -1232,9 +1232,13 @@ UndoHistory::Closed MainWindow::close_step(bool may_merge)
     bool seen = false;
     if (final_paragraph_empty()) {
       const int count = buffer_->get_char_count();
-      const ParaFormat above = count > 0 ? para_at(count - 1) : ParaFormat{};
-      const ParaFormat& was = before.pending_para_set ? before.pending_para : above;
+      // capture() of an empty document: a default paragraph.
+      const ParaFormat above = count > 0 ? para_at(count - 1) : para_format(Paragraph{});
+      ParaFormat was = before.pending_para_set ? before.pending_para : above;
       const ParaFormat& now = after.pending_para_set ? after.pending_para : above;
+      // Not the "set directly" bits, which the document's paragraphs do not
+      // compare either (pending Greg's call on style-set versus direct).
+      was.direct = now.direct;
       seen = !(was == now) || before.pending_mark_set != after.pending_mark_set ||
              (after.pending_mark_set && !(before.pending_mark == after.pending_mark));
     }
