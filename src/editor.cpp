@@ -6,6 +6,7 @@
 #include "font_sizes.hpp"
 #include "open_plan.hpp"
 #include "para_check.hpp"
+#include "spelling.hpp"
 
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
@@ -16,6 +17,8 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace writeit {
@@ -637,6 +640,7 @@ void MainWindow::build_editor()
   activate(paragraph_item_, [this] { on_paragraph(); });
   activate(bullets_item_, [this] { toggle_list_kind(ListKind::Bullet); });
   activate(numbering_item_, [this] { toggle_list_kind(ListKind::Number); });
+  activate(spelling_item_, [this] { on_spelling(); });
   activate(options_item_, [this] { on_options(); });
 
   const std::string font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
@@ -4234,10 +4238,12 @@ void MainWindow::on_options()
   auto* size_label = Gtk::manage(new Gtk::Label("Default size"));
   auto* recent_label = Gtk::manage(new Gtk::Label("Recent files"));
   auto* units_label = Gtk::manage(new Gtk::Label("Measurement units"));
+  auto* dictionary_label = Gtk::manage(new Gtk::Label("Dictionary"));
   font_label->set_halign(Gtk::ALIGN_START);
   size_label->set_halign(Gtk::ALIGN_START);
   recent_label->set_halign(Gtk::ALIGN_START);
   units_label->set_halign(Gtk::ALIGN_START);
+  dictionary_label->set_halign(Gtk::ALIGN_START);
   auto* font = Gtk::manage(new Gtk::ComboBoxText());
   auto* size = Gtk::manage(new Gtk::ComboBoxText());
   auto* recent = Gtk::manage(new Gtk::ComboBoxText());
@@ -4260,8 +4266,12 @@ void MainWindow::on_options()
   grid->attach(*size, 1, 1, 1, 1);
   grid->attach(*recent_label, 0, 2, 1, 1);
   grid->attach(*recent, 1, 2, 1, 1);
+  auto* dictionary = Gtk::manage(new Gtk::Entry());
+  dictionary->set_text(settings_.dictionary);
   grid->attach(*units_label, 0, 3, 1, 1);
   grid->attach(*units, 1, 3, 1, 1);
+  grid->attach(*dictionary_label, 0, 4, 1, 1);
+  grid->attach(*dictionary, 1, 4, 1, 1);
   dialog.get_content_area()->pack_start(*grid, Gtk::PACK_SHRINK);
   dialog.show_all_children();
   if (dialog.run() != Gtk::RESPONSE_OK)
@@ -4285,6 +4295,19 @@ void MainWindow::on_options()
   if (static_cast<int>(settings_.recent.size()) > settings_.recent_count)
     settings_.recent.resize(static_cast<size_t>(settings_.recent_count));
   settings_.units = units_from_text(units->get_active_id().raw());
+  std::string chosen_dictionary = dictionary->get_text();
+  const auto trim = [](std::string value) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+      value.erase(value.begin());
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+      value.pop_back();
+    return value;
+  };
+  chosen_dictionary = trim(std::move(chosen_dictionary));
+  if (chosen_dictionary.empty())
+    settings_.dictionary = "en";
+  else if (dictionary_name_ok(chosen_dictionary))
+    settings_.dictionary = chosen_dictionary;
   settings_.save();
   rebuild_recent();
   if (save_path_.empty() && save_point_ && !dirty()) {
@@ -4295,6 +4318,201 @@ void MainWindow::on_options()
     typing_.underline = false;
     show_format(typing_);
   }
+}
+
+void MainWindow::on_spelling()
+{
+  if (!buffer_)
+    return;
+  const std::string name = dictionary_name_ok(settings_.dictionary) ? settings_.dictionary : "en";
+  AspellDictionary dictionary(name);
+  if (!dictionary.available()) {
+    tell(dictionary.error().empty() ? "Could not find aspell." : dictionary.error());
+    return;
+  }
+
+  std::unordered_set<std::string> ignored;
+  std::unordered_map<std::string, bool> cache;
+  auto known = [&](const std::string& word) {
+    const std::string folded = fold_word(word);
+    if (ignored.count(folded) != 0)
+      return true;
+    const auto found = cache.find(folded);
+    if (found != cache.end())
+      return found->second;
+    const bool yes = dictionary.contains(word);
+    cache[folded] = yes;
+    return yes;
+  };
+
+  Document doc = capture();
+  std::vector<SpellMiss> misses = spelling_misses(doc.paragraphs, known);
+  size_t index = 0;
+
+  constexpr int kIgnore = 10;
+  constexpr int kIgnoreAll = 11;
+  constexpr int kChange = 12;
+  constexpr int kChangeAll = 13;
+  Gtk::Dialog dialog("Spelling", *this, true);
+  dialog.set_resizable(false);
+  auto* grid = Gtk::manage(new Gtk::Grid());
+  grid->set_row_spacing(8);
+  grid->set_column_spacing(12);
+  grid->set_margin_top(12);
+  grid->set_margin_bottom(12);
+  grid->set_margin_start(12);
+  grid->set_margin_end(12);
+  auto* word_label = Gtk::manage(new Gtk::Label("Not in dictionary"));
+  auto* change_label = Gtk::manage(new Gtk::Label("Change to"));
+  auto* suggest_label = Gtk::manage(new Gtk::Label("Suggestions"));
+  word_label->set_halign(Gtk::ALIGN_START);
+  change_label->set_halign(Gtk::ALIGN_START);
+  suggest_label->set_halign(Gtk::ALIGN_START);
+  auto* word = Gtk::manage(new Gtk::Label());
+  word->set_halign(Gtk::ALIGN_START);
+  word->set_max_width_chars(28);
+  word->set_ellipsize(Pango::ELLIPSIZE_END);
+  auto* change = Gtk::manage(new Gtk::Entry());
+  change->set_size_request(260, -1);
+  auto* suggestions = Gtk::manage(new Gtk::ListBox());
+  suggestions->set_selection_mode(Gtk::SELECTION_SINGLE);
+  auto* scroll = Gtk::manage(new Gtk::ScrolledWindow());
+  scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+  scroll->set_size_request(260, 140);
+  scroll->add(*suggestions);
+  grid->attach(*word_label, 0, 0, 1, 1);
+  grid->attach(*word, 1, 0, 1, 1);
+  grid->attach(*change_label, 0, 1, 1, 1);
+  grid->attach(*change, 1, 1, 1, 1);
+  grid->attach(*suggest_label, 0, 2, 1, 1);
+  grid->attach(*scroll, 1, 2, 1, 1);
+  dialog.get_content_area()->pack_start(*grid, Gtk::PACK_SHRINK);
+  auto* ignore = dialog.add_button("_Ignore", kIgnore);
+  auto* ignore_all = dialog.add_button("Ignore _All", kIgnoreAll);
+  auto* change_button = dialog.add_button("_Change", kChange);
+  auto* change_all = dialog.add_button("Change A_ll", kChangeAll);
+  dialog.add_button("_Close", Gtk::RESPONSE_CLOSE);
+
+  sigc::connection selected =
+      suggestions->signal_row_selected().connect([change](Gtk::ListBoxRow* row) {
+        if (!row)
+          return;
+        if (auto* label = dynamic_cast<Gtk::Label*>(row->get_child()))
+          change->set_text(label->get_text());
+      });
+
+  auto clear_suggestions = [suggestions] {
+    const std::vector<Gtk::Widget*> rows = suggestions->get_children();
+    for (Gtk::Widget* row : rows)
+      suggestions->remove(*row);
+  };
+  auto show = [&] {
+    const bool done = index >= misses.size();
+    ignore->set_sensitive(!done);
+    ignore_all->set_sensitive(!done);
+    change_button->set_sensitive(!done);
+    change_all->set_sensitive(!done);
+    change->set_sensitive(!done);
+    // Enter applies Change while a word is showing, and closes once it is done.
+    dialog.set_default_response(done ? Gtk::RESPONSE_CLOSE : kChange);
+    clear_suggestions();
+    if (done) {
+      word->set_text("The spelling check is complete.");
+      change->set_text("");
+      return;
+    }
+    const SpellMiss& miss = misses[index];
+    word->set_text(miss.word);
+    const std::vector<std::string> offered = dictionary.suggestions(miss.word);
+    for (const std::string& suggestion : offered) {
+      auto* label = Gtk::manage(new Gtk::Label(suggestion));
+      label->set_halign(Gtk::ALIGN_START);
+      label->set_margin_start(6);
+      label->show();
+      suggestions->append(*label);
+    }
+    if (!offered.empty())
+      change->set_text(offered.front());
+    else
+      change->set_text(miss.word);
+    if (Gtk::ListBoxRow* row = suggestions->get_row_at_index(0))
+      suggestions->select_row(*row);
+  };
+
+  auto same_word = [](const SpellMiss& miss, const std::string& folded) {
+    return fold_word(miss.word) == folded;
+  };
+  auto shift_later = [](std::vector<SpellMiss>& items, const SpellMiss& miss, long long delta) {
+    for (SpellMiss& other : items) {
+      if (other.paragraph != miss.paragraph || other.begin < miss.end)
+        continue;
+      other.begin = static_cast<size_t>(static_cast<long long>(other.begin) + delta);
+      other.end = static_cast<size_t>(static_cast<long long>(other.end) + delta);
+    }
+  };
+  auto commit_change = [&](const Document& before) {
+    if (before == doc)
+      return;
+    commit_document(before, doc);
+    cache.clear();
+    // commit_document() focuses the page. The keyboard belongs in this dialog.
+    change->grab_focus();
+  };
+
+  show();
+  dialog.show_all_children();
+  while (true) {
+    const int response = dialog.run();
+    if (response == Gtk::RESPONSE_CLOSE || response == Gtk::RESPONSE_DELETE_EVENT ||
+        response == Gtk::RESPONSE_NONE)
+      break;
+    if (index >= misses.size())
+      continue;
+    if (response == kIgnore) {
+      misses.erase(misses.begin() + static_cast<std::ptrdiff_t>(index));
+    } else if (response == kIgnoreAll) {
+      const std::string folded = fold_word(misses[index].word);
+      ignored.insert(folded);
+      cache[folded] = true;
+      misses.erase(std::remove_if(misses.begin() + static_cast<std::ptrdiff_t>(index), misses.end(),
+                                  [&](const SpellMiss& miss) { return same_word(miss, folded); }),
+                   misses.end());
+    } else if (response == kChange || response == kChangeAll) {
+      const std::string replacement = change->get_text();
+      const Document before = doc;
+      if (response == kChange) {
+        const SpellMiss miss = misses[index];
+        if (replace_word(doc.paragraphs[miss.paragraph], miss.begin, miss.end, replacement)) {
+          const long long delta = static_cast<long long>(replacement.size()) -
+                                  static_cast<long long>(miss.end - miss.begin);
+          shift_later(misses, miss, delta);
+          misses.erase(misses.begin() + static_cast<std::ptrdiff_t>(index));
+        }
+      } else {
+        const std::string folded = fold_word(misses[index].word);
+        std::vector<size_t> hits;
+        for (size_t i = index; i < misses.size(); ++i) {
+          if (same_word(misses[i], folded))
+            hits.push_back(i);
+        }
+        for (size_t n = hits.size(); n-- > 0;) {
+          const SpellMiss miss = misses[hits[n]];
+          if (!replace_word(doc.paragraphs[miss.paragraph], miss.begin, miss.end, replacement))
+            continue;
+          const long long delta = static_cast<long long>(replacement.size()) -
+                                  static_cast<long long>(miss.end - miss.begin);
+          shift_later(misses, miss, delta);
+        }
+        misses.erase(
+            std::remove_if(misses.begin() + static_cast<std::ptrdiff_t>(index), misses.end(),
+                           [&](const SpellMiss& miss) { return same_word(miss, folded); }),
+            misses.end());
+      }
+      commit_change(before);
+    }
+    show();
+  }
+  selected.disconnect();
 }
 
 }  // namespace writeit
