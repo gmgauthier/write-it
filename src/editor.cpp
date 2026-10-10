@@ -435,6 +435,35 @@ void MainWindow::build_editor()
   mark_set_ = buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
   text_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_text_key), false);
   text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
+  // The list labels' line geometry (label_geometry_): an edit forgets the
+  // lines it touches, before the buffer changes, and moves the ones below.
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& at, const Glib::ustring& text, int) {
+        const int line = at.get_line();
+        const int added = static_cast<int>(std::count(text.begin(), text.end(), '\n'));
+        forget_label_geometry(line, line, added);
+      },
+      false);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+        forget_label_geometry(start.get_line(), end.get_line(), start.get_line() - end.get_line());
+      },
+      false);
+  auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>&, const Gtk::TextIter& start,
+                                const Gtk::TextIter& end) {
+    forget_label_geometry(start.get_line(), end.get_line(), 0);
+  };
+  buffer_->signal_apply_tag().connect(geometry_on_tag);
+  buffer_->signal_remove_tag().connect(geometry_on_tag);
+  buffer_->get_tag_table()->signal_tag_changed().connect(
+      [this](const Glib::RefPtr<Gtk::TextTag>&, bool) { label_geometry_.clear(); });
+  buffer_->get_tag_table()->signal_tag_removed().connect(
+      [this](const Glib::RefPtr<Gtk::TextTag>&) { label_geometry_.clear(); });
+  // A new theme or font setting shapes text afresh.
+  text_.signal_style_updated().connect([this] {
+    label_geometry_.clear();
+    label_layout_cache_.clear();
+  });
   // The status bar's page cell follows the text and the caret.
   buffer_->signal_changed().connect([this] { queue_page_status(); });
   // Centred list items follow their label's width (update_list_shifts()), and
@@ -1039,6 +1068,7 @@ Document MainWindow::capture() const
 
 void MainWindow::replace_buffer(const Document& doc, int offset)
 {
+  label_geometry_.clear();
   loading_ = true;
   styles_ = doc.styles;
   buffer_->set_text("");
@@ -1508,6 +1538,8 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
 
 void MainWindow::raise_headings()
 {
+  // Priorities decide which tags win the indents and margins: lines move.
+  label_geometry_.clear();
   auto table = buffer_->get_tag_table();
   for (int level = 1; level <= 6; ++level) {
     auto tag = table->lookup("heading-" + std::to_string(level));
@@ -2571,11 +2603,27 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   const Run format = !paragraph.runs.empty() ? paragraph.runs.front()
                      : paragraph.mark        ? *paragraph.mark
                                              : format_of(iter);
+  const Glib::ustring text = list_label(list, number);
+  const std::string family = format.font.empty() ? "Sans" : format.font;
+  const int size = static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE);
+  std::string key = text.raw();
+  key += '\n';
+  key += family;
+  key += '\n';
+  key += std::to_string(size);
+  key += format.bold ? "b" : "";
+  key += format.italic ? "i" : "";
+  const auto found = label_layout_cache_.find(key);
+  if (found != label_layout_cache_.end()) {
+    width = found->second.width;
+    gap = found->second.gap;
+    return found->second.layout;
+  }
   ++label_layouts_;
-  auto layout = text_.create_pango_layout(list_label(list, number));
+  auto layout = text_.create_pango_layout(text);
   Pango::FontDescription desc;
-  desc.set_family(format.font.empty() ? "Sans" : format.font);
-  desc.set_size(static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE));
+  desc.set_family(family);
+  desc.set_size(size);
   // Bold and italic too, as Word 97 formats a label from the paragraph mark.
   desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
   desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
@@ -2585,6 +2633,10 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   auto space = text_.create_pango_layout(" ");
   space->set_font_description(desc);
   space->get_pixel_size(gap, height);
+  // A document has few distinct labels; a hostile one cannot grow this far.
+  if (label_layout_cache_.size() >= 4096)
+    label_layout_cache_.clear();
+  label_layout_cache_[key] = LabelLayout{layout, width, gap};
   return layout;
 }
 
@@ -2596,6 +2648,15 @@ bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int nu
     return false;
   ++label_locates_;
   text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
+  return list_label_at(paragraph, offset, number, layout, x, where);
+}
+
+bool MainWindow::list_label_at(const Paragraph& paragraph, int offset, int number,
+                               Glib::RefPtr<Pango::Layout>& layout, int& x,
+                               const Gdk::Rectangle& where)
+{
+  if (clamp_list(paragraph.list).kind == ListKind::None || !buffer_)
+    return false;
   int width = 0;
   int gap = 0;
   layout = list_label_layout(paragraph, offset, number, width, gap);
@@ -2604,6 +2665,35 @@ bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int nu
   x = list_label_x(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
                    where.get_x(), width, indent_px(list_label_space(indents)), gap);
   return true;
+}
+
+void MainWindow::label_where(const Gtk::TextIter& start, int line_y, int line_height,
+                             Gdk::Rectangle& where)
+{
+  const int line = start.get_line();
+  const auto found = label_geometry_.find(line);
+  if (found != label_geometry_.end() && found->second.line_height == line_height) {
+    const LabelGeometry& g = found->second;
+    where = Gdk::Rectangle(g.x, line_y + g.dy, g.width, g.height);
+    return;
+  }
+  ++label_locates_;
+  text_.get_iter_location(start, where);
+  label_geometry_[line] = LabelGeometry{where.get_x(), where.get_y() - line_y, where.get_width(),
+                                        where.get_height(), line_height};
+}
+
+void MainWindow::forget_label_geometry(int first, int last, int shift)
+{
+  if (label_geometry_.empty())
+    return;
+  label_geometry_.erase(label_geometry_.lower_bound(first), label_geometry_.upper_bound(last));
+  if (shift == 0)
+    return;
+  std::map<int, LabelGeometry> moved;
+  for (auto it = label_geometry_.begin(); it != label_geometry_.end(); ++it)
+    moved.emplace_hint(moved.end(), it->first > last ? it->first + shift : it->first, it->second);
+  label_geometry_.swap(moved);
 }
 
 void MainWindow::queue_list_shifts()
@@ -3105,15 +3195,45 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   const std::vector<ListLine>& lines = list_lines();
   if (!list_lines_any_)
     return false;
+  // A line's geometry holds while the text keeps its width, zoom and margin.
+  const int text_width = text_.get_allocated_width();
+  const int margin = margin_left();
+  const double zoom = zoom_factor();
+  if (text_width != label_geometry_width_ || margin != label_geometry_margin_ ||
+      zoom != label_geometry_zoom_) {
+    label_geometry_.clear();
+    label_geometry_width_ = text_width;
+    label_geometry_margin_ = margin;
+    label_geometry_zoom_ = zoom;
+  }
+  // The text view is the whole page inside the pasteboard's scroller, so its
+  // visible rectangle is the whole text. What is drawn now is the clip: the
+  // part of the page in view, or less.
   Gdk::Rectangle visible;
   text_.get_visible_rect(visible);
+  double clip_x1 = 0;
+  double clip_y1 = 0;
+  double clip_x2 = 0;
+  double clip_y2 = 0;
+  cr->get_clip_extents(clip_x1, clip_y1, clip_x2, clip_y2);
+  int ignored = 0;
+  int clip_top = 0;
+  int clip_bottom = 0;
+  text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::floor(clip_y1)),
+                                ignored, clip_top);
+  text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::ceil(clip_y2)),
+                                ignored, clip_bottom);
+  const int view_top = std::max(visible.get_y(), clip_top);
+  const int view_bottom = std::min(visible.get_y() + visible.get_height(), clip_bottom);
+  if (view_bottom < view_top)
+    return false;
   const Gdk::RGBA color = text_.get_style_context()->get_color(text_.get_state_flags());
   // Only the items in view are measured and drawn. Paragraphs go down the
   // page in order: start one before the last paragraph to begin at or above
   // the view's top line, and stop at the first one below its bottom.
   Gtk::TextIter top;
   int top_y = 0;
-  text_.get_line_at_y(top, visible.get_y(), top_y);
+  text_.get_line_at_y(top, view_top, top_y);
   const int top_line = top.get_line();
   size_t first = static_cast<size_t>(
       std::upper_bound(lines.begin(), lines.end(), top_line,
@@ -3125,27 +3245,33 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
     if (format.list.kind == ListKind::None)
       continue;
     const auto start = buffer_->get_iter_at_line(lines[i].line);
+    int line_y = 0;
+    int line_height = 0;
+    text_.get_line_yrange(start, line_y, line_height);
+    if (line_y + line_height < view_top)
+      continue;
     Gdk::Rectangle where;
-    ++label_locates_;
-    text_.get_iter_location(start, where);
-    if (where.get_y() > visible.get_y() + visible.get_height())
-      break;
-    if (where.get_y() + where.get_height() < visible.get_y())
+    label_where(start, line_y, line_height, where);
+    if (where.get_y() + where.get_height() < view_top)
       continue;
     const int offset = start.get_offset();
     Glib::RefPtr<Pango::Layout> layout;
     int x = 0;
-    if (list_label_place(label_paragraph(i, offset), offset, lines[i].number, layout, x, where)) {
-      int width = 0;
-      int height = 0;
-      layout->get_pixel_size(width, height);
-      int wx = 0;
-      int wy = 0;
-      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
-      cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(), color.get_alpha());
-      cr->move_to(wx, wy + where.get_height() - height);
-      layout->show_in_cairo_context(cr);
-    }
+    if (!list_label_at(label_paragraph(i, offset), offset, lines[i].number, layout, x, where))
+      continue;
+    int width = 0;
+    int height = 0;
+    layout->get_pixel_size(width, height);
+    // A label sits on its line's bottom, so one taller than its line reaches
+    // above the line's top. The first label wholly below the view ends it.
+    if (std::min(where.get_y(), where.get_y() + where.get_height() - height) > view_bottom)
+      break;
+    int wx = 0;
+    int wy = 0;
+    text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
+    cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(), color.get_alpha());
+    cr->move_to(wx, wy + where.get_height() - height);
+    layout->show_in_cairo_context(cr);
   }
   return false;
 }
