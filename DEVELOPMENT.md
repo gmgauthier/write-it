@@ -10,7 +10,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 
 ## Status
 
-**M2 (Paragraph) is done and tagged `m2`. M3 is next.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
+**M2 (Paragraph) is done and tagged `m2`. M3 is under way on `milestone-3`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
 
 | M2 item | State |
 |---|---|
@@ -249,7 +249,7 @@ Fonts, sizes, underline, alignment, indents, named styles beyond headings, heade
 
 1.0 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with that release before adding a filter. M5 cuts `v1.0.0`.
 
-Each milestone is a branch `feature/mN-short-name` from `master`. A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
+Each milestone is a branch cut from `master`. M2's was `m2`. From M3 on the branch is `milestone-N` (`milestone-3`, `milestone-4`, …). A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
 
 The sections above are the specification. This section is the order of work. The sample letter in [brand/window.png](brand/window.png) is the chrome target at M0; its paragraphs, list, and table arrive with the milestones that own them.
 
