@@ -157,6 +157,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   Document capture() const;
   // Calls of capture(), for the tests: a keystroke makes at most undo's two.
   mutable long captures_ = 0;
+  // For the tests: label geometry read through get_iter_location() (which
+  // lays its line out again), and label layouts built, in list drawing and
+  // list measuring. A keystroke costs a few of each, however many items show.
+  long label_locates_ = 0;
+  long label_layouts_ = 0;
   void replace_buffer(const Document& doc, int offset);
   // The undo state differs from the one saved, opened or made new.
   bool dirty() const;

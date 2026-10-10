@@ -2571,6 +2571,7 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   const Run format = !paragraph.runs.empty() ? paragraph.runs.front()
                      : paragraph.mark        ? *paragraph.mark
                                              : format_of(iter);
+  ++label_layouts_;
   auto layout = text_.create_pango_layout(list_label(list, number));
   Pango::FontDescription desc;
   desc.set_family(format.font.empty() ? "Sans" : format.font);
@@ -2593,6 +2594,7 @@ bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int nu
 {
   if (clamp_list(paragraph.list).kind == ListKind::None || !buffer_)
     return false;
+  ++label_locates_;
   text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
   int width = 0;
   int gap = 0;
@@ -3124,6 +3126,7 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
       continue;
     const auto start = buffer_->get_iter_at_line(lines[i].line);
     Gdk::Rectangle where;
+    ++label_locates_;
     text_.get_iter_location(start, where);
     if (where.get_y() > visible.get_y() + visible.get_height())
       break;

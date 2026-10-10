@@ -441,6 +441,15 @@ write_it_capture_count_tests = executable(
 )
 test('capture-count', write_it_capture_count_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: a keystroke in a list draws its labels
+# with a few line layouts and label layouts, however many items show.
+write_it_list_draw_tests = executable(
+  'write-it-list-draw-tests',
+  'tests/test_list_draw.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-draw', write_it_list_draw_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: the unsaved-changes state after typing,
 # Save, Save As, Undo, Redo, New and Open, from the undo state id.
 write_it_dirty_state_tests = executable(
