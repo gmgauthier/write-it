@@ -5,6 +5,7 @@
 #include "filename.hpp"
 #include "font_sizes.hpp"
 #include "open_plan.hpp"
+#include "para_check.hpp"
 
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -2723,40 +2725,59 @@ void MainWindow::on_paragraph()
   frame->set_margin_start(12);
   frame->set_margin_end(12);
   const double step = units_step(units);
-  const double max_value = std::floor(twips_to_units(kMaxIndent, units) * 100.0 + 1e-9) / 100.0;
+  const double max_value = max_measure(units);
   // Each field shows its value with the unit's suffix, 0.5" or 1.27 cm, and
   // reads back a bare number, a suffixed one, or the other unit typed out.
+  // Text that is not a measure, or is out of range, stays in the field as
+  // typed: OK names the range and selects it (check_paragraph), as Word 97
+  // does, where GTK would quietly put the old value back.
   auto spin = [units, step, max_value](int twips) {
     auto* button =
         Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(0, 0, max_value, step, step * 5),
                                         step, static_cast<guint>(units_digits(units))));
     button->set_numeric(false);
-    // Text that is not a measure keeps the old value instead of becoming 0.
     button->set_update_policy(Gtk::UPDATE_IF_VALID);
     button->set_width_chars(8);
+    // Set while the text is not a measure in range; `kept` is the value the
+    // field had then. A new value (the arrows, Special's default) ends it.
+    struct Typed {
+      bool bad = false;
+      double kept = 0;
+    };
+    auto typed = std::make_shared<Typed>();
     button->signal_output().connect(
-        [button, units] {
+        [button, units, typed] {
+          if (typed->bad && button->get_value() == typed->kept)
+            return true;
+          typed->bad = false;
           button->set_text(format_measure(button->get_value(), units));
           return true;
         },
         false);
     // "input" has no accumulator: the last handler's answer wins, and the
-    // class handler answers "not handled". Connect after it.
+    // class handler answers "not handled". Connect after it. Text that will
+    // not do keeps the old value without being written over.
     button->signal_input().connect(
-        [button, units](double* value) {
+        [button, units, typed](double* value) {
           double parsed = 0;
-          if (!parse_measure(button->get_text().raw(), units, parsed))
-            return GTK_INPUT_ERROR;
-          *value = parsed;
+          if (check_measure(button->get_text().raw(), units, parsed) == MeasureCheck::Ok) {
+            typed->bad = false;
+            *value = parsed;
+            return 1;
+          }
+          typed->bad = true;
+          typed->kept = button->get_value();
+          *value = typed->kept;
           return 1;
         },
         true);
     // Leaving a field reads what was typed and shows it back in the unit, so
-    // "1 in" becomes 2.54 cm and text that is not a measure reverts.
+    // "1 in" becomes 2.54 cm. Text that will not do is left for OK.
     button->signal_focus_out_event().connect(
-        [button, units](GdkEventFocus*) {
+        [button, units, typed](GdkEventFocus*) {
           button->update();
-          button->set_text(format_measure(button->get_value(), units));
+          if (!typed->bad)
+            button->set_text(format_measure(button->get_value(), units));
           return false;
         },
         false);
@@ -2819,39 +2840,40 @@ void MainWindow::on_paragraph()
   frame->add(*grid);
   dialog.get_content_area()->pack_start(*frame, Gtk::PACK_SHRINK);
   dialog.show_all_children();
-  // Word 97 will not let the first line start left of the left margin. OK
-  // on such a choice explains why and goes back to the dialog, with the
-  // field to fix focused, rather than quietly changing the value.
+  // As in Word 97, OK on a choice that will not do says why and goes back to
+  // the dialog with the field to fix selected, rather than quietly changing
+  // the value: a field out of range or not a measure, a hanging indent past
+  // the left margin, or indents that leave too little room for text.
   Indents chosen;
   for (;;) {
     if (dialog.run() != Gtk::RESPONSE_OK) {
       text_.grab_focus();
       return;
     }
-    left->update();
-    right->update();
-    by->update();
-    // An untouched field keeps the file's twips, so OK on an unchanged
-    // dialog changes nothing even where the value on screen is rounded.
-    chosen.left = keep_twips(current.left, left_shown, left->get_value(), units);
-    chosen.right = keep_twips(current.right, right_shown, right->get_value(), units);
-    int amount = keep_twips(magnitude, by_shown, by->get_value(), units);
-    const int row = special->get_active_row_number();
-    if (row == 2)
-      amount = hang_twips(by->get_value(), amount, chosen.left, left->get_value(), units);
-    chosen.first = row == 1 ? amount : row == 2 ? -amount : 0;
-    if (indents_fit(chosen))
+    ParaFields fields;
+    fields.units = units;
+    fields.current = current;
+    fields.left = left->get_text().raw();
+    fields.right = right->get_text().raw();
+    fields.by = by->get_text().raw();
+    fields.left_shown = left_shown;
+    fields.right_shown = right_shown;
+    fields.by_shown = by_shown;
+    fields.special = special->get_active_row_number();
+    fields.special_was = special_was;
+    const ParaCheck check = check_paragraph(fields);
+    if (check.field == ParaField::None) {
+      chosen = check.indents;
       break;
-    Gtk::MessageDialog message(dialog,
-                               "The hanging indent is larger than the left indent. The first "
-                               "line cannot start to the left of the margin.",
-                               false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+    }
+    Gtk::MessageDialog message(dialog, check.message, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK,
+                               true);
     message.set_title("Paragraph");
     message.run();
     message.hide();
-    // The By field is at fault unless only Left changed.
-    const bool by_edited = row != special_was || std::fabs(by->get_value() - by_shown) > 1e-9;
-    Gtk::SpinButton* offending = by_edited || left->get_value() == left_shown ? by : left;
+    Gtk::SpinButton* offending = check.field == ParaField::Left    ? left
+                                 : check.field == ParaField::Right ? right
+                                                                   : by;
     offending->grab_focus();
     offending->select_region(0, -1);
   }

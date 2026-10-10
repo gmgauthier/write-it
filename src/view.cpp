@@ -20,7 +20,7 @@ ViewGeometry view_geometry(ViewMode mode, double zoom)
   ViewGeometry page;
   page.page_width = std::max(1, scaled(kScreenPageWidth, zoom));
   page.page_height = page_sheet_height(zoom);
-  page.margin_left = std::max(8, scaled(42, zoom));
+  page.margin_left = std::max(8, scaled(kPageInsetPx, zoom));
   page.margin_right = page.margin_left;
   page.margin_y = std::max(8, scaled(36, zoom));
   page.gap = 18;
