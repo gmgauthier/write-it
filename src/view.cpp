@@ -19,8 +19,8 @@ ViewGeometry view_geometry(ViewMode mode, double zoom)
 {
   ViewGeometry page;
   page.page_width = std::max(1, scaled(kScreenPageWidth, zoom));
-  page.page_height = std::max(1, scaled(kScreenPageHeight, zoom));
-  page.margin_left = std::max(8, scaled(42, zoom));
+  page.page_height = page_sheet_height(zoom);
+  page.margin_left = std::max(8, scaled(kPageInsetPx, zoom));
   page.margin_right = page.margin_left;
   page.margin_y = std::max(8, scaled(36, zoom));
   page.gap = 18;
@@ -39,10 +39,15 @@ ViewGeometry view_geometry(ViewMode mode, double zoom)
   return draft;
 }
 
+int page_sheet_height(double zoom)
+{
+  return std::max(1, twips_to_px(kA4Twips, zoom));
+}
+
 int page_text_height(double zoom)
 {
   const ViewGeometry page = view_geometry(ViewMode::Page, zoom);
-  return std::max(1, twips_to_px(kA4Twips, zoom) - 2 * page.margin_y);
+  return std::max(1, page.page_height - 2 * page.margin_y);
 }
 
 PageCount page_count(int text_height, int caret_y, double zoom)

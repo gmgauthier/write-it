@@ -10,19 +10,26 @@ permissions:
 
 jobs:
   build-test:
-    name: build and test (${{ matrix.image }})
+    # matrix.label keeps required check names identical to the short image refs.
+    name: build and test (${{ matrix.label }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         # Devuan Excalibur is the target. Debian trixie is the base it is built on.
-        image:
-          - devuan/devuan:excalibur
-          - debian:trixie
+        # debian:trixie is pulled from the AWS public ECR mirror of Docker Hub
+        # library images to avoid anonymous Docker Hub rate limits.
+        include:
+          - image: devuan/devuan:excalibur
+            label: devuan/devuan:excalibur
+          - image: public.ecr.aws/docker/library/debian:trixie
+            label: debian:trixie
     container:
       image: ${{ matrix.image }}
     env:
       DEBIAN_FRONTEND: noninteractive
+      # smoke-open and desktop-file must run here, not skip.
+      WRITE_IT_SMOKE_REQUIRED: 1
     steps:
       - name: Install build dependencies
         run: |
@@ -31,7 +38,8 @@ jobs:
             ca-certificates git \
             meson ninja-build g++ pkg-config \
             libgtkmm-3.0-dev \
-            xvfb xauth
+            xvfb xauth \
+            x11-utils dbus-daemon desktop-file-utils
 
       - uses: actions/checkout@v4
 

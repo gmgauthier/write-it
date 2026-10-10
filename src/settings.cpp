@@ -7,6 +7,7 @@
 #include <glibmm/keyfile.h>
 #include <glibmm/miscutils.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace writeit {
@@ -111,8 +112,13 @@ void Settings::load_from(const std::string& path)
   } catch (const Glib::Error&) {
     return;
   }
+  // An empty ini, or one without the [write-it] group, is no settings at
+  // all. Without the group KeyFile::has_key throws rather than answering.
+  if (!kf.has_group(kGroup))
+    return;
   window_width = get_int(kf, "window-width", window_width);
   window_height = get_int(kf, "window-height", window_height);
+  window_maximized = get_bool(kf, "window-maximized", window_maximized);
   if (window_width < 320)
     window_width = 960;
   if (window_height < 240)
@@ -154,6 +160,7 @@ void Settings::save_to(const std::string& path) const
   }
   kf.set_integer(kGroup, "window-width", window_width);
   kf.set_integer(kGroup, "window-height", window_height);
+  kf.set_boolean(kGroup, "window-maximized", window_maximized);
   kf.set_string(kGroup, "zoom", zoom == 0 ? "fit-width" : std::to_string(zoom));
   kf.set_boolean(kGroup, "show-standard-toolbar", show_standard_toolbar);
   kf.set_boolean(kGroup, "show-format-toolbar", show_format_toolbar);
@@ -169,6 +176,48 @@ void Settings::save_to(const std::string& path) const
     Glib::file_set_contents(path, kf.to_data());
   } catch (const Glib::Error&) {
   }
+}
+
+void clamp_window(int& width, int& height, int area_width, int area_height)
+{
+  if (area_width > 0)
+    width = std::min(width, area_width);
+  if (area_height > 0)
+    height = std::min(height, area_height);
+}
+
+WindowMemory::WindowMemory(const Settings& settings)
+    : width(settings.window_width),
+      height(settings.window_height),
+      maximized(settings.window_maximized)
+{
+}
+
+void WindowMemory::update(int new_width, int new_height, bool maximized_now)
+{
+  maximized = maximized_now;
+  // A maximised size is the screen's, not the window's own.
+  if (maximized_now || new_width <= 0 || new_height <= 0)
+    return;
+  width = new_width;
+  height = new_height;
+}
+
+void WindowMemory::store(Settings& settings) const
+{
+  settings.window_width = width;
+  settings.window_height = height;
+  settings.window_maximized = maximized;
+}
+
+std::vector<std::string> push_recent(std::vector<std::string> recent, const std::string& path,
+                                     int count)
+{
+  recent.erase(std::remove(recent.begin(), recent.end(), path), recent.end());
+  recent.insert(recent.begin(), path);
+  if (count >= 0 && static_cast<int>(recent.size()) > count)
+    recent.resize(static_cast<size_t>(count));
+  return recent;
 }
 
 }  // namespace writeit

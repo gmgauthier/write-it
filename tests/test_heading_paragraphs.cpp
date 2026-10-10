@@ -27,6 +27,9 @@ writeit::Document doc_of(std::initializer_list<writeit::Paragraph> paragraphs)
 {
   writeit::Document doc;
   doc.paragraphs = paragraphs;
+  // As a document holds headings since named styles: in their Heading
+  // styles. Sheet-less headings are M1's, which the reader upgrades so.
+  writeit::adopt_heading_styles(doc, "Sans", 11);
   return doc;
 }
 
