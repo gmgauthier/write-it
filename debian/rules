@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+include /usr/share/dpkg/architecture.mk
+
+BUILDDIR = obj-$(DEB_HOST_GNU_TYPE)
+
+%:
+	dh $@ --buildsystem=meson
+
+# smoke-open talks to the session portal and hangs on this desktop.
+# CI runs it. The package build runs every other suite under Xvfb.
+override_dh_auto_test:
+	set -e; \
+	names=$$(meson test -C $(BUILDDIR) --list | sed -n 's|.*/ ||p' | grep -vx smoke-open); \
+	xvfb-run -a meson test -C $(BUILDDIR) --print-errorlogs --no-rebuild $$names

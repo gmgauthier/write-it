@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '0.1.0',
+  version: '1.0.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -82,6 +82,12 @@ write_it_exe = executable(
 install_data(
   'data/write-it.desktop',
   install_dir: get_option('datadir') / 'applications',
+)
+
+install_data(
+  'brand/icon-tile.svg',
+  rename: 'write-it.svg',
+  install_dir: get_option('datadir') / 'icons' / 'hicolor' / 'scalable' / 'apps',
 )
 
 install_data(

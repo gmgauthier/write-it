@@ -10,7 +10,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 
 ## Status
 
-**M3 (Page) is done and tagged `m3`. M4 is under way on `milestone-4`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
+**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
 
 | M2 item | State |
 |---|---|
@@ -326,7 +326,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M5 — 1.0
 
-- `debian/`, a desktop file for `org.gmgauthier.WriteIt`, and `scripts/release.sh`.
+- `debian/`, a desktop file for `org.gmgauthier.WriteIt`, and `scripts/release.sh`. The desktop file is `data/write-it.desktop`: `Name=Write-It` is the AppImage’s name, and `Icon=write-it` is the hicolor icon.
 - The script produces the source tarball, the amd64 `.deb`, and the AppImage. The desktop `Name=` is the AppImage’s name.
 - Tag `v1.0.0` after `meson test` and lint are green. Publish the tag and the three artifacts to Gitea and GitHub.
 
