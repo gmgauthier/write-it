@@ -32,8 +32,10 @@ struct UndoHistory::Op {
 struct UndoHistory::Step {
   std::uint64_t id = 0;
   std::vector<Op> ops;
-  // Where undo puts the caret; on the redo stack, where redo puts it.
+  // Where undo puts the caret: where the step began.
   int caret = 0;
+  // Where redo puts it: where it was when the step was undone.
+  int redo_caret = 0;
   bool selection = false;
   Shape shape = Shape::Other;
   // The shape's range: the text inserted, or erased by the run.
@@ -334,10 +336,14 @@ UndoHistory::Seen UndoHistory::seen(const Step& step) const
       return Seen::Yes;
     if (i + 1 < step.ops.size()) {
       const Op& next = step.ops[i + 1];
-      if (is_tag(next) && next.kind != op.kind && next.ranges == op.ranges && same_tag_ &&
-          same_tag_(op.tag, next.tag)) {
-        ++i;
-        continue;
+      if (is_tag(next) && next.kind != op.kind && next.ranges == op.ranges && same_tag_) {
+        bool same = true;
+        for (const auto& range : op.ranges)
+          same = same && same_tag_(op.tag, next.tag, range.first, range.second);
+        if (same) {
+          ++i;
+          continue;
+        }
       }
     }
     bool unseen = static_cast<bool>(unseen_tag_);
@@ -346,13 +352,7 @@ UndoHistory::Seen UndoHistory::seen(const Step& step) const
     if (!unseen)
       maybe = true;
   }
-  if (!maybe)
-    return Seen::No;
-  // Tag changes alone, seen ones among them, are a real format command.
-  for (const Op& op : step.ops)
-    if (op.kind == Op::Kind::Custom || op.kind == Op::Kind::Erase)
-      return Seen::Maybe;
-  return Seen::Yes;
+  return maybe ? Seen::Maybe : Seen::No;
 }
 
 UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
@@ -367,8 +367,14 @@ UndoHistory::Closed UndoHistory::close(int caret, bool may_merge)
   bool hidden = shows == Seen::No;
   if (shows == Seen::Maybe && looks_same_) {
     Step& probe = *step;
-    hidden =
-        looks_same_([this, &probe] { play(probe, false); }, [this, &probe] { play(probe, true); });
+    std::vector<std::pair<int, int>> ranges;
+    bool whole = false;
+    for (const Op& op : probe.ops) {
+      whole = whole || op.kind == Op::Kind::Custom || op.kind == Op::Kind::Erase;
+      ranges.insert(ranges.end(), op.ranges.begin(), op.ranges.end());
+    }
+    hidden = looks_same_([this, &probe] { play(probe, false); },
+                         [this, &probe] { play(probe, true); }, ranges, whole);
   }
   if (hidden) {
     // Undoing the step below takes this back too; with none, nothing older
@@ -511,21 +517,20 @@ int UndoHistory::undo(int caret)
   undo_.pop_back();
   play(*step, false);
   const int back = step->caret;
-  step->caret = caret;
+  step->redo_caret = caret;
   redo_.push_back(std::move(step));
   emit();
   return back;
 }
 
-int UndoHistory::redo(int caret)
+int UndoHistory::redo()
 {
   if (redo_.empty() || open_ || !buffer_)
     return -1;
   std::unique_ptr<Step> step = std::move(redo_.back());
   redo_.pop_back();
   play(*step, true);
-  const int back = step->caret;
-  step->caret = caret;
+  const int back = step->redo_caret;
   undo_.push_back(std::move(step));
   emit();
   return back;

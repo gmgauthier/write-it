@@ -344,6 +344,8 @@ struct State {
   // Where the caret was before the edit that made this state: undo puts it
   // back there.
   int caret_before = -1;
+  // The step and op that made it, for failure reports.
+  std::string origin;
 };
 
 enum class Kind {
@@ -516,6 +518,7 @@ class Run_ {
     redo_.clear();
     if (steps == steps_before + 1) {
       now.caret_before = caret_before;
+      now.origin = std::to_string(step_) + " " + op_;
       stack_.push_back(now);
     } else if (steps == steps_before && steps > 0) {
       const bool allowed = (burst == Burst::Insert && caret_before == last_insert_end_) ||
@@ -525,6 +528,7 @@ class Run_ {
         fail("an edit joined the top undo step outside a burst");
       now.serial = next_serial_++;
       now.caret_before = stack_.back().caret_before;
+      now.origin = stack_.back().origin + " + " + std::to_string(step_) + " " + op_;
       stack_.back() = now;
     } else {
       fail("undo steps went from " + std::to_string(steps_before) + " to " + std::to_string(steps));
@@ -574,7 +578,8 @@ class Run_ {
       if (stack_.back().caret_before >= 0 &&
           MainWindowProbe::caret(*w_) != stack_.back().caret_before)
         fail("undo put the caret at " + std::to_string(MainWindowProbe::caret(*w_)) + ", not " +
-             std::to_string(stack_.back().caret_before) + " where the step began " + where);
+             std::to_string(stack_.back().caret_before) + " where the step began " + where +
+             " (the step of " + stack_.back().origin + ")");
       redo_.push_back(stack_.back());
       stack_.pop_back();
     } else {
@@ -1208,7 +1213,7 @@ void model_run(std::uint64_t seed, int run, int ops)
   CHECK(undo_ok);
   bool redo_ok = true;
   for (size_t i = 1; i < states.size(); ++i) {
-    history.redo(0);
+    history.redo();
     redo_ok = redo_ok && plain() == states[i];
   }
   CHECK(redo_ok);

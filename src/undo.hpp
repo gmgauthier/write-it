@@ -47,8 +47,9 @@ class UndoHistory {
   // format with other "set directly" bits). A step that only swaps tags for
   // ones like them changes nothing the document shows: it joins the step
   // below, not a step of its own, and leaves state_id() as it was.
-  using SameTag =
-      std::function<bool(const Glib::RefPtr<Gtk::TextTag>&, const Glib::RefPtr<Gtk::TextTag>&)>;
+  // Asked of each range the swap covers, after it.
+  using SameTag = std::function<bool(const Glib::RefPtr<Gtk::TextTag>&,
+                                     const Glib::RefPtr<Gtk::TextTag>&, int start, int end)>;
   void set_same_tag(SameTag same)
   {
     same_tag_ = std::move(same);
@@ -62,12 +63,14 @@ class UndoHistory {
   {
     unseen_tag_ = std::move(unseen);
   }
-  // For the rare step those rules cannot settle (text erased and put back as
-  // it was, a change to the window's own state): whether the document looks
-  // the same after `back` (the step undone) as before it. Then `forth` must
-  // be called to redo it. Only no-op commands get here, never typing.
+  // For a step those rules cannot settle: whether the document looks the
+  // same after `back` (the step undone) as before it; `forth` must then
+  // redo it. `ranges` are the step's tag ranges; `whole` says the step also
+  // erased text and put it back or changed the window's own state, so only
+  // the whole document will do. Never asked of typing.
   using LooksSame =
-      std::function<bool(const std::function<void()>& back, const std::function<void()>& forth)>;
+      std::function<bool(const std::function<void()>& back, const std::function<void()>& forth,
+                         const std::vector<std::pair<int, int>>& ranges, bool whole)>;
   void set_looks_same(LooksSame looks_same)
   {
     looks_same_ = std::move(looks_same);
@@ -127,7 +130,7 @@ class UndoHistory {
   // Plays the top step back. `caret` is where the caret is now, for redo to
   // put back. Returns where the caret goes, or -1 with nothing to undo.
   int undo(int caret);
-  int redo(int caret);
+  int redo();
   bool replaying() const
   {
     return replaying_;

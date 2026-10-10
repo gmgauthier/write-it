@@ -362,27 +362,110 @@ void MainWindow::build_editor()
     const std::string name = tag_name(tag);
     return is_list_shift(name) || is_list_tab(name);
   });
-  undo_.set_same_tag([](const Glib::RefPtr<Gtk::TextTag>& a, const Glib::RefPtr<Gtk::TextTag>& b) {
+  undo_.set_same_tag([this](const Glib::RefPtr<Gtk::TextTag>& a,
+                            const Glib::RefPtr<Gtk::TextTag>& b, int start, int end) {
     Run r;
     Run q;
-    if (parse_fmt(tag_name(a), r) && parse_fmt(tag_name(b), q))
-      return same_look(r, q);
     ParaFormat x;
     ParaFormat y;
-    if (!parse_para(tag_name(a), x) || !parse_para(tag_name(b), y))
-      return false;
-    x.direct = y.direct;
-    return x == y;
+    const bool fmt = parse_fmt(tag_name(a), r) && parse_fmt(tag_name(b), q);
+    if (fmt) {
+      if (!same_look(r, q))
+        return false;
+    } else {
+      if (!parse_para(tag_name(a), x) || !parse_para(tag_name(b), y))
+        return false;
+      x.direct = y.direct;
+      if (!(x == y))
+        return false;
+    }
+    // With another tag of the kind on the range too (a paste can leave two),
+    // which one shows depends on priority: not the same then.
+    Run ignored_run;
+    ParaFormat ignored_para;
+    for (auto it = buffer_->get_iter_at_offset(start); it.get_offset() < end;) {
+      for (const auto& other : it.get_tags()) {
+        if (other == b || other == a)
+          continue;
+        if (fmt ? parse_fmt(tag_name(other), ignored_run)
+                : parse_para(tag_name(other), ignored_para))
+          return false;
+      }
+      if (!it.forward_to_tag_toggle(Glib::RefPtr<Gtk::TextTag>()))
+        break;
+    }
+    return true;
   });
-  undo_.set_looks_same([this](const std::function<void()>& back,
-                              const std::function<void()>& forth) {
+  undo_.set_looks_same([this](const std::function<void()>& back, const std::function<void()>& forth,
+                              const std::vector<std::pair<int, int>>& ranges, bool whole) {
     const int insert = buffer_->get_insert()->get_iter().get_offset();
     const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
     const bool was = restoring_;
     restoring_ = true;
-    const Document after = capture();
-    back();
-    const bool same = capture() == after;
+    bool same = false;
+    if (whole) {
+      const Document after = capture();
+      back();
+      same = capture() == after;
+    } else {
+      // Text the same, only formats: what capture() would read over the
+      // ranges, stretch by stretch, and their paragraphs' formats.
+      auto look = [this, &ranges] {
+        std::string out;
+        auto para = [](const ParaFormat& f) {
+          return std::to_string(f.indents.left) + "," + std::to_string(f.indents.right) + "," +
+                 std::to_string(f.indents.first) + "," + std::to_string(static_cast<int>(f.align)) +
+                 "," + std::to_string(static_cast<int>(f.list.kind)) + "," +
+                 std::to_string(f.list.level) + "," + std::to_string(f.list.list) + "," +
+                 std::to_string(f.list.start) + "," + f.style;
+        };
+        for (const auto& range : ranges) {
+          out += "|" + para(para_at(paragraph_start(range.first)));
+          // Stretches that look alike are one, however the tags split them.
+          std::string last;
+          int last_end = -1;
+          auto flush = [&] {
+            if (last_end >= 0)
+              out += ";" + std::to_string(last_end) + ":" + last;
+            last.clear();
+            last_end = -1;
+          };
+          for (auto it = buffer_->get_iter_at_offset(range.first);
+               it.get_offset() < range.second;) {
+            auto next = it;
+            if (!next.forward_to_tag_toggle(Glib::RefPtr<Gtk::TextTag>()) ||
+                next.get_offset() > range.second)
+              next = buffer_->get_iter_at_offset(range.second);
+            const bool lone_break = it.get_char() == '\n' && !it.starts_line() &&
+                                    next.get_offset() == it.get_offset() + 1;
+            if (!lone_break) {
+              if (it.starts_line()) {
+                flush();
+                out += "/" + para(para_at(it.get_offset()));
+              }
+              const Run run = format_of(it);
+              const std::string desc = run.font + "," + std::to_string(run.size) + "," +
+                                       std::to_string(run.bold) + "," + std::to_string(run.italic) +
+                                       "," + std::to_string(run.underline) + "," +
+                                       std::to_string(heading_of(it));
+              if (desc != last)
+                flush();
+              last = desc;
+              last_end = next.get_offset();
+            }
+            it = next;
+          }
+          flush();
+        }
+        return out;
+      };
+      const std::string after = look();
+      back();
+      const std::string before = look();
+      same = before == after;
+      if (!same && g_getenv("UNDO_DEBUG"))
+        g_printerr("before %s\nafter  %s\n", before.c_str(), after.c_str());
+    }
     forth();
     restoring_ = was;
     buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
@@ -1160,7 +1243,7 @@ void MainWindow::redo()
   if (!undo_.can_redo() || undo_.is_open())
     return;
   restoring_ = true;
-  const int caret = undo_.redo(cursor_offset());
+  const int caret = undo_.redo();
   restoring_ = false;
   after_replay(caret);
 }
@@ -1170,6 +1253,8 @@ void MainWindow::after_replay(int caret)
   // As the snapshot undo left it: the caret where the step began (undo) or
   // where it was when undone (redo), nothing selected.
   const int count = buffer_->get_char_count();
+  // Typing after Undo or Redo starts a step of its own.
+  last_typed_us_ = 0;
   restoring_ = true;
   buffer_->place_cursor(buffer_->get_iter_at_offset(std::max(0, std::min(caret, count))));
   restoring_ = false;
