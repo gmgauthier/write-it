@@ -155,6 +155,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void connect_format();
   void fill_font_combo(Gtk::ComboBoxText& combo, const std::string& active);
   bool new_document(bool prompt);
+  void on_new_from_template();
+  // Loads a shipped RTF starter as a new unsaved document. The starter is
+  // not the file Save writes.
+  bool apply_template(const std::string& path);
   void open_document();
   bool open_path(const std::string& path, OpenKind fallback);
   bool save_document();
@@ -520,6 +524,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::array<Gtk::RadioMenuItem*, 6> zoom_status_{};
 
   Gtk::MenuItem* new_item_ = nullptr;
+  Gtk::MenuItem* template_item_ = nullptr;
   Gtk::MenuItem* open_item_ = nullptr;
   Gtk::MenuItem* recent_item_ = nullptr;
   Gtk::MenuItem* save_item_ = nullptr;

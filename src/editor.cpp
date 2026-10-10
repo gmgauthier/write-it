@@ -5,6 +5,7 @@
 #include "filename.hpp"
 #include "font_sizes.hpp"
 #include "open_plan.hpp"
+#include "templates.hpp"
 #include "para_check.hpp"
 #include "spelling.hpp"
 
@@ -613,6 +614,7 @@ void MainWindow::build_editor()
   };
   activate(new_item_, [this] { new_document(true); });
   clicked(new_tool_, [this] { new_document(true); });
+  activate(template_item_, [this] { on_new_from_template(); });
   activate(open_item_, [this] { open_document(); });
   clicked(open_tool_, [this] { open_document(); });
   activate(save_item_, [this] { save_document(); });
@@ -747,6 +749,95 @@ void MainWindow::fill_font_combo(Gtk::ComboBoxText& combo, const std::string& ac
   if (!active.empty())
     combo.set_active_text(active);
   suppress_format_ = guard;
+}
+
+namespace {
+
+std::string template_label(const std::string& path)
+{
+  std::string base = Glib::path_get_basename(path);
+  const std::string ext = extension_of(base);
+  if (ext == ".rtf" && base.size() > ext.size())
+    base.resize(base.size() - ext.size());
+  return base;
+}
+
+}  // namespace
+
+void MainWindow::on_new_from_template()
+{
+  const std::vector<std::string> paths = shipped_templates();
+  if (paths.empty()) {
+    tell("Could not find a template.");
+    return;
+  }
+  Gtk::Dialog dialog("New from Template", *this, true);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_New", Gtk::RESPONSE_ACCEPT);
+  dialog.set_default_response(Gtk::RESPONSE_ACCEPT);
+  auto* list = Gtk::manage(new Gtk::ListBox());
+  list->set_selection_mode(Gtk::SELECTION_BROWSE);
+  for (const std::string& path : paths) {
+    auto* label = Gtk::manage(new Gtk::Label(template_label(path)));
+    label->set_halign(Gtk::ALIGN_START);
+    label->set_margin_start(8);
+    label->set_margin_end(8);
+    label->set_margin_top(2);
+    label->set_margin_bottom(2);
+    label->show();
+    list->append(*label);
+  }
+  if (auto* row = list->get_row_at_index(0))
+    list->select_row(*row);
+  list->signal_row_activated().connect(
+      [&dialog](Gtk::ListBoxRow*) { dialog.response(Gtk::RESPONSE_ACCEPT); });
+  auto* scroll = Gtk::manage(new Gtk::ScrolledWindow());
+  scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+  scroll->set_size_request(260, 180);
+  scroll->add(*list);
+  dialog.get_content_area()->pack_start(*scroll, Gtk::PACK_EXPAND_WIDGET);
+  dialog.show_all_children();
+  if (dialog.run() != Gtk::RESPONSE_ACCEPT)
+    return;
+  int index = 0;
+  if (Gtk::ListBoxRow* row = list->get_selected_row())
+    index = row->get_index();
+  if (index < 0 || static_cast<size_t>(index) >= paths.size())
+    return;
+  apply_template(paths[static_cast<size_t>(index)]);
+}
+
+bool MainWindow::apply_template(const std::string& path)
+{
+  if (!confirm_discard_or_save())
+    return false;
+  std::string bytes;
+  try {
+    bytes = Glib::file_get_contents(path);
+  } catch (const Glib::Error&) {
+    tell(unreadable_message(path));
+    return false;
+  }
+  Document doc;
+  if (!rtf_import(bytes, doc)) {
+    tell(unreadable_message(path));
+    return false;
+  }
+  // A starter, not an opened file: Save asks where to write, and closing
+  // asks, because this text is not saved anywhere of the user's.
+  undo_.clear();
+  replace_buffer(doc, 0);
+  title_name_ = Glib::path_get_basename(path);
+  save_path_.clear();
+  source_path_.clear();
+  save_point_ = false;
+  saved_state_ = undo_.state_id();
+  message_.set_text("");
+  update_title();
+  update_actions();
+  sync_format_controls();
+  text_.grab_focus();
+  return true;
 }
 
 bool MainWindow::new_document(bool prompt)

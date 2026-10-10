@@ -51,6 +51,7 @@ writeit_core_sources = files(
   'src/rtf.cpp',
   'src/settings.cpp',
   'src/spelling.cpp',
+  'src/templates.cpp',
   'src/styles.cpp',
   'src/undo.cpp',
   'src/units.cpp',
@@ -86,6 +87,11 @@ install_data(
 install_data(
   'data/write-it.css',
   install_dir: get_option('datadir') / 'write-it',
+)
+
+install_data(
+  'data/templates/Letter.rtf',
+  install_dir: get_option('datadir') / 'write-it' / 'templates',
 )
 
 write_it_open_tests = executable(
@@ -420,6 +426,15 @@ write_it_print_tests = executable(
   dependencies: [writeit_dep, dependency('zlib')],
 )
 test('print', write_it_print_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display: New from Template loads a shipped RTF
+# starter as an unsaved document.
+write_it_template_tests = executable(
+  'write-it-template-tests',
+  'tests/test_template.cpp',
+  dependencies: [writeit_dep],
+)
+test('template', write_it_template_tests, timeout: 120, is_parallel: false)
 
 # The real window under a display: a file with half-point sizes and an empty
 # 20 pt line, opened, shown in the size box, typed in and saved back.

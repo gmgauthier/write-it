@@ -280,7 +280,7 @@ void MainWindow::build_menus()
 
   auto* file = add_menu("_File");
   new_item_ = add_item(*file, "_New", true, GDK_KEY_n, Gdk::CONTROL_MASK);
-  add_item(*file, "New from _Template…", false);
+  template_item_ = add_item(*file, "New from _Template…", true);
   open_item_ = add_item(*file, "_Open…", true, GDK_KEY_o, Gdk::CONTROL_MASK);
   recent_item_ = add_item(*file, "Open _Recent", false);
   recent_item_->set_submenu(recent_menu_);
