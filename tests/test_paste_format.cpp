@@ -23,6 +23,8 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace writeit {
 
@@ -50,6 +52,10 @@ struct MainWindowProbe {
     entry->set_text(size);
     entry->activate();
     w.text_.grab_focus();
+  }
+  static void load(MainWindow& w, const Document& doc)
+  {
+    w.replace_buffer(doc, 0);
   }
   static void style(MainWindow& w, const char* name)
   {
@@ -245,9 +251,122 @@ void plain_into_bold(MainWindow& w)
   paste(w);
 }
 
+
+// Paragraph formats, one line per paragraph: its text, style, list kind and
+// level, indents, alignment, outline level, direct paragraph bits and the
+// direct bits of its runs. List numbers are checked on their own.
+std::string describe(const writeit::Paragraph& p, const std::string& text)
+{
+  unsigned run_direct = 0;
+  for (const writeit::Run& run : p.runs)
+    run_direct |= run.direct;
+  return "[" + text + " " + p.style + " list" + std::to_string(static_cast<int>(p.list.kind)) + "." +
+         std::to_string(p.list.level) + " li" + std::to_string(p.indents.left) + " ri" +
+         std::to_string(p.indents.right) + " fi" + std::to_string(p.indents.first) + " al" +
+         std::to_string(static_cast<int>(p.align)) + " h" + std::to_string(p.heading) + " pd" +
+         std::to_string(p.direct) + " rd" + std::to_string(run_direct) + "]";
+}
+
+std::string text_of(const writeit::Paragraph& p)
+{
+  std::string text;
+  for (const writeit::Run& run : p.runs)
+    text += run.text;
+  return text;
+}
+
+std::string describe(const writeit::Document& doc)
+{
+  std::string out;
+  for (const writeit::Paragraph& p : doc.paragraphs)
+    out += describe(p, text_of(p));
+  return out;
+}
+
+// A paragraph's format with other text: what a pasted or joined paragraph
+// should look like.
+std::string as(const writeit::Document& doc, size_t i, const std::string& text)
+{
+  return describe(doc.paragraphs[i], text);
+}
+
+// A document of one paragraph per text, each in the style given ("Bullet"
+// and "Number" make a Normal list item), through RTF as a file would come.
+writeit::Document make(const std::vector<std::pair<std::string, std::string>>& paras)
+{
+  writeit::Document d = writeit::blank_document("Sans", 11);
+  d.paragraphs.clear();
+  for (const auto& [text, style] : paras) {
+    writeit::Paragraph p;
+    writeit::Run r;
+    r.text = text;
+    p.runs.push_back(r);
+    d.paragraphs.push_back(p);
+  }
+  for (size_t i = 0; i < paras.size(); ++i) {
+    const std::string& style = paras[i].second;
+    if (style == "Bullet")
+      d.paragraphs[i].list = writeit::ListFormat(writeit::ListKind::Bullet, 0);
+    else if (style == "Number")
+      d.paragraphs[i].list = writeit::ListFormat(writeit::ListKind::Number, 0);
+    else if (style != "Normal")
+      writeit::apply_style(d, i, i, style);
+  }
+  writeit::Document back;
+  writeit::rtf_import(writeit::rtf_export(d), back);
+  return back;
+}
+
+// Copies [from, to) with Ctrl+C and pastes it at `at` with Ctrl+V, in a
+// window holding `doc`. Then: the text, the paragraph formats (built from
+// the original's by `want`), a save and reopen giving the same paragraphs,
+// and the one-tag rule (4 checks); Ctrl+Z back to the original and Ctrl+Y
+// back to the paste, each with the one-tag rule (4 more).
+void para_case(const char* name, const writeit::Document& doc, int from, int to, int at,
+               const std::string& text,
+               const std::function<std::string(const writeit::Document&)>& want,
+               const std::function<void(const writeit::Document&)>& more = {})
+{
+  run(name, [&](MainWindow& w) {
+    P::load(w, doc);
+    settle(10);
+    const writeit::Document before = P::capture(w);
+    const std::string original = describe(before);
+    select(w, from, to);
+    copy(w);
+    caret(w, at);
+    paste(w);
+    const writeit::Document after = P::capture(w);
+    const std::string got = describe(after);
+    const std::string expected = want(before);
+    writeit::Document reopened;
+    writeit::rtf_import(writeit::rtf_export(after), reopened);
+    if (got != expected || describe(reopened) != got)
+      std::cerr << name << ":\n  got      " << got << "\n  expected " << expected
+                << "\n  reopened " << describe(reopened) << "\n";
+    CHECK(P::buffer(w)->get_text().raw() == text);
+    CHECK(got == expected);
+    CHECK(describe(reopened) == got);
+    assert_single_format_tag(P::buffer(w));
+    if (more)
+      more(after);
+    ctrl(w, GDK_KEY_z);
+    const std::string undone = describe(P::capture(w));
+    if (undone != original)
+      std::cerr << name << " undo:\n  got      " << undone << "\n  expected " << original << "\n";
+    CHECK(undone == original);
+    assert_single_format_tag(P::buffer(w));
+    ctrl(w, GDK_KEY_y);
+    const std::string redone = describe(P::capture(w));
+    if (redone != expected)
+      std::cerr << name << " redo:\n  got      " << redone << "\n  expected " << expected << "\n";
+    CHECK(redone == expected);
+    assert_single_format_tag(P::buffer(w));
+  });
+}
 }  // namespace
 
-constexpr int kChecks = 87;
+constexpr int kChecks = 168;
 
 int main(int argc, char* argv[])
 {
@@ -442,6 +561,70 @@ int main(int argc, char* argv[])
     settle(5);
     expect(w, "style-over-paste normal", "one tonewo", "one ToneWO");
   });
+
+  // Paragraph format belongs to the paragraph's end. A pasted end brings its
+  // paragraph's format: a paragraph copied whole keeps it, and the paragraph
+  // the first pasted end closes takes the copied paragraph's. Text after the
+  // last pasted end joins the paragraph it lands in. Each case: Ctrl+Z and
+  // Ctrl+Y too. "aaaa\nbbbb\ncccc", copy "aa\nbbbb\ncc", paste into "cc|cc".
+  for (const char* style : {"Block Text", "Heading 1", "Bullet", "Number"}) {
+    const writeit::Document doc = make({{"aaaa", "Normal"}, {"bbbb", style}, {"cccc", "Normal"}});
+    const std::string name = std::string("whole ") + style + " paragraph";
+    para_case(
+        name.c_str(), doc, 2, 12, 12, "aaaa\nbbbb\nccaa\nbbbb\ncccc",
+        [](const writeit::Document& d) {
+          return as(d, 0, "aaaa") + as(d, 1, "bbbb") + as(d, 0, "ccaa") + as(d, 1, "bbbb") +
+                 as(d, 2, "cccc");
+        },
+        std::string(style) == "Number"
+            ? std::function<void(const writeit::Document&)>([](const writeit::Document& d) {
+                // Both items in one list, counting 1 and 2.
+                const std::vector<int> numbers = writeit::list_numbers(d.paragraphs);
+                CHECK(numbers.size() == 5 && numbers[1] == 1 && numbers[3] == 2);
+              })
+            : std::function<void(const writeit::Document&)>());
+  }
+  // Two whole paragraphs, Block Text and Heading 1.
+  para_case("two whole paragraphs",
+            make({{"aaaa", "Normal"},
+                  {"bbbb", "Block Text"},
+                  {"cccc", "Heading 1"},
+                  {"dddd", "Normal"}}),
+            2, 17, 17, "aaaa\nbbbb\ncccc\nddaa\nbbbb\ncccc\ndddd", [](const writeit::Document& d) {
+              return as(d, 0, "aaaa") + as(d, 1, "bbbb") + as(d, 2, "cccc") + as(d, 0, "ddaa") +
+                     as(d, 1, "bbbb") + as(d, 2, "cccc") + as(d, 3, "dddd");
+            });
+  // From the middle of a Heading 1 through a Block Text paragraph into the
+  // middle of a Normal one: Heading 1, Block Text, Normal.
+  const writeit::Document hbn =
+      make({{"hhhh", "Heading 1"}, {"bbbb", "Block Text"}, {"nnnn", "Normal"}});
+  para_case("heading through block text into normal", hbn, 2, 12, 12,
+            "hhhh\nbbbb\nnnhh\nbbbb\nnnnn", [](const writeit::Document& d) {
+              return as(d, 0, "hhhh") + as(d, 1, "bbbb") + as(d, 0, "nnhh") + as(d, 1, "bbbb") +
+                     as(d, 2, "nnnn");
+            });
+  // The same at the start of the Normal paragraph, at its end (the end of
+  // the document), and at the end of the Block Text paragraph.
+  para_case("at the start of a paragraph", hbn, 2, 12, 10, "hhhh\nbbbb\nhh\nbbbb\nnnnnnn",
+            [](const writeit::Document& d) {
+              return as(d, 0, "hhhh") + as(d, 1, "bbbb") + as(d, 0, "hh") + as(d, 1, "bbbb") +
+                     as(d, 2, "nnnnnn");
+            });
+  para_case("at the end of the last paragraph", hbn, 2, 12, 14, "hhhh\nbbbb\nnnnnhh\nbbbb\nnn",
+            [](const writeit::Document& d) {
+              return as(d, 0, "hhhh") + as(d, 1, "bbbb") + as(d, 0, "nnnnhh") + as(d, 1, "bbbb") +
+                     as(d, 2, "nn");
+            });
+  para_case("at the end of a paragraph", hbn, 2, 12, 9, "hhhh\nbbbbhh\nbbbb\nnn\nnnnn",
+            [](const writeit::Document& d) {
+              return as(d, 0, "hhhh") + as(d, 0, "bbbbhh") + as(d, 1, "bbbb") + as(d, 1, "nn") +
+                     as(d, 2, "nnnn");
+            });
+  // No paragraph end in the paste: no paragraph format changes.
+  para_case("no paragraph end", hbn, 6, 8, 12, "hhhh\nbbbb\nnnbbnn",
+            [](const writeit::Document& d) {
+              return as(d, 0, "hhhh") + as(d, 1, "bbbb") + as(d, 2, "nnbbnn");
+            });
 
   return suite_test::done("paste-format", kChecks);
 }
