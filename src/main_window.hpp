@@ -6,11 +6,13 @@
 #include "narrow_combo.hpp"
 #include "page_text.hpp"
 #include "settings.hpp"
+#include "undo_state.hpp"
 #include "view.hpp"
 
 #include <gtkmm.h>
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <utility>
 #include <memory>
@@ -89,6 +91,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   struct Snapshot {
     Document doc;
     int offset = 0;
+    // undo_state_'s id when the snapshot was taken (see undo_state.hpp).
+    std::uint64_t state = 0;
   };
 
   enum class OpenKind { Rtf, Markdown, Plain };
@@ -154,7 +158,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Calls of capture(), for the tests: a keystroke makes at most undo's two.
   mutable long captures_ = 0;
   void replace_buffer(const Document& doc, int offset);
+  // The undo state differs from the one saved, opened or made new.
   bool dirty() const;
+  // Notes a change to the buffer for undo_state_ (the stub; see
+  // undo_state.hpp). Screen-only list tags and buffer loads are not changes.
+  void note_change(const Glib::RefPtr<Gtk::TextTag>& tag);
   void update_title();
   void update_actions();
   // Asks the clipboard, without waiting, whether it holds text; the answer
@@ -267,6 +275,27 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool shift_list_level(int delta);
   bool on_text_key(GdkEventKey* event);
   bool on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  // Each paragraph's format and list number, as capture() and list_numbers()
+  // give them, and the GTK line it starts on, without copying the document:
+  // for the labels on_text_draw() draws and update_list_shifts(). Rebuilt
+  // from the paragraph tags when a paragraph format changes, a line comes or
+  // goes, or the empty last paragraph's held format changes; typing inside a
+  // paragraph leaves it as it is.
+  struct ListLine {
+    ParaFormat format;
+    int line = 0;
+    int number = 0;
+  };
+  const std::vector<ListLine>& list_lines();
+  // Whether any paragraph is a list item, from the tag table without
+  // walking the paragraphs: a paragraph tag with a list that is in the
+  // buffer, or a held format with one. A document with no list does no list
+  // work on a draw.
+  bool any_list() const;
+  // The paragraph list_label_layout() measures for paragraph `index` of
+  // list_lines(), starting at buffer `offset`: its format, and its first
+  // character's format (or its mark's) as the label's.
+  Paragraph label_paragraph(size_t index, int offset) const;
   // A list item's label, for the paragraph that starts at buffer `offset`:
   // its layout, its buffer x, and the first character's location. False for
   // a plain paragraph.
@@ -397,7 +426,11 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   std::string save_path_;
   std::string title_name_ = "Untitled";
-  Document saved_;
+  // The undo state at the last save, open or New; dirty() compares it.
+  std::uint64_t saved_id_ = 0;
+  Undo undo_state_;
+  // undo_state_'s id when the current user action began.
+  std::uint64_t begin_id_ = 0;
   bool save_point_ = true;
   // Where an imported document came from; cleared when it becomes anything
   // else (New, Close, Save As). Lets a second request for it find this
@@ -442,6 +475,14 @@ class MainWindow : public Gtk::ApplicationWindow {
     int number = 0;
   };
   std::vector<TabLine> tab_lines_;
+  // list_lines()' cache: valid until a change it depends on, with the held
+  // format of the empty last paragraph it was built with.
+  std::vector<ListLine> list_lines_;
+  bool list_lines_valid_ = false;
+  bool list_lines_any_ = false;
+  bool list_lines_centred_ = false;
+  bool list_lines_pending_set_ = false;
+  ParaFormat list_lines_pending_;
   bool tabs_full_ = true;
   bool tabs_renumber_ = false;
   bool tabs_noted_ = false;

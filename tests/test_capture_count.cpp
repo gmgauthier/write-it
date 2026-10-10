@@ -10,6 +10,14 @@
 //
 // Each document is opened, the caret placed in the middle, and a key pressed
 // as the keyboard sends it; the count covers every idle and draw it causes.
+//
+// A document with no list does no list work on a draw at all.
+//
+// The labels and the centred-item shifts read each paragraph's format and
+// number from list_lines() instead, built from the paragraph tags. So here
+// too: after each edit of a document of awkward lists, list_lines() gives
+// what capture() and list_numbers() give, paragraph for paragraph, with the
+// same start and the same label font.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -45,9 +53,79 @@ struct MainWindowProbe {
     iter.forward_to_line_end();
     w.buffer_->place_cursor(iter);
   }
+  // Whether list_lines() has been built since the document went in.
+  static bool lines_built(MainWindow& w)
+  {
+    return w.list_lines_valid_;
+  }
   static long captures(MainWindow& w)
   {
     return w.captures_;
+  }
+  // list_lines() against capture(): the first difference, or "".
+  static std::string compare_lines(MainWindow& w)
+  {
+    const Document doc = w.capture();
+    const std::vector<int> numbers = list_numbers(doc.paragraphs);
+    const auto& lines = w.list_lines();
+    if (lines.size() != doc.paragraphs.size())
+      return "paragraphs " + std::to_string(lines.size()) + " against " +
+             std::to_string(doc.paragraphs.size());
+    int offset = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+      const Paragraph& p = doc.paragraphs[i];
+      const std::string at = "paragraph " + std::to_string(i) + ": ";
+      if (!(lines[i].format == para_format(p)))
+        return at + "format";
+      if (lines[i].number != numbers[i])
+        return at + "number " + std::to_string(lines[i].number) + " against " +
+               std::to_string(numbers[i]);
+      const int start = w.buffer_->get_iter_at_line(lines[i].line).get_offset();
+      if (start != offset)
+        return at + "starts at " + std::to_string(start) + " against " + std::to_string(offset);
+      const Paragraph label = w.label_paragraph(i, start);
+      auto label_run = [&w, start](const Paragraph& q) {
+        return !q.runs.empty() ? q.runs.front()
+               : q.mark        ? *q.mark
+                               : w.format_of(w.buffer_->get_iter_at_offset(start));
+      };
+      if (!same_format(label_run(label), label_run(p)) || !(para_format(label) == para_format(p)))
+        return at + "label format";
+      for (const Run& run : p.runs)
+        offset += static_cast<int>(Glib::ustring(run.text).length());
+      offset += 1;
+    }
+    return "";
+  }
+  static void type_at(MainWindow& w, int offset, const char* text)
+  {
+    w.buffer_->place_cursor(w.buffer_->get_iter_at_offset(offset));
+    w.buffer_->begin_user_action();
+    w.buffer_->insert_interactive_at_cursor(text, true);
+    w.buffer_->end_user_action();
+  }
+  static void erase(MainWindow& w, int from, int to)
+  {
+    w.buffer_->begin_user_action();
+    w.buffer_->erase_interactive(w.buffer_->get_iter_at_offset(from),
+                                 w.buffer_->get_iter_at_offset(to), true);
+    w.buffer_->end_user_action();
+  }
+  static int length(MainWindow& w)
+  {
+    return w.buffer_->get_char_count();
+  }
+  static void select(MainWindow& w, int from, int to)
+  {
+    w.buffer_->select_range(w.buffer_->get_iter_at_offset(from), w.buffer_->get_iter_at_offset(to));
+  }
+  static void numbering(MainWindow& w)
+  {
+    w.toggle_list_kind(ListKind::Number);
+  }
+  static void undo(MainWindow& w)
+  {
+    w.undo();
   }
   static Glib::ustring line_text(MainWindow& w, int line)
   {
@@ -166,13 +244,103 @@ void measure(writeit::MainWindow& window, const std::string& home, Kind kind)
             << " draws\n";
   CHECK(draws >= 1);
   CHECK(redrawn == 0);
+  // With no list, neither typing nor drawing looked at the paragraphs.
+  if (kind == Kind::Plain)
+    CHECK(!MainWindowProbe::lines_built(window));
   counting.disconnect();
+  g_remove(path.c_str());
+}
+
+writeit::Paragraph item(const char* text, writeit::ListKind kind, int list, int level = 0)
+{
+  writeit::Paragraph p;
+  if (*text) {
+    writeit::Run run;
+    run.text = text;
+    p.runs.push_back(run);
+  }
+  p.list.kind = kind;
+  p.list.list = kind == writeit::ListKind::Number ? list : 0;
+  p.list.level = level;
+  p.indents = writeit::list_indents(level);
+  return p;
+}
+
+writeit::Document awkward()
+{
+  using writeit::ListKind;
+  writeit::Document doc;
+  doc.paragraphs.push_back(item("Plain.", ListKind::None, 0));
+  doc.paragraphs.push_back(item("One.", ListKind::Number, 1));
+  doc.paragraphs.push_back(item("One, nested.", ListKind::Number, 1, 1));
+  doc.paragraphs.push_back(item("Bullet.", ListKind::Bullet, 0));
+  // An empty item with a format of its own on its newline.
+  doc.paragraphs.push_back(item("", ListKind::Number, 1));
+  writeit::Run mark;
+  mark.size = 20;
+  mark.bold = true;
+  doc.paragraphs.back().mark = mark;
+  doc.paragraphs.push_back(item("Another list, from 7.", ListKind::Number, 2));
+  doc.paragraphs.back().list.start = 7;
+  doc.paragraphs.push_back(item("Centred.", ListKind::Number, 2));
+  doc.paragraphs.back().align = writeit::Align::Center;
+  {
+    writeit::Paragraph big = item("Big bold label.", ListKind::Number, 1);
+    big.runs.front().size = 18;
+    big.runs.front().bold = true;
+    doc.paragraphs.push_back(big);
+  }
+  // An empty last item: its format is held aside, with no tag.
+  doc.paragraphs.push_back(item("", ListKind::Number, 1));
+  return doc;
+}
+
+bool lines_match(writeit::MainWindow& window, const char* step)
+{
+  settle();
+  const std::string diff = MainWindowProbe::compare_lines(window);
+  if (!diff.empty())
+    std::cerr << "  list_lines() after " << step << ": " << diff << "\n";
+  return diff.empty();
+}
+
+void compare(const std::string& home)
+{
+  const std::string path = Glib::build_filename(home, "awkward.rtf");
+  Glib::file_set_contents(path, writeit::rtf_export(awkward()));
+  writeit::MainWindow window;
+  window.show();
+  settle();
+  MainWindowProbe::open(window, path);
+  CHECK(lines_match(window, "open"));
+  // Other line separators: GTK lines that are not paragraphs.
+  MainWindowProbe::type_at(window, 3, "\r");
+  CHECK(lines_match(window, "a carriage return"));
+  MainWindowProbe::type_at(window, 12, "\xe2\x80\xa9");
+  CHECK(lines_match(window, "a paragraph separator"));
+  // Typing into the empty last item, and a new one after it.
+  MainWindowProbe::type_at(window, MainWindowProbe::length(window), "Last.");
+  CHECK(lines_match(window, "typing in the last item"));
+  MainWindowProbe::type_at(window, MainWindowProbe::length(window), "\n");
+  CHECK(lines_match(window, "Enter at the end"));
+  // A paragraph joined to the next, and numbering turned off and on.
+  MainWindowProbe::erase(window, 20, 21);
+  CHECK(lines_match(window, "a join"));
+  MainWindowProbe::select(window, 0, 2);
+  MainWindowProbe::numbering(window);
+  CHECK(lines_match(window, "numbering the first paragraph"));
+  MainWindowProbe::undo(window);
+  CHECK(lines_match(window, "undo"));
+  MainWindowProbe::erase(window, 0, MainWindowProbe::length(window));
+  CHECK(lines_match(window, "deleting everything"));
+  window.hide();
+  settle();
   g_remove(path.c_str());
 }
 
 }  // namespace
 
-constexpr int kChecks = 12;
+constexpr int kChecks = 22;
 
 int main(int argc, char* argv[])
 {
@@ -196,6 +364,7 @@ int main(int argc, char* argv[])
     window.hide();
     settle();
   }
+  compare(home);
   const std::string ini = Glib::build_filename(home, "write-it", "write-it.ini");
   g_remove(ini.c_str());
   g_rmdir(Glib::build_filename(home, "write-it").c_str());
