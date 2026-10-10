@@ -319,6 +319,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   void install_stories(const Document& doc);
   void refresh_stories();
   void on_page_setup();
+  // File → Print… and the toolbar button. The system dialog; the page view
+  // is what it draws, including when the window is showing Draft.
+  void on_print();
+  // The same drawing, written to a PDF. Tests use this. No dialog.
+  bool export_page(const std::string& path);
+  bool run_print(Gtk::PrintOperationAction action, const std::string& path, std::string& error);
+  int print_page_count() const;
+  void draw_print_page(const Glib::RefPtr<Gtk::PrintContext>& context, int page_nr);
   void on_columns();
   void on_page_break();
   void on_insert_table();
@@ -517,6 +525,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* save_item_ = nullptr;
   Gtk::MenuItem* save_as_item_ = nullptr;
   Gtk::MenuItem* export_item_ = nullptr;
+  Gtk::MenuItem* print_item_ = nullptr;
   Gtk::MenuItem* close_item_ = nullptr;
   Gtk::MenuItem* undo_item_ = nullptr;
   Gtk::MenuItem* redo_item_ = nullptr;
@@ -563,6 +572,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToolButton* new_tool_ = nullptr;
   Gtk::ToolButton* open_tool_ = nullptr;
   Gtk::ToolButton* save_tool_ = nullptr;
+  Gtk::ToolButton* print_tool_ = nullptr;
   Gtk::ToolButton* cut_tool_ = nullptr;
   Gtk::ToolButton* copy_tool_ = nullptr;
   Gtk::ToolButton* paste_tool_ = nullptr;
