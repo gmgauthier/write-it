@@ -33,9 +33,15 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 
 Known issues after M2, to be fixed in a later milestone:
 
-- Typing slows as the document grows, because every keystroke re-reads the whole document.
+- Typing slows as the document grows. In a 1000-paragraph document each keystroke took about 330 ms of CPU, whether or not the text is in a list.
+- On a 1024×576 screen the first launch opens 960×576 below the title bar, so its bottom 58 px, the status bar included, are off the screen. The window should fit inside the work area, frame included.
 - A word copied from a Heading 1 and pasted into a Normal paragraph saves with `\outlinelevel0` but no `\s1`, so the paragraph is marked as a heading while its style is still Normal.
 - The Format → Style… list shows style names longer than the 32 characters the Named styles item allows.
+
+Known test defects after M2. These tests fail because of the display they run on, not because of the fault they were written to catch:
+
+- `paragraph-dialog` fails under a real window manager. It compares the field’s exact text after GTK has rewritten it (`22` becomes `22"`), and it checks the selection once, before the field is focused again.
+- `window-memory` and `status-bar` fail on a screen too small for a 960×700 window.
 
 The 960×700 first-launch mockup is [brand/window.png](brand/window.png). The sample document in that picture is `letter.rtf`.
 
