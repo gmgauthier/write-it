@@ -10,7 +10,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs,
 
 ## Status
 
-**M2 (Paragraph) is done and tagged `m2`. M3 is next.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
+**M3 (Page) is done and tagged `m3`. M4 (Spell, print, templates) is next.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
 
 | M2 item | State |
 |---|---|
@@ -105,7 +105,7 @@ One document, one window. The title is `Write-It - letter.rtf`. A dirty document
 
 Closing a dirty document asks one question. The buttons, in order, are **Save**, **Don’t Save**, **Cancel**. Save is the default. **Close** (Ctrl+W) returns to Untitled. **Exit** (Ctrl+Q) leaves the program. The first launch is 960×700, not maximized, at Fit width. The window remembers its size, whether it is maximized, and the zoom, Fit width included. The next launch restores them, no larger than the screen it opens on. A maximized window comes back maximized and restores to the size it had before. A missing, empty, or corrupt ini, or a size in it that is not one, opens as the first launch does.
 
-The page sits on a neutral gray pasteboard, `#808080`. Until M3’s Page Setup, the page is A4, 21 × 29.7 cm. The pasteboard scrolls up and down, and sideways when the page is wider than the window, to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top, and on the last line right to the bottom. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back.
+The page sits on a neutral gray pasteboard, `#808080`. The default page is A4, 21 × 29.7 cm. File → Page Setup… changes the paper, the orientation, and the margins. The pasteboard scrolls up and down, and sideways when the page is wider than the window, to keep the caret in view after every caret movement and every edit (Ctrl+End, the arrows, Page Down and Page Up, typing, Find), in Page and Draft at any zoom, and again when a zoom, a view switch, or a resize moves the page. On the first line it goes right to the top. On the last line it goes right to the bottom when that line is within a screen of the sheet's foot, so the page's edge and the gray beyond it show. A short page's last line stays near the top: pressing Enter there does not jump to the empty foot of the sheet. Page Down and Page Up move the caret one visible height of the pasteboard, keeping its place across the line, and Shift with them extends the selection. The mouse wheel and the scrollbars can take the view away from the caret; its next movement brings it back.
 
 ```
 +------------------------------------------------------------------+
@@ -174,6 +174,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 | Status Bar | Check. On by default |
 | Zoom | Submenu: 50%, 75%, 100%, 150%, 200%, Fit width. Fit width is the default: the page fills the visible width and follows the window as it is resized. The choice is remembered |
 | Page / Draft | Radio. Page is the default |
+| Header and Footer | Check. Off until a file has a header or a footer, which opens with it on. Not saved. Draft hides the areas and keeps the text |
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
 
@@ -181,7 +182,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 
 The font list and the size list match the other two apps. The size box lists 8, 9, 10, 11, 12, 14, 16, 18, 24, 36 and is editable: a typed size applies on Enter, to the selection. Sizes are half points, so 10.5 and 8.5 are accepted and shown, and other fractions such as 10.3 are refused, as in Word 97. Spaces around a typed size are trimmed and leading zeros ignored, so “  12 ” and “00012” are 12. A refused entry shows one of these messages (“This is not a valid number.”, “The number must be between 1 and 1638.” or “Font sizes must be whole numbers or end in .5.”), and the box goes back to the text’s size, selected to type over. Sizes are clamped to 1–1638 pt. A new document starts at Sans 11.
 
-**Tools.** Spelling… (F7). Options…: default font family, default size, recent-file count (4, 8, or 12), measurement units (inches or centimetres, default inches), and the dictionary name. The units are what the Paragraph dialog shows and accepts. The file always stores twips, so changing units never changes a document.
+**Tools.** Spelling… (F7). Options…: default font family, default size, recent-file count (4, 8, or 12), measurement units (inches or centimetres, default inches), and the dictionary name. The units are what the Paragraph, Page Setup, and Columns dialogs show and accept. The file always stores twips, so changing units never changes a document.
 
 **Table.** Insert Table…, Insert Row, Insert Column, Delete Row, Delete Column.
 
@@ -203,7 +204,7 @@ View → Side by side is on by default, so the two toolbars share one row. Turni
 
 The left side is a message (“Saved letter.rtf”) that stays until the next message. The rightmost cell is the zoom, and it pops the same list as View. The cell to its left is the page, “Page 2 of 4”.
 
-Until M3 lays out real pages the page count is approximate: a page is the A4 sheet’s height (16838 twips) on the screen page’s scale, less the page view’s top and bottom insets (692 px of laid-out text at 100%), `m` is how many of those the text fills, and `n` is the one the caret’s line starts on. Both scale with the zoom, so neither the zoom nor the view changes the count.
+The page count follows the page setup, and it is not Word’s pagination. A page is the sheet’s height less its top and bottom margins: 692 px of laid-out text at 100% on the default A4 page. `m` is how many of those the text fills, and `n` is the one the caret’s line starts on. A page break is kept and written; it does not change the count. Text and page both scale with the zoom, so neither the zoom nor the view changes the count, short of rounding.
 
 ### Config
 
@@ -249,7 +250,7 @@ Fonts, sizes, underline, alignment, indents, named styles beyond headings, heade
 
 1.0 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with that release before adding a filter. M5 cuts `v1.0.0`.
 
-Each milestone is a branch `feature/mN-short-name` from `master`. A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
+Each milestone is a branch cut from `master`. M2's was `m2`. From M3 on the branch is `milestone-N` (`milestone-3`, `milestone-4`, …). A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
 
 The sections above are the specification. This section is the order of work. The sample letter in [brand/window.png](brand/window.png) is the chrome target at M0; its paragraphs, list, and table arrive with the milestones that own them.
 
@@ -285,7 +286,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 - New, Open, Save, and Save As write RTF for paragraphs and character format. Dirty state is a trailing `*` on the title. Closing a dirty document asks Save, Don’t Save, Cancel, with Save as the default.
 - Open Recent, up to eight names, tooltip the full path, and the sentence “Could not find the file “letter.rtf”.”, naming the file Options… can set the recent-file count to 4, 8, or 12, and the default font family and size.
 - Plain `.txt` imports as paragraphs.
-- Markdown import and export cover headings, paragraphs, bold, and italic. Lists, tables, and image paths wait until those objects exist.
+- Markdown import and export cover headings, paragraphs, bold, and italic. Image paths arrive with M3. Lists and pipe tables wait until M4.
 
 **Done when** the M1 line in the table is true. A headless test round-trips a paragraph with character format through RTF, round-trips the Markdown subset, and imports a plain-text file as paragraphs.
 
@@ -307,11 +308,10 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M3 — Page
 
-- Tables, and the Table menu: insert a table, insert and delete rows and columns.
-- Headers, footers, and footnotes.
-- Images. Insert → Picture…. Markdown image paths export and import with this slice.
-- Columns and page setup: paper, orientation, margins.
-- The ruler reflects the page setup.
+- File → Page Setup… sets the paper, the orientation, and the margins, in the units from Tools → Options…. The paper list is A4 (the default, 21 × 29.7 cm), Letter, Legal, and Custom. Choosing a size while Landscape is selected shows the swapped edges. Turning the orientation swaps the width and height on screen. The file stores the edges as they will print, plus `\landscape` when that is on; a landscape flag does not swap the edges by itself. Width and height must be from 1" to 22" (2.54 cm to 55.88 cm). Margins must leave at least 0.25" (0.64 cm) of the sheet. The dialog refuses anything else with a message and stays open. OK on an untouched dialog changes nothing, because a rounded field keeps the file’s twips. The default page is left out of the file, so a document from before page setup still saves as the same bytes. A hostile file is clamped: paper from 1" to 22", margins inside the sheet with a quarter inch of text, one to twelve columns, and a gap of 0 to 2". One column writes no `\cols` and keeps the half-inch gap. Insert → Page Break puts `\page` on the paragraph after the caret, or on the caret’s own paragraph when the caret is at its start. At the end of the document it appends a paragraph in the following style. There is no Ctrl+Enter. Format → Columns… sets one to four columns and a gap of 0" to 2" (0 cm to 5.08 cm). A file that already has more than four columns can keep that count; the dialog does not offer a fifth on a document that has fewer. One column stores the half-inch gap. The ruler marks the current paragraph’s indents from the page’s margins, and draws a tick in each column gap when there is more than one column.
+- Tables. Insert → Table… and Table → Insert Table… insert a table of 1 to 32 rows and 1 to 16 columns at the caret’s paragraph, or just after the table the caret is already in. The columns share the text width, and none is narrower than 200 twips. Table → Insert Row and Insert Column add a row or a column after the caret’s cell. Delete Row and Delete Column remove that row or column, and the last one leaves an ordinary paragraph. Those four are insensitive when the caret is not in a table. A cell may hold more than one paragraph. On screen a cell is a gray paragraph; the text does not flow down one column and then the next. RTF writes `\trowd`, `\cellx`, and `\cell`. Two tables with no paragraph between them are read back as one table.
+- Headers, footers, and footnotes. View → Header and Footer shows the header and the footer on the page. The check is not saved. A file that has either opens with it on, until the user has toggled the item. Draft hides the areas and keeps the text. Insert → Footnote inserts a numbered marker at the caret and an empty note, up to 200 notes, and moves the keyboard to the notes. The notes sit on the page in Page view whenever the document has any, whether or not the header is showing. Typing in a header, a footer, or the notes replaces that story with plain paragraphs in the font and size at the caret, one paragraph per line. A blank line in the notes separates notes, so a blank line typed inside one note makes two. Until that area is edited, the file’s own paragraphs are kept, pictures included. Ctrl+Z and Ctrl+Y there undo and redo the document. The other Ctrl keys do not format the body while a story has the keyboard.
+- Images. Insert → Picture… inserts a PNG or a JPEG, up to 8 MB. Anything else says “Write-It can insert a PNG or JPEG picture.” The stored size is the picture’s pixels at 96 dpi, and no edge is past 22". RTF writes `\pngblip` or `\jpegblip`, with `\picwgoal` and `\pichgoal` when the size is known. On screen a picture wider than 480 px is scaled down; the file keeps the original bytes. The path is not written in the RTF. Markdown image paths export and import with this slice: a path that exists is loaded, and a missing path still round-trips as `![alt](path)`. Deleting a picture and undoing that delete does not bring the bytes back.
 
 **Done when** the M3 line in the table is true. A headless test round-trips a table, a header, a footer, a footnote, an image, and a two-column section through RTF.
 

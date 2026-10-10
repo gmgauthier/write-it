@@ -35,6 +35,10 @@ int main(int argc, char* argv[])
 {
   if (g_getenv("GDK_BACKEND") == nullptr)
     g_setenv("GDK_BACKEND", "x11", FALSE);
+  // GTK loads the AT-SPI bridge during gtk_init and it connects to
+  // /run/user/<uid>/at-spi/bus_0. Nothing in Write-It uses that bus. The
+  // size list still reaches its popup through in-process ATK.
+  g_setenv("NO_AT_BRIDGE", "1", TRUE);
   g_set_prgname("write-it");
   prefer_light_theme();
   return writeit::Application::create()->run(argc, argv);

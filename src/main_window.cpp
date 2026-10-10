@@ -288,7 +288,8 @@ void MainWindow::build_menus()
   save_as_item_ = add_item(*file, "Save _As…", true);
   export_item_ = add_item(*file, "_Export…", true);
   add_item(*file, "_Print…", false, GDK_KEY_p, Gdk::CONTROL_MASK);
-  add_item(*file, "Page Set_up…", false);
+  page_setup_item_ = add_item(*file, "Page Set_up…", true);
+  page_setup_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_page_setup));
   file->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   close_item_ = add_item(*file, "_Close", true, GDK_KEY_w, Gdk::CONTROL_MASK);
   add_item(*file, "E_xit", true, GDK_KEY_q, Gdk::CONTROL_MASK)->signal_activate().connect([this] {
@@ -382,12 +383,21 @@ void MainWindow::build_menus()
   });
   view->append(*page_item_);
   view->append(*draft_item_);
+  view->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
+  header_footer_item_ = Gtk::manage(new Gtk::CheckMenuItem("_Header and Footer", true));
+  header_footer_item_->signal_toggled().connect(
+      sigc::mem_fun(*this, &MainWindow::on_header_footer));
+  view->append(*header_footer_item_);
 
   auto* insert = add_menu("_Insert");
-  add_item(*insert, "_Picture…", false);
-  add_item(*insert, "_Table…", false);
-  add_item(*insert, "Page _Break", false);
-  add_item(*insert, "_Footnote", false);
+  picture_item_ = add_item(*insert, "_Picture…", true);
+  insert_table_item_ = add_item(*insert, "_Table…", true);
+  page_break_item_ = add_item(*insert, "Page _Break", true);
+  footnote_item_ = add_item(*insert, "_Footnote", true);
+  picture_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_picture));
+  insert_table_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_insert_table));
+  page_break_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_page_break));
+  footnote_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_footnote));
 
   auto* format_menu = add_menu("F_ormat");
   add_item(*format_menu, "_Font…", false);
@@ -405,19 +415,28 @@ void MainWindow::build_menus()
   numbering_item_ = add_item(*format_menu, "_Numbering", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   paragraph_item_ = add_item(*format_menu, "_Paragraph…", true);
-  add_item(*format_menu, "C_olumns…", false);
+  columns_item_ = add_item(*format_menu, "C_olumns…", true);
+  columns_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_columns));
 
   auto* tools = add_menu("_Tools");
   add_item(*tools, "_Spelling…", false, GDK_KEY_F7, static_cast<Gdk::ModifierType>(0));
   options_item_ = add_item(*tools, "_Options…", true);
 
   auto* table = add_menu("T_able");
-  add_item(*table, "_Insert Table…", false);
-  add_item(*table, "Insert _Row", false);
-  add_item(*table, "Insert _Column", false);
+  table_insert_item_ = add_item(*table, "_Insert Table…", true);
+  table_row_item_ = add_item(*table, "Insert _Row", false);
+  table_column_item_ = add_item(*table, "Insert _Column", false);
   table->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-  add_item(*table, "_Delete Row", false);
-  add_item(*table, "Delete C_olumn", false);
+  table_delete_row_item_ = add_item(*table, "_Delete Row", false);
+  table_delete_column_item_ = add_item(*table, "Delete C_olumn", false);
+  table_insert_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_insert_table));
+  table_row_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_insert_row));
+  table_column_item_->signal_activate().connect(
+      sigc::mem_fun(*this, &MainWindow::on_insert_column));
+  table_delete_row_item_->signal_activate().connect(
+      sigc::mem_fun(*this, &MainWindow::on_delete_row));
+  table_delete_column_item_->signal_activate().connect(
+      sigc::mem_fun(*this, &MainWindow::on_delete_column));
 
   auto* help = add_menu("_Help");
   add_item(*help, "_About Write-It", true, GDK_KEY_F1, static_cast<Gdk::ModifierType>(0))
@@ -584,7 +603,27 @@ void MainWindow::build_page()
   text_.set_hexpand(true);
   text_.set_vexpand(true);
   text_.get_style_context()->add_class("page-text");
-  page_.add(text_);
+  auto prepare_story = [](Gtk::TextView& view) {
+    view.set_wrap_mode(Gtk::WRAP_WORD_CHAR);
+    view.set_hexpand(true);
+    view.set_left_margin(8);
+    view.set_right_margin(8);
+    view.get_style_context()->add_class("page-text");
+    view.set_no_show_all(true);
+  };
+  prepare_story(header_view_);
+  prepare_story(notes_view_);
+  prepare_story(footer_view_);
+  // The body is the only text view until a header, footer, or footnote is
+  // shown. Tests that take the first text view find this one.
+  page_box_.pack_start(text_, Gtk::PACK_EXPAND_WIDGET);
+  page_.add(page_box_);
+  header_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&header_); });
+  footer_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&footer_); });
+  notes_view_.get_buffer()->signal_end_user_action().connect([this] { on_notes_end(); });
+  header_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
+  footer_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
+  notes_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   text_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   page_.signal_size_allocate().connect([this](Gtk::Allocation&) { ruler_.queue_draw(); });
 
@@ -755,17 +794,26 @@ void MainWindow::scroll_to_caret()
     if (want != value)
       adj->set_value(want);
   };
-  // On the first line, or the last, all the way: the page's edge and the
-  // gray beyond it show, not a margin short of them.
+  // On the first line, all the way to the top: the page's edge and the gray
+  // above it show. On the last line, all the way to the bottom only when
+  // that line is already within a screen of the sheet's foot, so the edge
+  // and the gray under it show, not a margin short of them. A short page's
+  // last line sits near the top of the sheet; jumping to the foot would
+  // hide the line just typed.
   Gdk::Rectangle first;
   Gdk::Rectangle last;
   text_.get_iter_location(buffer_->begin(), first);
   text_.get_iter_location(buffer_->end(), last);
   auto v = paste_.get_vadjustment();
+  const double page = v->get_page_size();
+  // `y` is the caret line in the board's coordinates, which is what the
+  // pasteboard's adjustment measures. At the foot, scrolling to the bottom
+  // still leaves that line on screen.
+  const bool last_at_foot = page > 0 && v->get_upper() - static_cast<double>(y) <= page;
   if (rect.get_y() <= first.get_y())
     v->set_value(v->get_lower());
-  else if (rect.get_y() >= last.get_y())
-    v->set_value(std::max(v->get_lower(), v->get_upper() - v->get_page_size()));
+  else if (rect.get_y() >= last.get_y() && last_at_foot)
+    v->set_value(std::max(v->get_lower(), v->get_upper() - page));
   else
     reveal(v, y, rect.get_height());
   // Sideways too, for a page wider than the window (200% on a 960 px window).
@@ -845,10 +893,10 @@ void MainWindow::apply_page_size()
     return;
   sizing_ = true;
   const double z = zoom_factor();
-  // Recomputed from the zoom and the view every time, never kept from the
-  // last layout: the text view asks for exactly this width, so a smaller
-  // zoom is a narrower allocation and a narrower wrap.
-  const int width = page_widths(view_, z).page;
+  // Recomputed from the zoom, the view, and the page setup every time, never
+  // kept from the last layout: the text view asks for exactly this width, so
+  // a smaller zoom is a narrower allocation and a narrower wrap.
+  const int width = geometry().page_width;
   text_.set_layout_width(width);
   apply_margins();
   // Paragraph tags carry the text inset in their margins, so they are
@@ -877,11 +925,20 @@ int MainWindow::page_height() const
   // Draft's white area is at least as tall as the visible pasteboard, so
   // the text starts at the top and there is no gray below it.
   const int base_h = g.chrome ? g.page_height : std::max(1, paste_.get_allocated_height() - 4);
-  const int width = page_widths(view_, zoom_factor()).page;
+  const int width = g.page_width;
   int min_h = 0;
   int nat_h = 0;
   text_.get_preferred_height_for_width(std::max(1, width - (g.chrome ? 2 : 0)), min_h, nat_h);
-  return std::max(base_h, nat_h);
+  int extra = 0;
+  for (const Gtk::TextView* story : {&header_view_, &notes_view_, &footer_view_}) {
+    if (!story->get_visible() || story->get_parent() == nullptr)
+      continue;
+    int story_min = 0;
+    int story_nat = 0;
+    story->get_preferred_height_for_width(std::max(1, width), story_min, story_nat);
+    extra += story_nat;
+  }
+  return std::max(base_h, nat_h + extra);
 }
 
 bool MainWindow::page_height_stale() const
@@ -923,7 +980,8 @@ void MainWindow::queue_page_status()
       Glib::PRIORITY_DEFAULT_IDLE);
 }
 
-// "Page n of m", approximate until M3: see page_count() in view.hpp.
+// "Page n of m". The count follows the page setup. A page break is kept; it
+// does not change the count. See page_count() in view.hpp.
 void MainWindow::update_page_status()
 {
   if (!buffer_)
@@ -933,7 +991,8 @@ void MainWindow::update_page_status()
   text_.get_line_yrange(buffer_->end(), end_y, end_h);
   Gdk::Rectangle caret;
   text_.get_iter_location(buffer_->get_iter_at_mark(buffer_->get_insert()), caret);
-  const Glib::ustring label = page_label(page_count(end_y + end_h, caret.get_y(), zoom_factor()));
+  const int per = page_text_height(page_setup_, zoom_factor());
+  const Glib::ustring label = page_label(page_count(end_y + end_h, caret.get_y(), per));
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
 }
@@ -999,6 +1058,20 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   const int left = origin_x + margin_left();
   const int right = origin_x + page_w - margin_right();
   const double h = self.get_height();
+  const PageSetup page = clamp_page(page_setup_);
+  if (page.columns > 1 && right > left) {
+    const int gap_px = std::max(0, indent_px(page.column_gap));
+    const int gaps = page.columns - 1;
+    const int text_w = right - left;
+    const int col_w = std::max(1, (text_w - gaps * gap_px) / page.columns);
+    cr->set_source_rgb(0.45, 0.45, 0.45);
+    for (int column = 1; column < page.columns; ++column) {
+      const double x = left + column * col_w + (column - 1) * gap_px + gap_px / 2.0 + 0.5;
+      cr->move_to(x, 2);
+      cr->line_to(x, h - 2);
+    }
+    cr->stroke();
+  }
   auto down = [&](double x) {
     cr->move_to(x - 4, 1);
     cr->line_to(x + 4, 1);
