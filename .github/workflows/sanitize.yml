@@ -55,6 +55,8 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:halt_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          # undo-fuzz: 40 of its 200 runs, as bench/undo_fuzz.md allows.
+          UNDO_FUZZ_RUNS: 40
         # LSAN_OPTIONS is set in the shell: in a container job only the
         # shell's $GITHUB_WORKSPACE is the checkout's path inside the container.
         run: |

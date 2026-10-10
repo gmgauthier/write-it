@@ -48,6 +48,7 @@ writeit_core_sources = files(
   'src/rtf.cpp',
   'src/settings.cpp',
   'src/styles.cpp',
+  'src/undo.cpp',
   'src/units.cpp',
   'src/view.cpp',
 )
@@ -441,6 +442,29 @@ test(
   ],
 )
 
+# The real window under a display: undo and redo as recorded operations, for
+# typing, Delete, Backspace, paste, character and paragraph format, styles and
+# lists; the saved-state id; and the bookkeeping one keystroke costs in a
+# long document.
+write_it_undo_tests = executable(
+  'write-it-undo-tests',
+  'tests/test_undo.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo', write_it_undo_tests, timeout: 120, is_parallel: false)
+
+# The real window under a display, and a bare buffer without one: the undo
+# fuzz of bench/undo_fuzz.md. Random runs of edits through the keys, boxes,
+# buttons, menus and dialogs, with undo, redo, save and reopen in between;
+# every undo and redo must give back the reference state byte for byte.
+# UNDO_FUZZ_SEED, UNDO_FUZZ_RUNS (200), UNDO_FUZZ_OPS (60) and
+# UNDO_FUZZ_REPLAY=<failure file> change what it runs.
+write_it_undo_fuzz_tests = executable(
+  'write-it-undo-fuzz-tests',
+  'tests/test_undo_fuzz.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo-fuzz', write_it_undo_fuzz_tests, timeout: 1800, is_parallel: false)
 # The real window under a display: capture() copies the whole document, so
 # a keystroke may call it only for undo (at most twice), and a redraw not at
 # all. A test-only count in the window.
