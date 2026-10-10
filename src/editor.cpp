@@ -487,9 +487,17 @@ void MainWindow::build_editor()
           queue_page_status();
       });
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
-  // The clipboard outlives the window: ~MainWindow disconnects this.
+  // The clipboard outlives the window: ~MainWindow disconnects this. It is
+  // asked again on every change, and when the window comes back to the
+  // front, in case a change was missed while it was away.
   clipboard_owner_ = Gtk::Clipboard::get()->signal_owner_change().connect(
-      [this](GdkEventOwnerChange*) { update_actions(); });
+      [this](GdkEventOwnerChange*) { refresh_clipboard(); });
+  signal_focus_in_event().connect(
+      [this](GdkEventFocus*) {
+        refresh_clipboard();
+        return false;
+      },
+      false);
 
   auto activate = [](Gtk::MenuItem* item, const sigc::slot<void>& slot) {
     if (item)
@@ -538,6 +546,7 @@ void MainWindow::build_editor()
   connect_format();
   rebuild_recent();
   update_actions();
+  refresh_clipboard();
 }
 
 void MainWindow::connect_format()
@@ -1071,13 +1080,19 @@ void MainWindow::update_actions()
 {
   ++actions_depth_;
   actions_depth_peak_ = std::max(actions_depth_peak_, actions_depth_);
+  // Belt and braces: nothing it calls should run a main loop, but if one
+  // did, an event handled there must not update the actions inside this.
+  if (updating_actions_) {
+    --actions_depth_;
+    return;
+  }
+  updating_actions_ = true;
   const bool selection = buffer_ && buffer_->get_has_selection();
   const bool any_text = buffer_ && buffer_->get_char_count() > 0;
   const bool can_undo = !undo_.empty();
   const bool can_redo = !redo_.empty();
-  bool can_paste = false;
-  if (auto clipboard = Gtk::Clipboard::get())
-    can_paste = clipboard->wait_is_text_available();
+  // Never wait_is_text_available(): see clipboard_text_.
+  const bool can_paste = clipboard_text_;
   auto sens = [](Gtk::Widget* widget, bool on) {
     if (widget)
       widget->set_sensitive(on);
@@ -1098,7 +1113,39 @@ void MainWindow::update_actions()
   sens(context_paste_, can_paste);
   sens(select_all_item_, any_text);
   sens(recent_item_, !settings_.recent.empty());
+  updating_actions_ = false;
   --actions_depth_;
+}
+
+void MainWindow::refresh_clipboard()
+{
+  auto clipboard = Gtk::Clipboard::get();
+  if (!clipboard)
+    return;
+  // The answer comes through the main loop, perhaps after this window has
+  // closed: it holds the window's alive flag weakly and touches nothing once
+  // the flag is gone.
+  std::weak_ptr<bool> alive = alive_;
+  clipboard->request_targets([this, alive](const std::vector<Glib::ustring>& targets) {
+    if (alive.expired())
+      return;
+    std::vector<GdkAtom> atoms;
+    atoms.reserve(targets.size());
+    for (const Glib::ustring& target : targets)
+      atoms.push_back(gdk_atom_intern(target.c_str(), FALSE));
+    clipboard_text_ =
+        !atoms.empty() && gtk_targets_include_text(atoms.data(), static_cast<int>(atoms.size()));
+    apply_paste();
+  });
+}
+
+void MainWindow::apply_paste()
+{
+  for (Gtk::Widget* widget :
+       {static_cast<Gtk::Widget*>(paste_item_), static_cast<Gtk::Widget*>(paste_tool_),
+        static_cast<Gtk::Widget*>(context_paste_)})
+    if (widget)
+      widget->set_sensitive(clipboard_text_);
 }
 
 int MainWindow::cursor_offset() const

@@ -170,6 +170,8 @@ void lay_out_arrow(Gtk::Toolbar& bar)
 
 MainWindow::~MainWindow()
 {
+  // A clipboard answer still on its way finds the window gone.
+  alive_.reset();
   page_idle_.disconnect();
   caret_idle_.disconnect();
   page_status_idle_.disconnect();
