@@ -92,6 +92,30 @@ struct MainWindowProbe {
   {
     w.toggle_flag(MainWindow::TextFlag::Bold);
   }
+  // Bold set (not toggled) over the selection, as Bold does on text that
+  // is not all bold yet.
+  static void set_bold(MainWindow& w)
+  {
+    w.apply_run_edit(
+        [](Run& run) { MainWindow::set_text_flag(run, MainWindow::TextFlag::Bold, true); });
+  }
+  static void select(MainWindow& w, int from, int to)
+  {
+    w.buffer_->select_range(w.buffer_->get_iter_at_offset(from), w.buffer_->get_iter_at_offset(to));
+  }
+  static void caret(MainWindow& w, int at)
+  {
+    select(w, at, at);
+  }
+  static void copy(MainWindow& w)
+  {
+    w.buffer_->copy_clipboard(Gtk::Clipboard::get());
+  }
+  // Edit > Paste.
+  static void paste(MainWindow& w)
+  {
+    w.paste_item_->activate();
+  }
   static void style(MainWindow& w, const char* name)
   {
     w.apply_named_style(name);
@@ -192,12 +216,13 @@ writeit::Document centred_list()
   return doc;
 }
 
-constexpr int kChecks = 38;
+constexpr int kChecks = 57;
 
 int run(writeit::MainWindow& window, const std::string& home)
 {
   const std::string first = Glib::build_filename(home, "first.rtf");
   const std::string second = Glib::build_filename(home, "second.rtf");
+  const std::string third = Glib::build_filename(home, "third.rtf");
   const std::string lists = Glib::build_filename(home, "lists.rtf");
 
   // A new window is clean.
@@ -288,6 +313,71 @@ int run(writeit::MainWindow& window, const std::string& home)
   MainWindowProbe::undo(window);
   CHECK(is_dirty(window, false, "undo in new"));
 
+  // An edit is an edit even when the text comes out the same: typing "c"
+  // over a selected "c", or pasting "c" over it, after a save. Each is
+  // dirty and one undo step, and Undo takes exactly it away.
+  MainWindowProbe::new_document(window);
+  settle();
+  MainWindowProbe::pause(window);
+  type(window, "abc");
+  CHECK(MainWindowProbe::save_as(window, third));
+  CHECK(is_dirty(window, false, "saved abc again"));
+  const size_t saved_depth = MainWindowProbe::undo_depth(window);
+  MainWindowProbe::pause(window);
+  MainWindowProbe::select(window, 2, 3);
+  settle();
+  type(window, "c");
+  CHECK(MainWindowProbe::all(window) == "abc");
+  CHECK(is_dirty(window, true, "c typed over c"));
+  CHECK(MainWindowProbe::undo_depth(window) == saved_depth + 1);
+  MainWindowProbe::undo(window);
+  CHECK(MainWindowProbe::all(window) == "abc");
+  CHECK(is_dirty(window, false, "undo of c over c"));
+  CHECK(MainWindowProbe::undo_depth(window) == saved_depth);
+  MainWindowProbe::pause(window);
+  MainWindowProbe::select(window, 2, 3);
+  MainWindowProbe::copy(window);
+  settle();
+  MainWindowProbe::paste(window);
+  settle();
+  CHECK(MainWindowProbe::all(window) == "abc");
+  CHECK(is_dirty(window, true, "c pasted over c"));
+  CHECK(MainWindowProbe::undo_depth(window) == saved_depth + 1);
+  MainWindowProbe::undo(window);
+  CHECK(MainWindowProbe::all(window) == "abc");
+  CHECK(is_dirty(window, false, "undo of the paste"));
+  CHECK(MainWindowProbe::undo_depth(window) == saved_depth);
+
+  // What never inserts, deletes or changes a format is no edit: no step,
+  // and the "*" as it was. Backspace at the very start, Delete at the very
+  // end, Bold on text already bold, a style already applied.
+  MainWindowProbe::pause(window);
+  MainWindowProbe::select(window, 0, 3);
+  MainWindowProbe::bold(window);
+  settle();
+  CHECK(MainWindowProbe::save(window));
+  const size_t bold_depth = MainWindowProbe::undo_depth(window);
+  auto unchanged = [&](const char* what) {
+    settle();
+    const bool same =
+        MainWindowProbe::all(window) == "abc" && MainWindowProbe::undo_depth(window) == bold_depth;
+    if (!same)
+      std::cerr << "  " << what << ": undo depth " << MainWindowProbe::undo_depth(window)
+                << ", was " << bold_depth << "\n";
+    return same && is_dirty(window, false, what);
+  };
+  MainWindowProbe::caret(window, 0);
+  press(window, GDK_KEY_BackSpace);
+  CHECK(unchanged("Backspace at the start"));
+  MainWindowProbe::caret(window, 3);
+  press(window, GDK_KEY_Delete);
+  CHECK(unchanged("Delete at the end"));
+  MainWindowProbe::select(window, 0, 3);
+  MainWindowProbe::set_bold(window);
+  CHECK(unchanged("Bold on bold text"));
+  MainWindowProbe::style(window, "Normal");
+  CHECK(unchanged("Normal on Normal"));
+
   // Open: clean, though its list passes tag the text on screen once it is
   // in; an edit and its undo as above.
   Glib::file_set_contents(lists, writeit::rtf_export(centred_list()));
@@ -304,6 +394,7 @@ int run(writeit::MainWindow& window, const std::string& home)
 
   g_remove(first.c_str());
   g_remove(second.c_str());
+  g_remove(third.c_str());
   g_remove(lists.c_str());
   return suite_test::done("dirty-state", kChecks);
 }
