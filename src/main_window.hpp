@@ -168,6 +168,15 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Notes a change to the buffer for undo_state_ (the stub; see
   // undo_state.hpp). Screen-only list tags and buffer loads are not changes.
   void note_change(const Glib::RefPtr<Gtk::TextTag>& tag);
+  // Before a tag is applied to or removed from [start, end) in a user
+  // action: what each character not yet noted had of it, for edited().
+  void note_tag_before(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                       const Gtk::TextIter& end);
+  // Whether the user action now ending edited the buffer: inserted or
+  // deleted text, or left some character's tags other than they were. The
+  // editor strips and re-applies tags as it goes (Bold on bold text, the
+  // newline formats), so a tag signal alone is not an edit.
+  bool edited() const;
   void update_title();
   void update_actions();
   // Asks the clipboard, without waiting, whether it holds text; the answer
@@ -472,6 +481,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   Undo undo_state_;
   // undo_state_'s id when the current user action began.
   std::uint64_t begin_id_ = 0;
+  // The current user action inserted or deleted text.
+  bool text_touched_ = false;
+  // The tags it applied or removed, each with what the characters it
+  // touched had of it before: offset to "had it". Offsets hold while no text
+  // is inserted or deleted, which is when edited() reads them.
+  std::map<Glib::RefPtr<Gtk::TextTag>, std::map<int, bool>> tags_before_;
   bool save_point_ = true;
   // Where an imported document came from; cleared when it becomes anything
   // else (New, Close, Save As). Lets a second request for it find this

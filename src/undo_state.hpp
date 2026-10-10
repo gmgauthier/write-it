@@ -26,6 +26,12 @@ namespace writeit {
 // a save gives a new id, a joined keystroke included. Undo and redo put back
 // the id their snapshot was taken at (restore()), so undoing to the saved
 // state gives the saved id again.
+//
+// A user action that inserted, deleted or re-tagged something is a step
+// with a fresh id even if the text comes out the same (typing "c" over a
+// selected "c"). One that did none of these (Backspace at the very start,
+// Bold on bold text, whose tags the editor strips and puts back) adds no
+// step and keeps the id it began with.
 class Undo {
  public:
   std::uint64_t state_id() const
