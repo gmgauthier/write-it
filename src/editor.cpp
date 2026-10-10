@@ -86,9 +86,9 @@ std::optional<std::string> run_save_chooser(Gtk::FileChooserDialog& dialog, cons
   return std::nullopt;
 }
 
-bool known_size(int size)
+bool known_size(double size)
 {
-  return preset_size(size);
+  return valid_size(size);
 }
 
 // The screen-only tags that move a centred list item's text past a wide
@@ -117,9 +117,11 @@ std::string tag_name(const Glib::RefPtr<Tag>& tag)
 
 std::string fmt_name(const Run& run)
 {
-  return std::string("fmt") + '\x1f' + run.font + '\x1f' + std::to_string(run.size) + '\x1f' +
-         (run.bold ? "1" : "0") + '\x1f' + (run.italic ? "1" : "0") + '\x1f' +
-         (run.underline ? "1" : "0") + '\x1f' + std::to_string(run.direct);
+  // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag.
+  return std::string("fmt") + '\x1f' + run.font + '\x1f' +
+         std::to_string(half_points_of(run.size)) + '\x1f' + (run.bold ? "1" : "0") + '\x1f' +
+         (run.italic ? "1" : "0") + '\x1f' + (run.underline ? "1" : "0") + '\x1f' +
+         std::to_string(run.direct);
 }
 
 bool parse_fmt(const std::string& name, Run& run)
@@ -139,7 +141,7 @@ bool parse_fmt(const std::string& name, Run& run)
     return false;
   try {
     run.font = parts[1];
-    run.size = std::stoi(parts[2]);
+    run.size = size_from_half_points(std::stoi(parts[2]));
     run.direct = static_cast<unsigned>(std::stoul(parts[6]));
   } catch (const std::exception&) {
     return false;
@@ -318,6 +320,108 @@ void MainWindow::tell(const std::string& sentence)
   dialog.run();
 }
 
+namespace {
+
+// A key that edits text or the selection: Delete, Backspace, Home, End,
+// and Ctrl with A, C, X, V, Z or Y. The window has accelerators for some
+// of them, which act on the document.
+bool editing_key(const GdkEventKey* event)
+{
+  const guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+  const guint shift_ctrl = GDK_SHIFT_MASK | GDK_CONTROL_MASK;
+  if ((mods & ~shift_ctrl) != 0)
+    return false;
+  switch (event->keyval) {
+    case GDK_KEY_Delete:
+    case GDK_KEY_KP_Delete:
+    case GDK_KEY_BackSpace:
+    case GDK_KEY_Home:
+    case GDK_KEY_KP_Home:
+    case GDK_KEY_End:
+    case GDK_KEY_KP_End:
+      return true;
+    default:
+      break;
+  }
+  if ((mods & GDK_CONTROL_MASK) == 0)
+    return false;
+  switch (gdk_keyval_to_lower(event->keyval)) {
+    case GDK_KEY_a:
+    case GDK_KEY_c:
+    case GDK_KEY_x:
+    case GDK_KEY_v:
+    case GDK_KEY_z:
+    case GDK_KEY_y:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// An entry, or a combo box or a part of one, such as the size box.
+bool field(Gtk::Widget* widget)
+{
+  for (GtkWidget* w = widget ? widget->gobj() : nullptr; w; w = gtk_widget_get_parent(w)) {
+    if (GTK_IS_EDITABLE(w) || GTK_IS_COMBO_BOX(w))
+      return true;
+    if (GTK_IS_TOOLBAR(w))
+      break;
+  }
+  return false;
+}
+
+}  // namespace
+
+bool MainWindow::on_key_press_event(GdkEventKey* event)
+{
+  // GTK's window tries its accelerators before the focused widget, so the
+  // Edit menu's Delete, Select All and Undo took these keys from the size
+  // box and acted on the document. A field gets them first here, as Word's
+  // boxes do. One it does not use (an entry has no Ctrl+Z) does nothing,
+  // and never reaches the document. Other keys, Ctrl+S or Alt+F, still go
+  // to the window when the field leaves them.
+  Gtk::Widget* focus = get_focus();
+  if (focus && focus != &text_ && field(focus)) {
+    if (gtk_window_propagate_key_event(GTK_WINDOW(gobj()), event))
+      return true;
+    if (editing_key(event))
+      return true;
+  }
+  return Gtk::ApplicationWindow::on_key_press_event(event);
+}
+
+void MainWindow::on_focus_moved()
+{
+  Gtk::Widget* focus = get_focus();
+  lend_primary(focus != nullptr && focus == size_combo_.get_entry());
+}
+
+void MainWindow::lend_primary(bool lend)
+{
+  if (lend == primary_lent_ || !buffer_)
+    return;
+  // The text view adds PRIMARY to the buffer when it realizes.
+  if (lend && !text_.get_realized())
+    return;
+  auto primary = text_.get_clipboard("PRIMARY");
+  const int insert = buffer_->get_insert()->get_iter().get_offset();
+  const int bound = buffer_->get_selection_bound()->get_iter().get_offset();
+  const bool guard = restoring_;
+  restoring_ = true;
+  if (lend) {
+    // Letting go of PRIMARY collapses the selection; put it back.
+    buffer_->remove_selection_clipboard(primary);
+    primary_lent_ = true;
+  } else {
+    buffer_->add_selection_clipboard(primary);
+    primary_lent_ = false;
+  }
+  // Selecting again makes the buffer take PRIMARY back when it has it.
+  if (insert != bound)
+    buffer_->select_range(buffer_->get_iter_at_offset(insert), buffer_->get_iter_at_offset(bound));
+  restoring_ = guard;
+}
+
 void MainWindow::build_editor()
 {
   for (int level = 1; level <= 6; ++level)
@@ -328,7 +432,7 @@ void MainWindow::build_editor()
   buffer_->signal_end_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_end));
   buffer_->signal_insert().connect(sigc::mem_fun(*this, &MainWindow::on_inserted));
   buffer_->signal_erase().connect(sigc::mem_fun(*this, &MainWindow::on_erase), false);
-  buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
+  mark_set_ = buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
   text_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_text_key), false);
   text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
   // The status bar's page cell follows the text and the caret.
@@ -440,6 +544,9 @@ void MainWindow::connect_format()
 {
   font_combo_.signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_font_changed));
   size_combo_.signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_size_changed));
+  if (Gtk::Entry* entry = size_combo_.get_entry())
+    entry->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_size_entered));
+  set_focus_ = signal_set_focus().connect([this](Gtk::Widget*) { on_focus_moved(); });
   style_combo_.signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_style_chosen));
   style_combo_.property_popup_shown().signal_changed().connect([this] {
     if (!style_combo_.property_popup_shown().get_value())
@@ -452,8 +559,23 @@ void MainWindow::connect_format()
       text_.grab_focus();
   });
   size_combo_.property_popup_shown().signal_changed().connect([this] {
-    if (!size_combo_.property_popup_shown().get_value())
+    if (!size_combo_.property_popup_shown().get_value()) {
       text_.grab_focus();
+      return;
+    }
+    // Text in the box that the list does not hold (a size being typed)
+    // highlights no item. GTK would highlight the first, 8.
+    // It does so after the list is shown, so this waits for that.
+    if (size_combo_.get_active_row_number() < 0) {
+      size_popup_idle_.disconnect();
+      size_popup_idle_ = Glib::signal_idle().connect([this] {
+        AtkObject* popup = gtk_combo_box_get_popup_accessible(GTK_COMBO_BOX(size_combo_.gobj()));
+        GtkWidget* menu = popup ? gtk_accessible_get_widget(GTK_ACCESSIBLE(popup)) : nullptr;
+        if (menu && GTK_IS_MENU_SHELL(menu) && size_combo_.get_active_row_number() < 0)
+          gtk_menu_shell_deselect(GTK_MENU_SHELL(menu));
+        return false;
+      });
+    }
   });
   if (bold_toggle_)
     bold_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Bold); });
@@ -849,6 +971,9 @@ Document MainWindow::capture() const
       }
     }
     if (ch == '\n') {
+      // An empty paragraph's own format rides on its newline.
+      if (!in_run && paragraph.runs.empty() && has_fmt(iter))
+        paragraph.mark = format_of(iter);
       flush_paragraph();
       continue;
     }
@@ -862,6 +987,9 @@ Document MainWindow::capture() const
     }
     run.text += Glib::ustring(1, ch).raw();
   }
+  // An empty last paragraph has no newline to hold its format.
+  if (!in_run && paragraph.runs.empty() && pending_mark_set_)
+    paragraph.mark = pending_mark_;
   flush_paragraph();
   if (doc.paragraphs.empty())
     doc.paragraphs.push_back(Paragraph{});
@@ -876,6 +1004,8 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   buffer_->set_text("");
   pending_para_set_ = false;
   pending_para_ = ParaFormat{};
+  pending_mark_set_ = false;
+  pending_mark_ = Run{};
   for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
     const Paragraph& paragraph = doc.paragraphs[i];
     const auto para = para_tag(para_format(paragraph));
@@ -892,11 +1022,21 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       any = true;
     }
     if (i + 1 < doc.paragraphs.size()) {
-      buffer_->insert_with_tag(buffer_->end(), "\n", para);
+      // An empty paragraph's own format goes on its newline, which draws the
+      // line at that size and gives it to typing there.
+      if (!any && paragraph.mark)
+        buffer_->insert_with_tags(buffer_->end(), "\n", {para, format_tag(*paragraph.mark)});
+      else
+        buffer_->insert_with_tag(buffer_->end(), "\n", para);
     } else if (!any) {
       pending_para_ = ParaFormat{clamp_indents(paragraph.indents), paragraph.align,
                                  clamp_list(paragraph.list), paragraph.style, paragraph.direct};
       pending_para_set_ = true;
+      if (paragraph.mark) {
+        pending_mark_ = *paragraph.mark;
+        pending_mark_.text.clear();
+        pending_mark_set_ = true;
+      }
     }
   }
   // Newlines carry the line height. Tag them from the paragraph they end,
@@ -1024,6 +1164,8 @@ void MainWindow::on_user_end()
   normalise_paragraphs();
   if (pending_para_set_ && !final_paragraph_empty())
     pending_para_set_ = false;
+  if (pending_mark_set_ && !final_paragraph_empty())
+    pending_mark_set_ = false;
   apply_next_style();
   const Document current = capture();
   if (!undo_.empty() && undo_.back().doc == current) {
@@ -1200,6 +1342,17 @@ void MainWindow::finish_pending()
     }
     i = j;
   }
+  // A new empty line (Enter on an empty line or at the start of one) takes
+  // the format being typed, as Word's new paragraph mark does. A newline
+  // pasted with a format of its own keeps it.
+  for (int n = start; n < end; ++n) {
+    auto iter = buffer_->get_iter_at_offset(n);
+    if (iter.get_char() != '\n' || has_fmt(iter))
+      continue;
+    if (n > 0 && buffer_->get_iter_at_offset(n - 1).get_char() != '\n')
+      continue;
+    buffer_->apply_tag(format_tag(typing_), iter, buffer_->get_iter_at_offset(n + 1));
+  }
   tag_line_breaks(start, end);
 }
 
@@ -1208,7 +1361,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag(const Run& run)
   Run key = run;
   if (key.font.empty())
     key.font = "Sans";
-  if (key.size <= 0)
+  if (!known_size(key.size))
     key.size = 11;
   const Glib::ustring name = fmt_name(key);
   auto table = buffer_->get_tag_table();
@@ -1497,13 +1650,14 @@ void MainWindow::tag_line_breaks(int start, int end)
     int begin = n;
     while (begin > 0 && buffer_->get_iter_at_offset(begin - 1).get_char() != '\n')
       --begin;
+    // An empty line keeps the format its newline has: its own, from the
+    // file, from the line it was split from, or from typing (finish_pending).
+    // An untagged one stays at the document default.
+    if (begin == n)
+      continue;
     auto from_it = buffer_->get_iter_at_offset(n);
     auto to_it = buffer_->get_iter_at_offset(n + 1);
     strip_fmt(from_it, to_it);
-    // An empty line has no size in the file. Leave the newline untagged so
-    // the gap stays at the document default and the caret keeps its font.
-    if (begin == n)
-      continue;
     const Run mark = line_break_mark(n);
     from_it = buffer_->get_iter_at_offset(n);
     to_it = buffer_->get_iter_at_offset(n + 1);
@@ -1527,6 +1681,15 @@ void MainWindow::apply_run_edit(const std::function<void(Run&)>& edit)
   for (int i = start; i < end;) {
     auto iter = buffer_->get_iter_at_offset(i);
     if (iter.get_char() == '\n') {
+      // A selected empty line takes the change on its newline, which holds
+      // its format (Paragraph::mark), as Word's paragraph mark does.
+      if (i == 0 || buffer_->get_iter_at_offset(i - 1).get_char() == '\n') {
+        Run mark = format_of(iter);
+        edit(mark);
+        strip_fmt(iter, buffer_->get_iter_at_offset(i + 1));
+        buffer_->apply_tag(format_tag(mark), buffer_->get_iter_at_offset(i),
+                           buffer_->get_iter_at_offset(i + 1));
+      }
       ++i;
       continue;
     }
@@ -1598,7 +1761,9 @@ void MainWindow::toggle_flag(TextFlag flag)
   bool all = true;
   bool any = false;
   for (auto iter = start_iter; iter != end_iter; ++iter) {
-    if (iter.get_char() == '\n')
+    // A newline counts only for an empty line, whose format it holds
+    // (Paragraph::mark): in Word, the paragraph mark is bolded too.
+    if (iter.get_char() == '\n' && !iter.starts_line())
       continue;
     any = true;
     if (!text_flag(format_of(iter), flag)) {
@@ -1626,16 +1791,14 @@ void MainWindow::show_format(const Run& run)
     }
   }
   // The caret's own size, listed among the presets when it is not one.
-  const std::vector<int> choices = size_choices(run.size);
+  const std::vector<double> choices = size_choices(run.size);
   if (choices != size_choices_shown_) {
     size_combo_.remove_all();
-    for (int choice : choices)
-      size_combo_.append(std::to_string(choice));
+    for (double choice : choices)
+      size_combo_.append(size_text(choice));
     size_choices_shown_ = choices;
   }
-  const Glib::ustring size = std::to_string(run.size);
-  if (size_combo_.get_active_text() != size)
-    size_combo_.set_active_text(size);
+  show_size(run.size);
   if (bold_toggle_ && bold_toggle_->get_active() != run.bold)
     bold_toggle_->set_active(run.bold);
   if (italic_toggle_ && italic_toggle_->get_active() != run.italic)
@@ -1644,6 +1807,29 @@ void MainWindow::show_format(const Run& run)
     underline_toggle_->set_active(run.underline);
   suppress_format_ = false;
   update_caret_font();
+}
+
+void MainWindow::show_size(double run_size)
+{
+  // Half points as Word 97 shows them: 10.5. The entry's own text is not
+  // enough: a size typed and applied leaves no list item active, and the
+  // list then highlighted its first, 8. The item for the size is made
+  // active, so the list highlights it.
+  const Glib::ustring size = size_text(run_size);
+  Glib::ustring active;
+  if (auto row = size_combo_.get_active())
+    row->get_value(0, active);
+  if (active == size && size_combo_.get_active_text() == size)
+    return;
+  const bool guard = suppress_format_;
+  suppress_format_ = true;
+  size_combo_.set_active_text(size);
+  // A size the list lacks highlights nothing, and the box still says it.
+  if (size_combo_.get_active_row_number() < 0) {
+    if (Gtk::Entry* entry = size_combo_.get_entry())
+      entry->set_text(size);
+  }
+  suppress_format_ = guard;
 }
 
 void MainWindow::sync_format_controls()
@@ -1668,6 +1854,12 @@ void MainWindow::sync_format_controls()
     show_format(typing_);
     return;
   }
+  // An empty last paragraph's own format, from the file.
+  if (iter.is_end() && pending_mark_set_ && final_paragraph_empty()) {
+    typing_ = pending_mark_;
+    show_format(typing_);
+    return;
+  }
   // An empty paragraph in a style other than Normal types in that style, as
   // in Word; in Normal, what was last typed carries on, as before styles.
   const std::vector<Style> styles = sheet();
@@ -1681,8 +1873,8 @@ void MainWindow::sync_format_controls()
 
 void MainWindow::update_caret_font()
 {
-  // Blank lines carry no character of their own, so they render in the widget
-  // font. Keep that font on the document default. Following the caret resized
+  // A blank line with no format of its own (an untagged newline) renders in
+  // the widget font. Keep that font on the document default. Following the caret resized
   // every blank line whenever the selection moved.
   const std::string font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
   const int size = known_size(settings_.default_size) ? settings_.default_size : 11;
@@ -1714,13 +1906,50 @@ void MainWindow::on_size_changed()
 {
   if (suppress_format_)
     return;
-  const int size = parse_size(size_combo_.get_active_text().raw());
+  // A size being typed takes effect on Enter (on_size_entered()), not at
+  // each keystroke: "10.5" is not 1 pt, then 10 pt, then 10.5.
+  if (size_combo_.get_has_entry() && size_combo_.get_active_row_number() < 0)
+    return;
+  const double size = parse_size(size_combo_.get_active_text().raw());
   if (size == 0)
     return;
   apply_run_edit([size](Run& run) {
     run.size = size;
     run.direct |= kDirectSize;
   });
+}
+
+void MainWindow::on_size_entered()
+{
+  if (suppress_format_)
+    return;
+  const std::string typed = size_combo_.get_active_text().raw();
+  const std::string refusal = size_refusal(typed);
+  if (refusal.empty()) {
+    const double size = parse_size(typed);
+    apply_run_edit([size](Run& run) {
+      run.size = size;
+      run.direct |= kDirectSize;
+    });
+    return;
+  }
+  // Not a size Word takes (10.3, 2000, "big"). As Word 97 does, say why,
+  // then show the size of the text, which keeps it, selected in the box to
+  // type over.
+  Gtk::MessageDialog dialog(*this, refusal, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
+  dialog.set_title("Write-It");
+  dialog.run();
+  dialog.hide();
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  if (buffer_->get_selection_bounds(start_iter, end_iter) && start_iter != end_iter)
+    show_format(format_of(start_iter));
+  else
+    show_format(typing_);
+  if (Gtk::Entry* entry = size_combo_.get_entry()) {
+    entry->grab_focus();
+    entry->select_region(0, -1);
+  }
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
@@ -2229,11 +2458,13 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
 {
   const ListFormat list = clamp_list(paragraph.list);
   const auto iter = buffer_->get_iter_at_offset(offset);
-  const Run format = paragraph.runs.empty() ? format_of(iter) : paragraph.runs.front();
+  const Run format = !paragraph.runs.empty() ? paragraph.runs.front()
+                     : paragraph.mark        ? *paragraph.mark
+                                             : format_of(iter);
   auto layout = text_.create_pango_layout(list_label(list, number));
   Pango::FontDescription desc;
   desc.set_family(format.font.empty() ? "Sans" : format.font);
-  desc.set_size(static_cast<int>(std::max(1, format.size) * zoom_factor() * PANGO_SCALE));
+  desc.set_size(static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE));
   // Bold and italic too, as Word 97 formats a label from the paragraph mark.
   desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
   desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
@@ -2591,7 +2822,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
     // all four, and the label's text.
     const Run format = format_of(buffer_->get_iter_at_offset(start));
     const std::string key = (format.font.empty() ? "Sans" : format.font) + '\x1f' +
-                            std::to_string(std::max(1, format.size)) + '\x1f' +
+                            std::to_string(half_points_of(format.size)) + '\x1f' +
                             (format.bold ? 'b' : '-') + (format.italic ? 'i' : '-') + '\x1f' +
                             list_label(list, line.number);
     auto known = tab_widths_.find(key);

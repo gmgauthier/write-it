@@ -3,6 +3,7 @@
 // Named styles in the editor: the toolbar's style box, Enter's next style,
 // and Format > Style....
 
+#include "font_sizes.hpp"
 #include "main_window.hpp"
 
 #include "units.hpp"
@@ -346,8 +347,14 @@ void MainWindow::on_style_dialog()
   }
   auto* font = Gtk::manage(new Gtk::ComboBoxText());
   fill_font_combo(*font, work[current].format.font);
-  auto* size =
-      Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(11, 1, kMaxStyleSize, 1, 2), 1, 0));
+  // Half points, as the size box and RTF's \fsN: 10.5 stays 10.5. Shown as
+  // the size box shows a size, "11" and "10.5".
+  auto* size = Gtk::manage(
+      new Gtk::SpinButton(Gtk::Adjustment::create(11, 1, kMaxStyleSize, 0.5, 2), 0.5, 1));
+  size->signal_output().connect([size] {
+    size->set_text(size_text(size->get_value()));
+    return true;
+  });
   size->set_activates_default(true);
   auto* bold = Gtk::manage(new Gtk::CheckButton("_Bold", true));
   auto* italic = Gtk::manage(new Gtk::CheckButton("_Italic", true));
@@ -469,7 +476,8 @@ void MainWindow::on_style_dialog()
     style.next = next_name.raw() == style.name ? "" : next_name.raw();
     if (!font->get_active_text().empty())
       style.format.font = font->get_active_text().raw();
-    style.format.size = std::max(1, std::min(kMaxStyleSize, size->get_value_as_int()));
+    style.format.size =
+        size_from_half_points(std::min(2 * kMaxStyleSize, half_points_of(size->get_value())));
     style.format.bold = bold->get_active();
     style.format.italic = italic->get_active();
     style.format.underline = underline->get_active();
