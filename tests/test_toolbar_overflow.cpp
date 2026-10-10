@@ -607,9 +607,9 @@ int main(int argc, char* argv[])
     choose(window, "Redo");
     CHECK(text(window) == "Hello world");
 
-    // Print waits for M4, as its button does.
+    // Print opens the system dialog. The button and its overflow item do too.
     Gtk::MenuItem* print = proxy_of(window, "Print");
-    CHECK(print && !print->get_sensitive() && label_of(print) == "Print…");
+    CHECK(print && print->get_sensitive() && label_of(print) == "Print…");
 
     // Save on an untitled document asks where, as the button does.
     {

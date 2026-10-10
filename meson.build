@@ -412,6 +412,15 @@ write_it_toolbar_overflow_tests = executable(
 )
 test('toolbar-overflow', write_it_toolbar_overflow_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: Print writes the page view at the
+# document's paper size. Draft is put back afterwards.
+write_it_print_tests = executable(
+  'write-it-print-tests',
+  'tests/test_print.cpp',
+  dependencies: [writeit_dep, dependency('zlib')],
+)
+test('print', write_it_print_tests, timeout: 120, is_parallel: false)
+
 # The real window under a display: a file with half-point sizes and an empty
 # 20 pt line, opened, shown in the size box, typed in and saved back.
 write_it_font_size_ui_tests = executable(

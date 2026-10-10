@@ -287,7 +287,7 @@ void MainWindow::build_menus()
   save_item_ = add_item(*file, "_Save", true, GDK_KEY_s, Gdk::CONTROL_MASK);
   save_as_item_ = add_item(*file, "Save _As…", true);
   export_item_ = add_item(*file, "_Export…", true);
-  add_item(*file, "_Print…", false, GDK_KEY_p, Gdk::CONTROL_MASK);
+  print_item_ = add_item(*file, "_Print…", true, GDK_KEY_p, Gdk::CONTROL_MASK);
   page_setup_item_ = add_item(*file, "Page Set_up…", true);
   page_setup_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_page_setup));
   file->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
@@ -504,7 +504,7 @@ void MainWindow::build_toolbars()
   open_tool_ = add_tool(standard_bar_, "document-open", "Open", true);
   save_tool_ = add_tool(standard_bar_, "document-save", "Save", true);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
-  auto* print_tool = add_tool(standard_bar_, "document-print", "Print", false);
+  print_tool_ = add_tool(standard_bar_, "document-print", "Print", true);
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   cut_tool_ = add_tool(standard_bar_, "edit-cut", "Cut", false);
   copy_tool_ = add_tool(standard_bar_, "edit-copy", "Copy", false);
@@ -566,7 +566,7 @@ void MainWindow::build_toolbars()
   proxy_button(*new_tool_, "_New");
   proxy_button(*open_tool_, "_Open…");
   proxy_button(*save_tool_, "_Save");
-  proxy_button(*print_tool, "_Print…");
+  proxy_button(*print_tool_, "_Print…");
   proxy_button(*cut_tool_, "Cu_t");
   proxy_button(*copy_tool_, "_Copy");
   proxy_button(*paste_tool_, "_Paste");
@@ -1118,6 +1118,103 @@ bool MainWindow::on_context(GdkEventButton* event)
   sync_context_numbering();
   context_.popup_at_pointer(reinterpret_cast<GdkEvent*>(event));
   return true;
+}
+
+int MainWindow::print_page_count() const
+{
+  // One sheet of the page view. A taller page is more than one sheet.
+  const int sheet =
+      std::max(1, view_geometry(ViewMode::Page, zoom_factor(), page_setup_).page_height);
+  const int height = std::max(sheet, page_height());
+  return std::max(1, (height + sheet - 1) / sheet);
+}
+
+void MainWindow::draw_print_page(const Glib::RefPtr<Gtk::PrintContext>& context, int page_nr)
+{
+  const ViewGeometry sheet = view_geometry(ViewMode::Page, zoom_factor(), page_setup_);
+  const int band = std::max(1, sheet.page_height);
+  const int src_w =
+      page_.get_allocated_width() > 1 ? page_.get_allocated_width() : std::max(1, sheet.page_width);
+  const Cairo::RefPtr<Cairo::Context> cr = context->get_cairo_context();
+  const double scale = context->get_width() / static_cast<double>(std::max(1, src_w));
+  cr->save();
+  cr->set_source_rgb(1, 1, 1);
+  cr->paint();
+  cr->rectangle(0, 0, context->get_width(), context->get_height());
+  cr->clip();
+  cr->scale(scale, scale);
+  cr->translate(0, -static_cast<double>(page_nr) * band);
+  gtk_widget_draw(static_cast<Gtk::Widget&>(page_).gobj(), cr->cobj());
+  cr->restore();
+}
+
+bool MainWindow::export_page(const std::string& path)
+{
+  std::string error;
+  return run_print(Gtk::PRINT_OPERATION_ACTION_EXPORT, path, error);
+}
+
+void MainWindow::on_print()
+{
+  std::string error;
+  if (!run_print(Gtk::PRINT_OPERATION_ACTION_PRINT_DIALOG, "", error) && !error.empty())
+    tell(error);
+}
+
+bool MainWindow::run_print(Gtk::PrintOperationAction action, const std::string& path,
+                           std::string& error)
+{
+  error.clear();
+  if (!buffer_) {
+    error = "Could not print this document.";
+    return false;
+  }
+  // Draft keeps the line breaks and moves the text. The sheet that prints is
+  // the page view, put back when this returns.
+  const ViewMode saved = view_;
+  struct Restore {
+    MainWindow& window;
+    ViewMode mode;
+    ~Restore()
+    {
+      if (window.view_ != mode)
+        window.set_view(mode);
+    }
+  } restore{*this, saved};
+  if (view_ != ViewMode::Page)
+    set_view(ViewMode::Page);
+
+  auto operation = Gtk::PrintOperation::create();
+  // The file already stores the edges as they print. A landscape flag must
+  // not rotate them a second time.
+  const double width_pt = static_cast<double>(page_setup_.paper_width) / 20.0;
+  const double height_pt = static_cast<double>(page_setup_.paper_height) / 20.0;
+  Gtk::PaperSize paper("write-it", "Write-It", width_pt, height_pt, Gtk::UNIT_POINTS);
+  auto setup = Gtk::PageSetup::create();
+  setup->set_paper_size(paper);
+  setup->set_orientation(Gtk::PAGE_ORIENTATION_PORTRAIT);
+  operation->set_default_page_setup(setup);
+  operation->set_use_full_page(true);
+  operation->set_unit(Gtk::UNIT_POINTS);
+  operation->set_job_name(save_path_.empty() ? "Write-It" : Glib::path_get_basename(save_path_));
+  if (action == Gtk::PRINT_OPERATION_ACTION_EXPORT)
+    operation->set_export_filename(path);
+
+  Gtk::PrintOperation* op = operation.get();
+  op->signal_begin_print().connect(
+      [this, op](const Glib::RefPtr<Gtk::PrintContext>&) { op->set_n_pages(print_page_count()); });
+  op->signal_draw_page().connect([this](const Glib::RefPtr<Gtk::PrintContext>& context,
+                                        int page_nr) { draw_print_page(context, page_nr); });
+
+  try {
+    const Gtk::PrintOperationResult result = operation->run(action, *this);
+    return result == Gtk::PRINT_OPERATION_RESULT_APPLY ||
+           result == Gtk::PRINT_OPERATION_RESULT_CANCEL ||
+           result == Gtk::PRINT_OPERATION_RESULT_IN_PROGRESS;
+  } catch (const Glib::Error& failure) {
+    error = failure.what();
+    return false;
+  }
 }
 
 }  // namespace writeit

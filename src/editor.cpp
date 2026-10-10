@@ -619,6 +619,8 @@ void MainWindow::build_editor()
   clicked(save_tool_, [this] { save_document(); });
   activate(save_as_item_, [this] { save_document_as(); });
   activate(export_item_, [this] { export_markdown(); });
+  activate(print_item_, [this] { on_print(); });
+  clicked(print_tool_, [this] { on_print(); });
   activate(close_item_, [this] { close_document(); });
   activate(undo_item_, [this] { undo(); });
   clicked(undo_tool_, [this] { undo(); });
