@@ -243,74 +243,6 @@ void add_run(Paragraph& paragraph, Run run)
     paragraph.runs.push_back(std::move(run));
 }
 
-struct Atom {
-  gunichar ch = 0;
-  Run format;
-  int heading = 0;
-  ParaFormat para;
-};
-
-bool operator==(const Atom& a, const Atom& b)
-{
-  return a.ch == b.ch && a.heading == b.heading && a.para == b.para &&
-         same_format(a.format, b.format);
-}
-
-// One code point per buffer offset, with a newline between paragraphs.
-std::vector<Atom> atoms_of(const Document& doc)
-{
-  std::vector<Atom> atoms;
-  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
-    if (i > 0) {
-      Atom newline;
-      newline.ch = '\n';
-      atoms.push_back(newline);
-    }
-    const Paragraph& paragraph = doc.paragraphs[i];
-    for (const Run& run : paragraph.runs) {
-      const Glib::ustring text(run.text);
-      for (auto it = text.begin(); it != text.end(); ++it) {
-        Atom atom;
-        atom.ch = *it;
-        atom.format = run;
-        atom.format.text.clear();
-        atom.heading = paragraph.heading;
-        atom.para.indents = paragraph.indents;
-        atom.para.align = paragraph.align;
-        atom.para.list = paragraph.list;
-        atoms.push_back(atom);
-      }
-    }
-  }
-  return atoms;
-}
-
-struct Insertion {
-  int at = 0;
-  int len = 0;
-};
-
-// True when `after` is `before` plus one contiguous insertion.
-bool one_insertion(const Document& before, const Document& after, Insertion& out)
-{
-  const std::vector<Atom> old_atoms = atoms_of(before);
-  const std::vector<Atom> new_atoms = atoms_of(after);
-  if (new_atoms.size() <= old_atoms.size())
-    return false;
-  size_t prefix = 0;
-  while (prefix < old_atoms.size() && old_atoms[prefix] == new_atoms[prefix])
-    ++prefix;
-  size_t suffix = 0;
-  while (suffix < old_atoms.size() - prefix &&
-         old_atoms[old_atoms.size() - 1 - suffix] == new_atoms[new_atoms.size() - 1 - suffix])
-    ++suffix;
-  if (prefix + suffix != old_atoms.size())
-    return false;
-  out.at = static_cast<int>(prefix);
-  out.len = static_cast<int>(new_atoms.size() - old_atoms.size());
-  return out.len > 0;
-}
-
 }  // namespace
 
 void MainWindow::tell(const std::string& sentence)
@@ -424,17 +356,72 @@ void MainWindow::lend_primary(bool lend)
 
 void MainWindow::build_editor()
 {
+  // Undo records every buffer change but the screen-only list tags, which
+  // are recomputed after each change and may leave the tag table.
+  undo_.attach(buffer_, [](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    const std::string name = tag_name(tag);
+    return is_list_shift(name) || is_list_tab(name);
+  });
   for (int level = 1; level <= 6; ++level)
     heading_tag(level);
   raise_headings();
 
   buffer_->signal_begin_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_begin));
+  // What normalise_paragraphs() must look at.
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
+        note_touched(end.get_offset() - static_cast<int>(text.length()), end.get_offset());
+      },
+      true);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter&) {
+        note_touched(start.get_offset(), start.get_offset());
+      },
+      true);
+  auto touched_tag = [this](const Glib::RefPtr<Gtk::TextTag>&, const Gtk::TextIter& start,
+                            const Gtk::TextIter& end) {
+    note_touched(start.get_offset(), end.get_offset());
+  };
+  buffer_->signal_apply_tag().connect(touched_tag, true);
+  buffer_->signal_remove_tag().connect(touched_tag, true);
   buffer_->signal_end_user_action().connect(sigc::mem_fun(*this, &MainWindow::on_user_end));
   buffer_->signal_insert().connect(sigc::mem_fun(*this, &MainWindow::on_inserted));
   buffer_->signal_erase().connect(sigc::mem_fun(*this, &MainWindow::on_erase), false);
   mark_set_ = buffer_->signal_mark_set().connect(sigc::mem_fun(*this, &MainWindow::on_mark_set));
   text_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_text_key), false);
   text_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_text_draw), true);
+  // The list labels' line geometry (label_geometry_): an edit forgets the
+  // lines it touches, before the buffer changes, and moves the ones below.
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& at, const Glib::ustring& text, int) {
+        const int line = at.get_line();
+        const int added = static_cast<int>(std::count(text.begin(), text.end(), '\n'));
+        forget_label_geometry(line, line, added);
+      },
+      false);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+        forget_label_geometry(start.get_line(), end.get_line(), start.get_line() - end.get_line());
+      },
+      false);
+  auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>&, const Gtk::TextIter& start,
+                                const Gtk::TextIter& end) {
+    // A range up to the next line's start, as a paragraph's is, leaves that
+    // line's first character, and so its layout, untouched.
+    const int last = end.get_line() - (end.starts_line() && end.compare(start) > 0 ? 1 : 0);
+    forget_label_geometry(start.get_line(), std::max(start.get_line(), last), 0);
+  };
+  buffer_->signal_apply_tag().connect(geometry_on_tag);
+  buffer_->signal_remove_tag().connect(geometry_on_tag);
+  buffer_->get_tag_table()->signal_tag_changed().connect(
+      [this](const Glib::RefPtr<Gtk::TextTag>&, bool) { label_geometry_.clear(); });
+  buffer_->get_tag_table()->signal_tag_removed().connect(
+      [this](const Glib::RefPtr<Gtk::TextTag>&) { label_geometry_.clear(); });
+  // A new theme or font setting shapes text afresh.
+  text_.signal_style_updated().connect([this] {
+    label_geometry_.clear();
+    label_layout_cache_.clear();
+  });
   // The status bar's page cell follows the text and the caret.
   buffer_->signal_changed().connect([this] { queue_page_status(); });
   // Centred list items follow their label's width (update_list_shifts()), and
@@ -461,6 +448,7 @@ void MainWindow::build_editor()
     queue_list_tabs();
   };
   buffer_->signal_apply_tag().connect(lists_on_tag);
+  buffer_->signal_apply_tag().connect(sigc::mem_fun(*this, &MainWindow::on_tag_applied));
   buffer_->signal_remove_tag().connect(lists_on_tag);
   // Text edits mark their range too; a new or removed paragraph renumbers.
   buffer_->signal_insert().connect(
@@ -486,6 +474,30 @@ void MainWindow::build_editor()
         if (mark == buffer_->get_insert())
           queue_page_status();
       });
+  // list_lines() is built again when a line comes or goes or a paragraph format changes: an edit
+  // within one GTK line moves no paragraph to another line.
+  buffer_->signal_insert().connect(
+      [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
+        auto start = end;
+        start.backward_chars(static_cast<int>(text.length()));
+        if (start.get_line() != end.get_line())
+          list_lines_valid_ = false;
+      },
+      true);
+  buffer_->signal_erase().connect(
+      [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+        if (start.get_line() != end.get_line())
+          list_lines_valid_ = false;
+      },
+      false);
+  auto changes_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
+                               const Gtk::TextIter&) {
+    ParaFormat ignored;
+    if (parse_para(tag_name(tag), ignored))
+      list_lines_valid_ = false;
+  };
+  buffer_->signal_apply_tag().connect(changes_on_tag);
+  buffer_->signal_remove_tag().connect(changes_on_tag);
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
   // The clipboard outlives the window: ~MainWindow disconnects this. It is
   // asked again on every change, and when the window comes back to the
@@ -647,7 +659,6 @@ bool MainWindow::new_document(bool prompt)
   if (prompt && !confirm_discard_or_save())
     return false;
   undo_.clear();
-  redo_.clear();
   save_path_.clear();
   source_path_.clear();
   title_name_ = "Untitled";
@@ -656,7 +667,7 @@ bool MainWindow::new_document(bool prompt)
   typing_.size = known_size(settings_.default_size) ? settings_.default_size : 11;
   save_point_ = true;
   replace_buffer(blank_document(typing_.font, typing_.size), 0);
-  saved_ = capture();
+  saved_state_ = undo_.state_id();
   message_.set_text("");
   update_title();
   update_actions();
@@ -770,7 +781,6 @@ void MainWindow::refuse_not_local(const std::string& uri)
 void MainWindow::install_loaded(const Document& doc, const std::string& path, bool keep_path)
 {
   undo_.clear();
-  redo_.clear();
   replace_buffer(doc, 0);
   title_name_ = Glib::path_get_basename(path);
   // An opened file is unmodified until it is edited, as in Word 97, RTF or
@@ -780,7 +790,7 @@ void MainWindow::install_loaded(const Document& doc, const std::string& path, bo
   save_path_ = keep_path ? path : std::string();
   source_path_ = keep_path ? std::string() : path;
   save_point_ = true;
-  saved_ = capture();
+  saved_state_ = undo_.state_id();
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
   message_.set_text(Glib::ustring("Opened ") + title_name_);
@@ -829,8 +839,7 @@ bool MainWindow::write_rtf(const std::string& path)
   save_path_ = path;
   source_path_.clear();
   title_name_ = Glib::path_get_basename(path);
-  saved_ = capture();
-  save_point_ = true;
+  mark_saved();
   settings_.last_dir = Glib::path_get_dirname(path);
   remember_path(path);
   message_.set_text(Glib::ustring("Saved ") + title_name_);
@@ -926,6 +935,7 @@ void MainWindow::rebuild_recent()
 
 Document MainWindow::capture() const
 {
+  ++captures_;
   Document doc;
   Paragraph paragraph;
   Run run;
@@ -986,6 +996,13 @@ Document MainWindow::capture() const
       flush_paragraph();
       continue;
     }
+    // Tags change only where one starts or ends, so between toggles the
+    // format (and the heading) are the previous character's. Reading them at
+    // every character cost most of a keystroke in a long document.
+    if (in_run && !iter.toggles_tag()) {
+      run.text += Glib::ustring(1, ch).raw();
+      continue;
+    }
     if (heading == 0)
       heading = heading_of(iter);
     const Run format = format_of(iter);
@@ -1008,6 +1025,7 @@ Document MainWindow::capture() const
 
 void MainWindow::replace_buffer(const Document& doc, int offset)
 {
+  label_geometry_.clear();
   loading_ = true;
   styles_ = doc.styles;
   buffer_->set_text("");
@@ -1056,16 +1074,29 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   buffer_->place_cursor(buffer_->get_iter_at_offset(place));
   text_.scroll_to(buffer_->get_insert());
   loading_ = false;
+  list_lines_valid_ = false;
   apply_page_size();
   // The sheet may be another one now: a file, a new document, undo.
   fill_style_combo();
+}
+
+void MainWindow::mark_saved()
+{
+  saved_state_ = undo_.state_id();
+  save_point_ = true;
+  // Save ends a run of typing (Greg's decision): what follows is a step of
+  // its own, so one Ctrl+Z comes back to the saved state.
+  last_typed_us_ = 0;
 }
 
 bool MainWindow::dirty() const
 {
   if (!save_point_)
     return true;
-  return !(capture() == saved_);
+  // The history decides, not the text: clean exactly at the undo state the
+  // last save (or open) left, so typing "a" then Backspace is still dirty,
+  // and typing "a" then Undo is clean again.
+  return undo_.state_id() != saved_state_;
 }
 
 void MainWindow::update_title()
@@ -1089,8 +1120,8 @@ void MainWindow::update_actions()
   updating_actions_ = true;
   const bool selection = buffer_ && buffer_->get_has_selection();
   const bool any_text = buffer_ && buffer_->get_char_count() > 0;
-  const bool can_undo = !undo_.empty();
-  const bool can_redo = !redo_.empty();
+  const bool can_undo = undo_.can_undo();
+  const bool can_redo = undo_.can_redo();
   // Never wait_is_text_available(): see clipboard_text_.
   const bool can_paste = clipboard_text_;
   auto sens = [](Gtk::Widget* widget, bool on) {
@@ -1157,38 +1188,105 @@ int MainWindow::cursor_offset() const
 
 void MainWindow::undo()
 {
-  if (undo_.empty())
+  // A step left open (a user action never ended) must not leave Undo dead.
+  if (undo_.is_open())
+    close_step(false);
+  if (!undo_.can_undo())
     return;
-  Snapshot current;
-  current.doc = capture();
-  current.offset = cursor_offset();
-  redo_.push_back(std::move(current));
-  const Snapshot snap = undo_.back();
-  undo_.pop_back();
   restoring_ = true;
-  replace_buffer(snap.doc, snap.offset);
+  const int caret = undo_.undo();
   restoring_ = false;
-  update_title();
-  update_actions();
-  sync_format_controls();
+  after_replay(caret);
 }
 
 void MainWindow::redo()
 {
-  if (redo_.empty())
+  if (undo_.is_open())
+    close_step(false);
+  if (!undo_.can_redo())
     return;
-  Snapshot current;
-  current.doc = capture();
-  current.offset = cursor_offset();
-  undo_.push_back(std::move(current));
-  const Snapshot snap = redo_.back();
-  redo_.pop_back();
   restoring_ = true;
-  replace_buffer(snap.doc, snap.offset);
+  const int caret = undo_.redo();
   restoring_ = false;
+  after_replay(caret);
+}
+
+void MainWindow::after_replay(int caret)
+{
+  // The caret where the step began (undo: the start of a selection it
+  // replaced) or where the action left it (redo), nothing selected, and
+  // scrolled into view.
+  const int count = buffer_->get_char_count();
+  // Typing after Undo or Redo starts a step of its own.
+  last_typed_us_ = 0;
+  restoring_ = true;
+  buffer_->place_cursor(buffer_->get_iter_at_offset(std::max(0, std::min(caret, count))));
+  restoring_ = false;
+  text_.scroll_to(buffer_->get_insert());
+  apply_page_size();
+  // The sheet may be another one now.
+  fill_style_combo();
   update_title();
   update_actions();
   sync_format_controls();
+  // Undoing one item can renumber the list items below it.
+  text_.queue_draw();
+}
+
+MainWindow::SideState MainWindow::side_state() const
+{
+  return SideState{pending_para_, pending_para_set_, pending_mark_, pending_mark_set_};
+}
+
+void MainWindow::set_side_state(const SideState& state)
+{
+  pending_para_ = state.pending_para;
+  pending_para_set_ = state.pending_para_set;
+  pending_mark_ = state.pending_mark;
+  pending_mark_set_ = state.pending_mark_set;
+}
+
+bool MainWindow::pending_same(const SideState& before, const SideState& after) const
+{
+  // The window's own state, not the buffer: different only where the empty
+  // last paragraph's format is (the pending one, else the paragraph above's),
+  // "set directly" bits included, as they are in a paragraph's tag.
+  if (!final_paragraph_empty())
+    return true;
+  const int count = buffer_->get_char_count();
+  // capture() of an empty document: a default paragraph.
+  const ParaFormat above = count > 0 ? para_at(count - 1) : para_format(Paragraph{});
+  const ParaFormat& was = before.pending_para_set ? before.pending_para : above;
+  const ParaFormat& now = after.pending_para_set ? after.pending_para : above;
+  return was == now && before.pending_mark_set == after.pending_mark_set &&
+         (!after.pending_mark_set || same_format(before.pending_mark, after.pending_mark));
+}
+
+void MainWindow::open_step()
+{
+  if (undo_.is_open())
+    return;
+  Gtk::TextBuffer::iterator from;
+  Gtk::TextBuffer::iterator to;
+  const bool selection = buffer_->get_selection_bounds(from, to);
+  // Undo puts the caret back at the start of what the step changes: with a
+  // selection, its start, whichever end the caret is at.
+  undo_.open(selection ? from.get_offset() : cursor_offset(), selection);
+  side_before_ = side_state();
+}
+
+UndoHistory::Closed MainWindow::close_step(bool may_merge)
+{
+  const SideState after = side_state();
+  const SideState& before = side_before_;
+  const bool same = before.pending_para_set == after.pending_para_set &&
+                    before.pending_para == after.pending_para &&
+                    before.pending_mark_set == after.pending_mark_set &&
+                    same_format(before.pending_mark, after.pending_mark);
+  if (!same)
+    undo_.record_custom([this, before] { set_side_state(before); },
+                        [this, after] { set_side_state(after); }, !pending_same(before, after));
+  return undo_.close(cursor_offset(), may_merge);
 }
 
 void MainWindow::on_user_begin()
@@ -1196,13 +1294,8 @@ void MainWindow::on_user_begin()
   if (loading_ || restoring_)
     return;
   in_user_ = true;
-  if (static_cast<int>(undo_.size()) >= kUndoCap)
-    undo_.erase(undo_.begin());
-  Snapshot snap;
-  snap.doc = capture();
-  snap.offset = cursor_offset();
-  undo_.push_back(std::move(snap));
-  redo_.clear();
+  touched_ = false;
+  open_step();
 }
 
 void MainWindow::on_user_end()
@@ -1217,44 +1310,18 @@ void MainWindow::on_user_end()
   if (pending_mark_set_ && !final_paragraph_empty())
     pending_mark_set_ = false;
   apply_next_style();
-  const Document current = capture();
-  if (!undo_.empty() && undo_.back().doc == current) {
-    undo_.pop_back();
-  } else {
-    coalesce_typing(current);
+  // A burst of typing, of Backspace or of Delete is one undo step. A pause,
+  // a format change, or a moved caret starts a new one (UndoHistory::close).
+  const gint64 now = g_get_monotonic_time();
+  const bool may_merge = last_typed_us_ != 0 && now - last_typed_us_ <= 1000000;
+  if (close_step(may_merge) != UndoHistory::Closed::Dropped)
     last_typed_us_ = g_get_monotonic_time();
-  }
   update_title();
   update_actions();
   apply_page_size();
   sync_format_controls();
   // An edit on one line can renumber list items on others.
   text_.queue_draw();
-}
-
-void MainWindow::coalesce_typing(const Document& current)
-{
-  // A burst of typing is one undo step. A pause, a format change, or a moved
-  // caret starts a new one.
-  if (undo_.size() < 2 || !redo_.empty() || last_typed_us_ == 0)
-    return;
-  const gint64 now = g_get_monotonic_time();
-  if (now - last_typed_us_ > 1000000)
-    return;
-  const Snapshot& earlier = undo_[undo_.size() - 2];
-  const Snapshot& intermediate = undo_.back();
-  Insertion first;
-  Insertion second;
-  if (!one_insertion(earlier.doc, intermediate.doc, first) ||
-      !one_insertion(intermediate.doc, current, second))
-    return;
-  if (intermediate.offset != first.at + first.len)
-    return;
-  if (cursor_offset() != second.at + second.len)
-    return;
-  if (second.at != first.at + first.len)
-    return;
-  undo_.pop_back();
 }
 
 void MainWindow::on_inserted(const Gtk::TextBuffer::iterator& pos, const Glib::ustring& text,
@@ -1310,48 +1377,63 @@ void MainWindow::finish_pending()
     buffer_->delete_mark(insert_end_);
   insert_start_.reset();
   insert_end_.reset();
-  // Inserted text joins the paragraph it lands in. Whole paragraphs pasted
-  // from this buffer keep their own format; the trailing piece that merges
-  // into the destination does not.
-  {
-    int tail = start;
-    for (auto iter = buffer_->get_iter_at_offset(start); iter.get_offset() < end; ++iter) {
-      if (iter.get_char() == '\n')
-        tail = iter.get_offset() + 1;
+  // Paragraph format belongs to the paragraph's end, its newline, as in
+  // Word. GTK gives text inserted inside a paragraph that paragraph's tag,
+  // on top of the tags a paste or drop copies from its source, so each
+  // paragraph is set here to one tag (set_para()):
+  // - a pasted end brings the format of the paragraph it was copied from
+  //   (the para tag applied over it in this action), so a paragraph copied
+  //   whole keeps its format;
+  // - the paragraph the first pasted end closes, which begins with the
+  //   landing paragraph's text before the insertion, takes first_end_para();
+  // - the text after the last pasted end joins the paragraph it lands in
+  //   and keeps that paragraph's format;
+  // - with no end in the insertion, it all joins the landing paragraph.
+  // An end that brought no format (Enter, plain text from another program)
+  // takes the landing paragraph's.
+  const auto landing = para_tag(destination_para(start, end));
+  std::vector<int> ends;
+  for (int n = start; n < end; ++n)
+    if (buffer_->get_iter_at_offset(n).get_char() == '\n')
+      ends.push_back(n);
+  auto copied_at = [&](int n) {
+    Glib::RefPtr<Gtk::TextTag> found;
+    for (const AppliedFmt& rec : applied_para_) {
+      if (rec.from->get_iter().get_offset() <= n && n < rec.to->get_iter().get_offset() &&
+          buffer_->get_iter_at_offset(n).has_tag(rec.tag))
+        found = rec.tag;
     }
-    std::vector<Glib::RefPtr<Gtk::TextTag>> stale;
-    for (auto iter = buffer_->get_iter_at_offset(tail); iter.get_offset() < end; ++iter) {
-      auto tag = para_tag_at(iter);
-      if (tag && std::find(stale.begin(), stale.end(), tag) == stale.end())
-        stale.push_back(tag);
-    }
-    for (const auto& tag : stale)
-      buffer_->remove_tag(tag, buffer_->get_iter_at_offset(tail), buffer_->get_iter_at_offset(end));
-    const auto dest = para_tag(destination_para(start, end));
-    for (int i = start; i < end;) {
-      int j = i;
-      while (j < end && !para_tag_at(buffer_->get_iter_at_offset(j)))
-        ++j;
-      if (j > i)
-        buffer_->apply_tag(dest, buffer_->get_iter_at_offset(i), buffer_->get_iter_at_offset(j));
-      while (j < end && para_tag_at(buffer_->get_iter_at_offset(j)))
-        ++j;
-      i = j;
-    }
+    return found ? found : landing;
+  };
+  const int head_from = paragraph_start(start);
+  Glib::RefPtr<Gtk::TextTag> head = landing;
+  if (ends.empty()) {
+    set_para(start, end, landing);
+  } else {
+    head = first_end_para(copied_at(ends.front()), landing);
+    set_para(head_from, ends.front() + 1, head);
+    for (size_t e = 1; e < ends.size(); ++e)
+      set_para(ends[e - 1] + 1, ends[e] + 1, copied_at(ends[e]));
+    set_para(ends.back() + 1, end, landing);
   }
-  // Text inserted inside an existing run inherits that run's tag. That is the
-  // surrounding format, not formatting the user pasted in.
-  std::vector<std::string> inherited;
-  if (start > 0) {
-    auto prev = buffer_->get_iter_at_offset(start - 1);
-    if (prev.get_char() != '\n') {
-      for (const auto& tag : prev.get_tags()) {
-        Run run;
-        if (parse_fmt(tag_name(tag), run))
-          inherited.push_back(tag_name(tag));
-      }
-    }
+  // One character format per character. GTK gives text inserted inside a
+  // tag's range that tag too, so pasted or dropped text inside a run comes
+  // with the run's format on top of the one its source gave it. The format
+  // applied over the new text in this action (the source's, copied by a
+  // paste or drop of this document's text, or Replace's) is the one it
+  // keeps; text that got none (typing, plain text from another program)
+  // takes the format being typed. Either way every other format tag on it
+  // goes first (set_fmt()).
+  std::vector<int> applied(static_cast<size_t>(std::max(0, end - start)), -1);
+  for (size_t r = 0; r < applied_fmt_.size(); ++r) {
+    const AppliedFmt& rec = applied_fmt_[r];
+    const int from = std::max(start, rec.from->get_iter().get_offset());
+    const int to = std::min(end, rec.to->get_iter().get_offset());
+    for (int k = from; k < to; ++k)
+      if (buffer_->get_iter_at_offset(k).has_tag(rec.tag))
+        applied[static_cast<size_t>(k - start)] = static_cast<int>(r);
   }
+  auto applied_at = [&](int k) { return applied[static_cast<size_t>(k - start)]; };
   for (int i = start; i < end;) {
     auto iter = buffer_->get_iter_at_offset(i);
     if (iter.get_char() == '\n') {
@@ -1361,49 +1443,136 @@ void MainWindow::finish_pending()
     int j = i;
     while (j < end && buffer_->get_iter_at_offset(j).get_char() != '\n')
       ++j;
-    bool foreign = false;
-    for (int k = i; k < j && !foreign; ++k) {
-      for (const auto& tag : buffer_->get_iter_at_offset(k).get_tags()) {
-        Run run;
-        if (!parse_fmt(tag_name(tag), run))
-          continue;
-        if (std::find(inherited.begin(), inherited.end(), tag_name(tag)) == inherited.end())
-          foreign = true;
-      }
+    int heading = heading_near(i);
+    // Text typed into an empty paragraph takes its style's outline level,
+    // which an empty paragraph has nowhere to hold in the buffer.
+    if (heading == 0 && paragraph_start(i) == i &&
+        (j >= buffer_->get_char_count() || buffer_->get_iter_at_offset(j).get_char() == '\n')) {
+      const std::vector<Style> styles = sheet();
+      if (const Style* style = find_style(styles, para_at(i).style))
+        heading = style->heading;
     }
-    if (!foreign) {
-      auto from = buffer_->get_iter_at_offset(i);
-      auto to = buffer_->get_iter_at_offset(j);
-      strip_fmt(from, to);
-      from = buffer_->get_iter_at_offset(i);
-      to = buffer_->get_iter_at_offset(j);
-      buffer_->apply_tag(format_tag(typing_), from, to);
-      int heading = heading_near(i);
-      // Text typed into an empty paragraph takes its style's outline level,
-      // which an empty paragraph has nowhere to hold in the buffer.
-      if (heading == 0 && paragraph_start(i) == i &&
-          (j >= buffer_->get_char_count() || buffer_->get_iter_at_offset(j).get_char() == '\n')) {
-        const std::vector<Style> styles = sheet();
-        if (const Style* style = find_style(styles, para_at(i).style))
-          heading = style->heading;
+    for (int a = i; a < j;) {
+      const int want = applied_at(a);
+      int b = a + 1;
+      while (b < j && applied_at(b) == want)
+        ++b;
+      const auto from = buffer_->get_iter_at_offset(a);
+      const auto to = buffer_->get_iter_at_offset(b);
+      if (want >= 0) {
+        set_fmt(from, to, applied_fmt_[static_cast<size_t>(want)].tag);
+      } else {
+        set_fmt(from, to, format_tag(typing_));
+        if (heading > 0)
+          buffer_->apply_tag(heading_tag(heading), buffer_->get_iter_at_offset(a),
+                             buffer_->get_iter_at_offset(b));
       }
-      if (heading > 0)
-        buffer_->apply_tag(heading_tag(heading), from, to);
+      a = b;
     }
     i = j;
   }
   // A new empty line (Enter on an empty line or at the start of one) takes
   // the format being typed, as Word's new paragraph mark does. A newline
-  // pasted with a format of its own keeps it.
+  // pasted with a format of its own keeps it, and only it.
   for (int n = start; n < end; ++n) {
     auto iter = buffer_->get_iter_at_offset(n);
-    if (iter.get_char() != '\n' || has_fmt(iter))
+    if (iter.get_char() != '\n')
+      continue;
+    const auto next = buffer_->get_iter_at_offset(n + 1);
+    if (applied_at(n) >= 0) {
+      set_fmt(iter, next, applied_fmt_[static_cast<size_t>(applied_at(n))].tag);
+      continue;
+    }
+    if (has_fmt(iter))
       continue;
     if (n > 0 && buffer_->get_iter_at_offset(n - 1).get_char() != '\n')
       continue;
-    buffer_->apply_tag(format_tag(typing_), iter, buffer_->get_iter_at_offset(n + 1));
+    set_fmt(iter, next, format_tag(typing_));
   }
+  if (!ends.empty()) {
+    // The landing paragraph's own text before the insertion is now in the
+    // first end's paragraph: what of its format came from its old style
+    // follows the new one, as when a style is applied. The two partial
+    // paragraphs take their style's outline level.
+    ParaFormat was;
+    ParaFormat now;
+    parse_para(tag_name(landing), was);
+    parse_para(tag_name(head), now);
+    const std::vector<Style> styles = sheet();
+    const Style* from_style = find_style(styles, was.style);
+    const Style* to_style = find_style(styles, now.style);
+    if (from_style && to_style && from_style != to_style) {
+      for (int i = head_from; i < start;) {
+        Run run = format_of(buffer_->get_iter_at_offset(i));
+        int j = i + 1;
+        while (j < start && same_format(format_of(buffer_->get_iter_at_offset(j)), run))
+          ++j;
+        restyle_run(run, *from_style, *to_style);
+        set_fmt(buffer_->get_iter_at_offset(i), buffer_->get_iter_at_offset(j), format_tag(run));
+        i = j;
+      }
+    }
+    set_heading(head_from, ends.front(), to_style ? to_style->heading : 0);
+    const Style* tail_style = find_style(styles, was.style);
+    set_heading(ends.back() + 1, paragraph_end(ends.back() + 1),
+                tail_style ? tail_style->heading : 0);
+  }
+  clear_applied_fmt();
   tag_line_breaks(start, end);
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::first_end_para(
+    const Glib::RefPtr<Gtk::TextTag>& copied, const Glib::RefPtr<Gtk::TextTag>& landing) const
+{
+  // The paragraph a paste's first end closes starts with the landing
+  // paragraph's text and ends with the copied end. Word's paragraph-mark
+  // model gives it the copied paragraph's format. To give it the landing
+  // paragraph's instead, return `landing` (and update paste-format's
+  // expectations for the first joined paragraph).
+  (void)landing;
+  return copied;
+}
+
+void MainWindow::set_para(int from, int to, const Glib::RefPtr<Gtk::TextTag>& tag)
+{
+  // One paragraph tag per character: every other one on the range goes.
+  if (from >= to)
+    return;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> stale;
+  for (auto iter = buffer_->get_iter_at_offset(from); iter.get_offset() < to; ++iter) {
+    ParaFormat ignored;
+    for (const auto& t : iter.get_tags())
+      if (t != tag && parse_para(tag_name(t), ignored) &&
+          std::find(stale.begin(), stale.end(), t) == stale.end())
+        stale.push_back(t);
+  }
+  for (const auto& t : stale)
+    buffer_->remove_tag(t, buffer_->get_iter_at_offset(from), buffer_->get_iter_at_offset(to));
+  buffer_->apply_tag(tag, buffer_->get_iter_at_offset(from), buffer_->get_iter_at_offset(to));
+}
+
+void MainWindow::set_heading(int from, int to, int level)
+{
+  // A paragraph's text carries its outline level; its newline does not.
+  if (from >= to)
+    return;
+  for (int l = 1; l <= 6; ++l)
+    buffer_->remove_tag(heading_tag(l), buffer_->get_iter_at_offset(from),
+                        buffer_->get_iter_at_offset(to));
+  if (level <= 0)
+    return;
+  for (int i = from; i < to;) {
+    if (buffer_->get_iter_at_offset(i).get_char() == '\n') {
+      ++i;
+      continue;
+    }
+    int j = i;
+    while (j < to && buffer_->get_iter_at_offset(j).get_char() != '\n')
+      ++j;
+    buffer_->apply_tag(heading_tag(level), buffer_->get_iter_at_offset(i),
+                       buffer_->get_iter_at_offset(j));
+    i = j;
+  }
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag(const Run& run)
@@ -1448,6 +1617,8 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
 
 void MainWindow::raise_headings()
 {
+  // Priorities decide which tags win the indents and margins: lines move.
+  label_geometry_.clear();
   auto table = buffer_->get_tag_table();
   for (int level = 1; level <= 6; ++level) {
     auto tag = table->lookup("heading-" + std::to_string(level));
@@ -1642,6 +1813,43 @@ void MainWindow::strip_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to)
     buffer_->remove_tag(tag, from, to);
 }
 
+void MainWindow::set_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to,
+                         const Glib::RefPtr<Gtk::TextTag>& tag)
+{
+  // Offsets, since removing tags can leave the iterators invalid.
+  const int a = from.get_offset();
+  const int b = to.get_offset();
+  strip_fmt(buffer_->get_iter_at_offset(a), buffer_->get_iter_at_offset(b));
+  buffer_->apply_tag(tag, buffer_->get_iter_at_offset(a), buffer_->get_iter_at_offset(b));
+}
+
+void MainWindow::on_tag_applied(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& from,
+                                const Gtk::TextIter& to)
+{
+  if (!pending_insert_ || !in_user_ || loading_ || restoring_)
+    return;
+  Run run;
+  ParaFormat para;
+  const std::string name = tag_name(tag);
+  const bool fmt = parse_fmt(name, run);
+  if (!fmt && !parse_para(name, para))
+    return;
+  // Text inserted later at either end is not inside this range.
+  (fmt ? applied_fmt_ : applied_para_)
+      .push_back({tag, buffer_->create_mark(from, false), buffer_->create_mark(to, true)});
+}
+
+void MainWindow::clear_applied_fmt()
+{
+  for (auto* list : {&applied_fmt_, &applied_para_}) {
+    for (const AppliedFmt& rec : *list) {
+      buffer_->delete_mark(rec.from);
+      buffer_->delete_mark(rec.to);
+    }
+    list->clear();
+  }
+}
+
 Run MainWindow::line_break_mark(int newline) const
 {
   int begin = newline;
@@ -1707,11 +1915,7 @@ void MainWindow::tag_line_breaks(int start, int end)
       continue;
     auto from_it = buffer_->get_iter_at_offset(n);
     auto to_it = buffer_->get_iter_at_offset(n + 1);
-    strip_fmt(from_it, to_it);
-    const Run mark = line_break_mark(n);
-    from_it = buffer_->get_iter_at_offset(n);
-    to_it = buffer_->get_iter_at_offset(n + 1);
-    buffer_->apply_tag(format_tag(mark), from_it, to_it);
+    set_fmt(from_it, to_it, format_tag(line_break_mark(n)));
   }
 }
 
@@ -1736,9 +1940,7 @@ void MainWindow::apply_run_edit(const std::function<void(Run&)>& edit)
       if (i == 0 || buffer_->get_iter_at_offset(i - 1).get_char() == '\n') {
         Run mark = format_of(iter);
         edit(mark);
-        strip_fmt(iter, buffer_->get_iter_at_offset(i + 1));
-        buffer_->apply_tag(format_tag(mark), buffer_->get_iter_at_offset(i),
-                           buffer_->get_iter_at_offset(i + 1));
+        set_fmt(iter, buffer_->get_iter_at_offset(i + 1), format_tag(mark));
       }
       ++i;
       continue;
@@ -1754,8 +1956,7 @@ void MainWindow::apply_run_edit(const std::function<void(Run&)>& edit)
     edit(run);
     auto from = buffer_->get_iter_at_offset(i);
     auto to = buffer_->get_iter_at_offset(j);
-    strip_fmt(from, to);
-    buffer_->apply_tag(format_tag(run), from, to);
+    set_fmt(from, to, format_tag(run));
     i = j;
   }
   tag_line_breaks(start, end);
@@ -2151,14 +2352,48 @@ ParaFormat MainWindow::destination_para(int start, int end) const
   return ParaFormat{};
 }
 
+void MainWindow::note_touched(int from, int to)
+{
+  if (loading_ || restoring_ || normalising_ || !in_user_ || !buffer_)
+    return;
+  if (!touched_start_) {
+    touched_start_ = buffer_->create_mark(buffer_->begin(), true);
+    touched_end_ = buffer_->create_mark(buffer_->begin(), false);
+  }
+  if (!touched_) {
+    touched_ = true;
+    buffer_->move_mark(touched_start_, buffer_->get_iter_at_offset(from));
+    buffer_->move_mark(touched_end_, buffer_->get_iter_at_offset(to));
+    return;
+  }
+  if (from < touched_start_->get_iter().get_offset())
+    buffer_->move_mark(touched_start_, buffer_->get_iter_at_offset(from));
+  if (to > touched_end_->get_iter().get_offset())
+    buffer_->move_mark(touched_end_, buffer_->get_iter_at_offset(to));
+}
+
 void MainWindow::normalise_paragraphs()
 {
   // A deleted newline joins two paragraphs. The joined paragraph keeps the
   // first one's indents, alignment and list, as AbiWord and LibreOffice do.
+  // Only the paragraphs the action touched can have come apart: the others
+  // were whole after the last action, so typing costs a paragraph, not the
+  // document.
+  if (!touched_)
+    return;
+  touched_ = false;
   const int count = buffer_->get_char_count();
-  Glib::RefPtr<Gtk::TextTag> carry = para_tag(ParaFormat{});
-  int begin = 0;
-  while (begin < count) {
+  int begin = paragraph_start(touched_start_->get_iter().get_offset());
+  const int last = paragraph_end(touched_end_->get_iter().get_offset());
+  // The paragraph above is whole: its tag is the one an untagged paragraph
+  // follows.
+  Glib::RefPtr<Gtk::TextTag> carry;
+  if (begin > 0)
+    carry = para_tag_at(buffer_->get_iter_at_offset(paragraph_start(begin - 1)));
+  if (!carry)
+    carry = para_tag(ParaFormat{});
+  normalising_ = true;
+  while (begin < count && begin <= last) {
     Glib::RefPtr<Gtk::TextTag> chosen;
     std::vector<Glib::RefPtr<Gtk::TextTag>> seen;
     bool uniform = true;
@@ -2189,6 +2424,7 @@ void MainWindow::normalise_paragraphs()
     carry = chosen;
     begin = end;
   }
+  normalising_ = false;
 }
 
 void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
@@ -2197,7 +2433,7 @@ void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
   // Erasing through to the end of the buffer from the start of a line leaves
   // an empty last paragraph. Like Word's surviving paragraph mark, it keeps
   // the format of the last paragraph that was there.
-  if (loading_ || !buffer_ || !to.is_end() || from == to)
+  if (loading_ || restoring_ || !buffer_ || !to.is_end() || from == to)
     return;
   if (paragraph_start(from.get_offset()) != from.get_offset())
     return;
@@ -2511,10 +2747,27 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   const Run format = !paragraph.runs.empty() ? paragraph.runs.front()
                      : paragraph.mark        ? *paragraph.mark
                                              : format_of(iter);
-  auto layout = text_.create_pango_layout(list_label(list, number));
+  const Glib::ustring text = list_label(list, number);
+  const std::string family = format.font.empty() ? "Sans" : format.font;
+  const int size = static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE);
+  std::string key = text.raw();
+  key += '\n';
+  key += family;
+  key += '\n';
+  key += std::to_string(size);
+  key += format.bold ? "b" : "";
+  key += format.italic ? "i" : "";
+  const auto found = label_layout_cache_.find(key);
+  if (found != label_layout_cache_.end()) {
+    width = found->second.width;
+    gap = found->second.gap;
+    return found->second.layout;
+  }
+  ++label_layouts_;
+  auto layout = text_.create_pango_layout(text);
   Pango::FontDescription desc;
-  desc.set_family(format.font.empty() ? "Sans" : format.font);
-  desc.set_size(static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE));
+  desc.set_family(family);
+  desc.set_size(size);
   // Bold and italic too, as Word 97 formats a label from the paragraph mark.
   desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
   desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
@@ -2524,6 +2777,10 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   auto space = text_.create_pango_layout(" ");
   space->set_font_description(desc);
   space->get_pixel_size(gap, height);
+  // A document has few distinct labels; a hostile one cannot grow this far.
+  if (label_layout_cache_.size() >= 4096)
+    label_layout_cache_.clear();
+  label_layout_cache_[key] = LabelLayout{layout, width, gap};
   return layout;
 }
 
@@ -2533,7 +2790,17 @@ bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int nu
 {
   if (clamp_list(paragraph.list).kind == ListKind::None || !buffer_)
     return false;
+  ++label_locates_;
   text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
+  return list_label_at(paragraph, offset, number, layout, x, where);
+}
+
+bool MainWindow::list_label_at(const Paragraph& paragraph, int offset, int number,
+                               Glib::RefPtr<Pango::Layout>& layout, int& x,
+                               const Gdk::Rectangle& where)
+{
+  if (clamp_list(paragraph.list).kind == ListKind::None || !buffer_)
+    return false;
   int width = 0;
   int gap = 0;
   layout = list_label_layout(paragraph, offset, number, width, gap);
@@ -2542,6 +2809,35 @@ bool MainWindow::list_label_place(const Paragraph& paragraph, int offset, int nu
   x = list_label_x(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
                    where.get_x(), width, indent_px(list_label_space(indents)), gap);
   return true;
+}
+
+void MainWindow::label_where(const Gtk::TextIter& start, int line_y, int line_height,
+                             Gdk::Rectangle& where)
+{
+  const int line = start.get_line();
+  const auto found = label_geometry_.find(line);
+  if (found != label_geometry_.end() && found->second.line_height == line_height) {
+    const LabelGeometry& g = found->second;
+    where = Gdk::Rectangle(g.x, line_y + g.dy, g.width, g.height);
+    return;
+  }
+  ++label_locates_;
+  text_.get_iter_location(start, where);
+  label_geometry_[line] = LabelGeometry{where.get_x(), where.get_y() - line_y, where.get_width(),
+                                        where.get_height(), line_height};
+}
+
+void MainWindow::forget_label_geometry(int first, int last, int shift)
+{
+  if (label_geometry_.empty())
+    return;
+  label_geometry_.erase(label_geometry_.lower_bound(first), label_geometry_.upper_bound(last));
+  if (shift == 0)
+    return;
+  std::map<int, LabelGeometry> moved;
+  for (auto it = label_geometry_.begin(); it != label_geometry_.end(); ++it)
+    moved.emplace_hint(moved.end(), it->first > last ? it->first + shift : it->first, it->second);
+  label_geometry_.swap(moved);
 }
 
 void MainWindow::queue_list_shifts()
@@ -2584,14 +2880,11 @@ void MainWindow::update_list_shifts()
     if (is_list_shift(tag_name(tag)))
       old.push_back(tag);
   });
-  const Document doc = capture();
-  const bool centred =
-      std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(), [](const Paragraph& p) {
-        return p.align == Align::Center && clamp_list(p.list).kind != ListKind::None;
-      });
-  if (!centred && old.empty())
+  if (old.empty() && !any_list())
     return;
-  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  const std::vector<ListLine>& lines = list_lines();
+  if (!list_lines_centred_ && old.empty())
+    return;
   const int total = buffer_->get_char_count();
   // Does [s, e) hold `tag` anywhere, or all through?
   auto touches = [](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& s,
@@ -2610,22 +2903,22 @@ void MainWindow::update_list_shifts()
   };
   shifting_ = true;
   std::vector<Glib::RefPtr<Gtk::TextTag>> used;
+  // Each paragraph from its start to the next one's.
   int offset = 0;
-  for (size_t i = 0; i < doc.paragraphs.size() && offset < total; ++i) {
-    const Paragraph& paragraph = doc.paragraphs[i];
-    int length = 0;
-    for (const Run& run : paragraph.runs)
-      length += static_cast<int>(Glib::ustring(run.text).length());
-    const int end = std::min(total, offset + length + 1);
+  for (size_t i = 0; i < lines.size() && offset < total; ++i) {
+    const ParaFormat& format = lines[i].format;
+    const int end = i + 1 < lines.size()
+                        ? std::min(total, buffer_->get_iter_at_line(lines[i + 1].line).get_offset())
+                        : total;
     Glib::RefPtr<Gtk::TextTag> want;
-    if (paragraph.align == Align::Center && clamp_list(paragraph.list).kind != ListKind::None) {
-      const Indents indents = clamp_indents(paragraph.indents);
+    if (format.align == Align::Center && clamp_list(format.list).kind != ListKind::None) {
+      const Indents indents = clamp_indents(format.indents);
       int width = 0;
       int gap = 0;
-      list_label_layout(paragraph, offset, numbers[i], width, gap);
+      list_label_layout(label_paragraph(i, offset), offset, lines[i].number, width, gap);
       // As list_label_place() measures: the first-line indent and the room.
       const int from =
-          list_centre_from(paragraph.align, margin_left() + indent_px(indents.left + indents.first),
+          list_centre_from(format.align, margin_left() + indent_px(indents.left + indents.first),
                            width, indent_px(list_label_space(indents)), gap);
       // The paragraph tag's own left margin already centres it when equal.
       if (from >= 0 && from != std::max(0, margin_left() + indent_px(indents.left)))
@@ -2643,7 +2936,7 @@ void MainWindow::update_list_shifts()
       if (std::find(used.begin(), used.end(), want) == used.end())
         used.push_back(want);
     }
-    offset += length + 1;
+    offset = end;
   }
   // Tags no paragraph needs go, so the table holds one per offset in use.
   for (const auto& tag : old)
@@ -2917,6 +3210,123 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
   return want;
 }
 
+const std::vector<MainWindow::ListLine>& MainWindow::list_lines()
+{
+  if (list_lines_valid_ && list_lines_pending_set_ == pending_para_set_ &&
+      (!pending_para_set_ || list_lines_pending_ == pending_para_))
+    return list_lines_;
+  list_lines_.clear();
+  // Paragraphs start at 0 and after each '\n', as capture() splits them;
+  // GTK's lines also break at other separators. After a final '\n' comes an
+  // empty last paragraph, which forward_line() does not stop at.
+  std::vector<int> starts{0};
+  std::vector<int> lines{0};
+  auto it = buffer_->begin();
+  while (it.forward_line()) {
+    auto before = it;
+    before.backward_char();
+    if (before.get_char() == '\n') {
+      starts.push_back(it.get_offset());
+      lines.push_back(it.get_line());
+    }
+  }
+  const int total = buffer_->get_char_count();
+  if (total > 0 && starts.back() != total &&
+      buffer_->get_iter_at_offset(total - 1).get_char() == '\n') {
+    starts.push_back(total);
+    lines.push_back(buffer_->get_line_count() - 1);
+  }
+  // Each one's format by capture()'s rule: its first character with a
+  // paragraph tag, else the held format, else the paragraph above's.
+  std::vector<Paragraph> paragraphs(starts.size());
+  list_lines_.resize(starts.size());
+  for (size_t i = 0; i < starts.size(); ++i) {
+    ParaFormat format;
+    bool found = false;
+    for (auto iter = buffer_->get_iter_at_offset(starts[i]); !iter.is_end(); ++iter) {
+      if (auto tag = para_tag_at(iter)) {
+        if (parse_para(tag_name(tag), format)) {
+          found = true;
+          break;
+        }
+      }
+      if (iter.get_char() == '\n')
+        break;
+    }
+    if (!found) {
+      if (pending_para_set_)
+        format = pending_para_;
+      else if (i > 0)
+        format = list_lines_[i - 1].format;
+      else
+        format = ParaFormat{};
+    }
+    list_lines_[i].format = format;
+    list_lines_[i].line = lines[i];
+    paragraphs[i].list = format.list;
+  }
+  const std::vector<int> numbers = list_numbers(paragraphs);
+  list_lines_any_ = false;
+  list_lines_centred_ = false;
+  for (size_t i = 0; i < list_lines_.size(); ++i) {
+    const ParaFormat& format = list_lines_[i].format;
+    list_lines_[i].number = numbers[i];
+    if (format.list.kind != ListKind::None)
+      list_lines_any_ = true;
+    if (format.align == Align::Center && clamp_list(format.list).kind != ListKind::None)
+      list_lines_centred_ = true;
+  }
+  list_lines_valid_ = true;
+  list_lines_pending_set_ = pending_para_set_;
+  list_lines_pending_ = pending_para_;
+  return list_lines_;
+}
+
+bool MainWindow::any_list() const
+{
+  // Every paragraph's format is a tag's or the held one (capture()'s rule),
+  // so with neither carrying a list there is none.
+  if (pending_para_set_ && pending_para_.list.kind != ListKind::None)
+    return true;
+  bool any = false;
+  const auto begin = buffer_->begin();
+  buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (any)
+      return;
+    ParaFormat format;
+    if (!parse_para(tag_name(tag), format) || format.list.kind == ListKind::None)
+      return;
+    auto it = begin;
+    if (begin.has_tag(tag) || it.forward_to_tag_toggle(tag))
+      any = true;
+  });
+  return any;
+}
+
+Paragraph MainWindow::label_paragraph(size_t index, int offset) const
+{
+  const ParaFormat& format = list_lines_[index].format;
+  Paragraph paragraph;
+  paragraph.indents = format.indents;
+  paragraph.align = format.align;
+  paragraph.list = format.list;
+  paragraph.style = format.style;
+  paragraph.direct = format.direct;
+  // What capture() would give list_label_layout(): the first run's format,
+  // an empty paragraph's mark, or neither.
+  const auto iter = buffer_->get_iter_at_offset(offset);
+  if (iter.is_end()) {
+    if (pending_mark_set_)
+      paragraph.mark = pending_mark_;
+  } else if (iter.get_char() == '\n') {
+    if (has_fmt(iter))
+      paragraph.mark = format_of(iter);
+  } else {
+    paragraph.runs.push_back(format_of(iter));
+  }
+  return paragraph;
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,
@@ -2924,44 +3334,88 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   // first-line indent, in the font of the paragraph's first character.
   if (!buffer_)
     return false;
-  const Document doc = capture();
-  const bool any = std::any_of(doc.paragraphs.begin(), doc.paragraphs.end(),
-                               [](const Paragraph& p) { return p.list.kind != ListKind::None; });
-  if (!any)
+  if (!any_list())
     return false;
-  const std::vector<int> numbers = list_numbers(doc.paragraphs);
+  const std::vector<ListLine>& lines = list_lines();
+  if (!list_lines_any_)
+    return false;
+  // A line's geometry holds while the text keeps its width, zoom and margin.
+  const int text_width = text_.get_allocated_width();
+  const int margin = margin_left();
+  const double zoom = zoom_factor();
+  if (text_width != label_geometry_width_ || margin != label_geometry_margin_ ||
+      zoom != label_geometry_zoom_) {
+    label_geometry_.clear();
+    label_geometry_width_ = text_width;
+    label_geometry_margin_ = margin;
+    label_geometry_zoom_ = zoom;
+  }
+  // The text view is the whole page inside the pasteboard's scroller, so its
+  // visible rectangle is the whole text. What is drawn now is the clip: the
+  // part of the page in view, or less.
   Gdk::Rectangle visible;
   text_.get_visible_rect(visible);
+  double clip_x1 = 0;
+  double clip_y1 = 0;
+  double clip_x2 = 0;
+  double clip_y2 = 0;
+  cr->get_clip_extents(clip_x1, clip_y1, clip_x2, clip_y2);
+  int ignored = 0;
+  int clip_top = 0;
+  int clip_bottom = 0;
+  text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::floor(clip_y1)),
+                                ignored, clip_top);
+  text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::ceil(clip_y2)),
+                                ignored, clip_bottom);
+  const int view_top = std::max(visible.get_y(), clip_top);
+  const int view_bottom = std::min(visible.get_y() + visible.get_height(), clip_bottom);
+  if (view_bottom < view_top)
+    return false;
   const Gdk::RGBA color = text_.get_style_context()->get_color(text_.get_state_flags());
-  int offset = 0;
-  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
-    const Paragraph& paragraph = doc.paragraphs[i];
-    int length = 0;
-    for (const Run& run : paragraph.runs)
-      length += static_cast<int>(Glib::ustring(run.text).length());
+  // Only the items in view are measured and drawn. Paragraphs go down the
+  // page in order: start one before the last paragraph to begin at or above
+  // the view's top line, and stop at the first one below its bottom.
+  Gtk::TextIter top;
+  int top_y = 0;
+  text_.get_line_at_y(top, view_top, top_y);
+  const int top_line = top.get_line();
+  size_t first = static_cast<size_t>(
+      std::upper_bound(lines.begin(), lines.end(), top_line,
+                       [](int line, const ListLine& item) { return line < item.line; }) -
+      lines.begin());
+  first = first >= 2 ? first - 2 : 0;
+  for (size_t i = first; i < lines.size(); ++i) {
+    const ParaFormat& format = lines[i].format;
+    if (format.list.kind == ListKind::None)
+      continue;
+    const auto start = buffer_->get_iter_at_line(lines[i].line);
+    int line_y = 0;
+    int line_height = 0;
+    text_.get_line_yrange(start, line_y, line_height);
+    if (line_y + line_height < view_top)
+      continue;
     Gdk::Rectangle where;
-    if (paragraph.list.kind != ListKind::None)
-      text_.get_iter_location(buffer_->get_iter_at_offset(offset), where);
+    label_where(start, line_y, line_height, where);
+    if (where.get_y() + where.get_height() < view_top)
+      continue;
+    const int offset = start.get_offset();
     Glib::RefPtr<Pango::Layout> layout;
     int x = 0;
-    // Only the items in view are measured and drawn.
-    if (paragraph.list.kind != ListKind::None &&
-        where.get_y() + where.get_height() >= visible.get_y() &&
-        where.get_y() <= visible.get_y() + visible.get_height()) {
-      if (list_label_place(paragraph, offset, numbers[i], layout, x, where)) {
-        int width = 0;
-        int height = 0;
-        layout->get_pixel_size(width, height);
-        int wx = 0;
-        int wy = 0;
-        text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
-        cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(),
-                            color.get_alpha());
-        cr->move_to(wx, wy + where.get_height() - height);
-        layout->show_in_cairo_context(cr);
-      }
-    }
-    offset += length + 1;
+    if (!list_label_at(label_paragraph(i, offset), offset, lines[i].number, layout, x, where))
+      continue;
+    int width = 0;
+    int height = 0;
+    layout->get_pixel_size(width, height);
+    // A label sits on its line's bottom, so one taller than its line reaches
+    // above the line's top. The first label wholly below the view ends it.
+    if (std::min(where.get_y(), where.get_y() + where.get_height() - height) > view_bottom)
+      break;
+    int wx = 0;
+    int wy = 0;
+    text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, x, where.get_y(), wx, wy);
+    cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(), color.get_alpha());
+    cr->move_to(wx, wy + where.get_height() - height);
+    layout->show_in_cairo_context(cr);
   }
   return false;
 }
@@ -3334,10 +3788,9 @@ void MainWindow::replace_once()
         // match's own format as the only character tag on the new text.
         auto from = buffer_->get_iter_at_offset(at);
         auto to = buffer_->get_iter_at_offset(at + len);
-        strip_fmt(from, to);
+        set_fmt(from, to, format_tag(format));
         from = buffer_->get_iter_at_offset(at);
         to = buffer_->get_iter_at_offset(at + len);
-        buffer_->apply_tag(format_tag(format), from, to);
         if (heading > 0)
           buffer_->apply_tag(heading_tag(heading), from, to);
       }
