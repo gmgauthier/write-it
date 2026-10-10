@@ -13,6 +13,7 @@
 #include <glibmm/miscutils.h>
 #include <gtkmm.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -127,7 +128,7 @@ void activate(Gtk::MenuItem* item)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 37;
+constexpr int kChecks = 42;
 
 int main(int argc, char* argv[])
 {
@@ -254,6 +255,61 @@ int main(int argc, char* argv[])
       for (int i = 0; i < 23; ++i)
         CHECK(false);
     }
+
+    const char* sample_rtf =
+        "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n"
+        "{\\fonttbl{\\f0\\fswiss Sans;}}\n"
+        "\\pard\\f0\\fs22\\b0\\i0\\ulnone This is a test\\par\n"
+        "\\pard\\f0\\fs22\\b0\\i0\\ulnone\\par\n"
+        "\\pard\\f0\\fs22\\b0\\i0\\ulnone This is a test\\par\n"
+        "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\f0\\fs22"
+        "\\b0\\i0\\ulnone asdfasfdsafddsf\\tab sdadasdf\\tab asdasfdasfd\\tab \\tab dsfadfasdf"
+        "\\tab \\cell\\pard\\intbl\\cell\\pard\\intbl\\cell\\pard\\intbl\\f0\\fs22\\b0\\i0"
+        "\\ulnone sdasfsafdasdf\\tab \\tab wsdfasdfsafdasdfasdfasdfasdfasdfasdf\\cell\\row\n"
+        "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\cell"
+        "\\pard\\intbl\\cell\\pard\\intbl\\cell\\pard\\intbl\\cell\\row\n"
+        "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\cell"
+        "\\pard\\intbl\\f0\\fs22\\b0\\i0\\ulnone asdfasfasdfasfd\\cell\\pard\\intbl\\cell"
+        "\\pard\\intbl\\cell\\row\n"
+        "\\trowd\\trgaph108\\cellx2513\\cellx5026\\cellx7539\\cellx10054\\pard\\intbl\\cell"
+        "\\pard\\intbl\\cell\\pard\\intbl\\cell\\pard\\intbl\\cell\\row\n"
+        "\\pard\\par\n"
+        "}";
+    writeit::Document sample;
+    CHECK(writeit::rtf_import(sample_rtf, sample));
+    writeit::MainWindowProbe::load(window, sample);
+    settle();
+    writeit::Document shown = writeit::MainWindowProbe::doc(window);
+    if (!(shown == sample)) {
+      std::cerr << "table grid capture " << shown.paragraphs.size() << " paragraphs, sample "
+                << sample.paragraphs.size() << "\n";
+      const size_t n = std::min(shown.paragraphs.size(), sample.paragraphs.size());
+      for (size_t i = 0; i < n; ++i) {
+        if (!(shown.paragraphs[i] == sample.paragraphs[i])) {
+          std::cerr << "first mismatch at paragraph " << i << "\n";
+          break;
+        }
+      }
+    }
+    CHECK(shown.paragraphs.size() == sample.paragraphs.size());
+    CHECK(shown == sample);
+    int cell_views = 0;
+    bool top_left = false;
+    if (body) {
+      for (Gtk::Widget* child : body->get_children()) {
+        walk(*child, [&](Gtk::Widget& widget) {
+          auto* view = dynamic_cast<Gtk::TextView*>(&widget);
+          if (!view || view == body)
+            return;
+          ++cell_views;
+          const std::string text = view->get_buffer()->get_text().raw();
+          if (text.compare(0, 15, "asdfasfdsafddsf") == 0)
+            top_left = true;
+        });
+      }
+    }
+    CHECK(cell_views == 16);
+    CHECK(top_left);
   }
   return suite_test::done("page-ui", kChecks);
 }

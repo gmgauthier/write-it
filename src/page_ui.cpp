@@ -45,14 +45,39 @@ int chars_of(const Paragraph& paragraph)
   return count;
 }
 
-// Buffer offset where paragraph `index` starts, counting a picture as one
-// character and a newline between paragraphs, as the text buffer does.
+TableSheet* sheet_from(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor)
+{
+  if (!anchor)
+    return nullptr;
+  return static_cast<TableSheet*>(g_object_get_data(G_OBJECT(anchor->gobj()), "writeit-table"));
+}
+
+// Buffer offset where paragraph `index` starts. A table is one anchor
+// character. Its cells share that offset: the caret is the anchor, not a
+// character past it. A newline after the anchor, when another paragraph
+// follows, is only a separator.
 int chars_before(const std::vector<Paragraph>& paragraphs, size_t index)
 {
   int offset = 0;
+  size_t i = 0;
   const size_t end = std::min(index, paragraphs.size());
-  for (size_t i = 0; i < end; ++i)
+  while (i < end) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      size_t j = i + 1;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id)
+        ++j;
+      if (end < j)
+        return offset;
+      offset += 1;
+      if (j < paragraphs.size())
+        ++offset;
+      i = j;
+      continue;
+    }
     offset += chars_of(paragraphs[i]) + 1;
+    ++i;
+  }
   return offset;
 }
 
@@ -361,6 +386,475 @@ bool read_measure(Gtk::SpinButton& button, Units units, int original, double sho
 }
 
 }  // namespace
+
+namespace {
+
+// One cell's frame reports the column width as both its minimum and its
+// natural width, so the text view wraps inside the column instead of growing
+// to the unwrapped line.
+class CellFrame : public Gtk::Frame {
+ public:
+  CellFrame()
+  {
+    set_shadow_type(Gtk::SHADOW_IN);
+    get_style_context()->add_class("table-cell");
+    set_hexpand(false);
+    set_vexpand(false);
+  }
+
+  void set_column_px(int px)
+  {
+    width_ = std::max(36, px);
+    queue_resize();
+  }
+
+ protected:
+  Gtk::SizeRequestMode get_request_mode_vfunc() const override
+  {
+    return Gtk::SIZE_REQUEST_HEIGHT_FOR_WIDTH;
+  }
+
+  void get_preferred_width_vfunc(int& minimum_width, int& natural_width) const override
+  {
+    minimum_width = natural_width = width_;
+  }
+
+ private:
+  int width_ = 36;
+};
+
+int buffer_paragraphs(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
+{
+  if (!buffer || buffer->get_char_count() == 0)
+    return 1;
+  int newlines = 0;
+  for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+    if (iter.get_char() == '\n')
+      ++newlines;
+  }
+  return newlines + 1;
+}
+
+}  // namespace
+
+// The cells of one table, side by side. The body buffer holds a single
+// anchor character; this grid is the child widget there.
+class TableSheet : public Gtk::Grid {
+ public:
+  TableSheet(MainWindow& window, const std::vector<Paragraph>& cells)
+      : window_(window)
+  {
+    set_row_spacing(0);
+    set_column_spacing(0);
+    set_hexpand(false);
+    set_vexpand(false);
+    set_halign(Gtk::ALIGN_START);
+    set_valign(Gtk::ALIGN_START);
+    int id = 0;
+    for (const Paragraph& paragraph : cells) {
+      rows_ = std::max(rows_, std::max(paragraph.cell.rows, paragraph.cell.row + 1));
+      cols_ = std::max(cols_, std::max(paragraph.cell.columns, paragraph.cell.column + 1));
+      if (id == 0)
+        id = paragraph.cell.table;
+      if (widths_.empty() && !paragraph.cell.widths.empty())
+        widths_ = paragraph.cell.widths;
+    }
+    if (rows_ < 1)
+      rows_ = 1;
+    if (cols_ < 1)
+      cols_ = 1;
+    views_.assign(static_cast<size_t>(rows_),
+                  std::vector<Gtk::TextView*>(static_cast<size_t>(cols_)));
+    frames_.assign(static_cast<size_t>(rows_), std::vector<CellFrame*>(static_cast<size_t>(cols_)));
+    forms_.assign(static_cast<size_t>(rows_),
+                  std::vector<std::vector<Paragraph>>(static_cast<size_t>(cols_)));
+    for (const Paragraph& paragraph : cells) {
+      const int row = std::max(0, std::min(paragraph.cell.row, rows_ - 1));
+      const int column = std::max(0, std::min(paragraph.cell.column, cols_ - 1));
+      forms_[static_cast<size_t>(row)][static_cast<size_t>(column)].push_back(paragraph);
+    }
+    for (int row = 0; row < rows_; ++row) {
+      for (int column = 0; column < cols_; ++column) {
+        auto& slot = forms_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        if (slot.empty()) {
+          Paragraph blank;
+          blank.cell.table = id;
+          blank.cell.row = row;
+          blank.cell.column = column;
+          blank.cell.rows = rows_;
+          blank.cell.columns = cols_;
+          blank.cell.widths = widths_;
+          slot.push_back(blank);
+        }
+        auto* frame = Gtk::manage(new CellFrame());
+        auto* view = Gtk::manage(new Gtk::TextView());
+        view->set_wrap_mode(Gtk::WRAP_WORD_CHAR);
+        view->set_accepts_tab(false);
+        view->set_left_margin(4);
+        view->set_right_margin(4);
+        view->set_top_margin(2);
+        view->set_bottom_margin(2);
+        view->set_hexpand(true);
+        view->set_vexpand(true);
+        view->get_style_context()->add_class("table-cell-text");
+        frame->add(*view);
+        attach(*frame, column, row, 1, 1);
+        frames_[static_cast<size_t>(row)][static_cast<size_t>(column)] = frame;
+        views_[static_cast<size_t>(row)][static_cast<size_t>(column)] = view;
+        window_.fill_cell(*view, slot);
+        const int at_row = row;
+        const int at_column = column;
+        view->signal_key_press_event().connect([this, at_row, at_column](GdkEventKey* event) {
+          return on_key(event, at_row, at_column);
+        });
+        view->get_buffer()->signal_begin_user_action().connect([this] { window_.on_cell_begin(); });
+        view->get_buffer()->signal_end_user_action().connect([this] { window_.on_cell_end(); });
+        view->signal_focus_in_event().connect([this](GdkEventFocus*) {
+          window_.update_actions();
+          return false;
+        });
+      }
+    }
+    relayout();
+  }
+
+  bool contains_focus() const
+  {
+    for (const auto& row : views_) {
+      for (Gtk::TextView* view : row) {
+        if (view && view->has_focus())
+          return true;
+      }
+    }
+    return false;
+  }
+
+  int paragraph_count() const
+  {
+    int count = 0;
+    for (const auto& row : views_) {
+      for (Gtk::TextView* view : row)
+        count += buffer_paragraphs(view->get_buffer());
+    }
+    return count;
+  }
+
+  // Paragraphs of this table that sit before the caret in the focused cell.
+  int index_in_table() const
+  {
+    int row = 0;
+    int column = 0;
+    if (!focused_at(row, column))
+      return 0;
+    int index = 0;
+    for (int r = 0; r < rows_; ++r) {
+      for (int c = 0; c < cols_; ++c) {
+        Gtk::TextView* view = views_[static_cast<size_t>(r)][static_cast<size_t>(c)];
+        if (r == row && c == column) {
+          auto buffer = view->get_buffer();
+          const auto caret = buffer->get_insert()->get_iter();
+          int lines = 0;
+          for (auto iter = buffer->begin(); iter.compare(caret) < 0; ++iter) {
+            if (iter.get_char() == '\n')
+              ++lines;
+          }
+          return index + lines;
+        }
+        index += buffer_paragraphs(view->get_buffer());
+      }
+    }
+    return index;
+  }
+
+  void append(std::vector<Paragraph>& out) const
+  {
+    for (int row = 0; row < rows_; ++row) {
+      for (int column = 0; column < cols_; ++column) {
+        Gtk::TextView* view = views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        const auto& forms = forms_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        const std::vector<Paragraph> paragraphs = window_.read_cell(*view, forms);
+        out.insert(out.end(), paragraphs.begin(), paragraphs.end());
+      }
+    }
+  }
+
+  void focus_slot(int row, int column)
+  {
+    if (row < 0 || column < 0 || row >= rows_ || column >= cols_)
+      return;
+    if (Gtk::TextView* view = views_[static_cast<size_t>(row)][static_cast<size_t>(column)])
+      view->grab_focus();
+  }
+
+  void relayout()
+  {
+    const double zoom = window_.zoom_factor();
+    const std::string font =
+        window_.settings_.default_font.empty() ? "Sans" : window_.settings_.default_font;
+    const int size = window_.settings_.default_size > 0 ? window_.settings_.default_size : 11;
+    Pango::FontDescription desc;
+    desc.set_family(font);
+    desc.set_size(static_cast<int>(static_cast<double>(size) * zoom * PANGO_SCALE));
+    for (int column = 0; column < cols_; ++column) {
+      int twips = kMinCellTwips;
+      if (column < static_cast<int>(widths_.size()) && widths_[static_cast<size_t>(column)] > 0)
+        twips = widths_[static_cast<size_t>(column)];
+      const int px = std::max(36, twips_to_px(twips, zoom));
+      for (int row = 0; row < rows_; ++row) {
+        frames_[static_cast<size_t>(row)][static_cast<size_t>(column)]->set_column_px(px);
+        Gtk::TextView* view = views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        view->override_font(desc);
+        window_.restyle_buffer(view->get_buffer());
+      }
+    }
+    queue_resize();
+  }
+
+ private:
+  bool focused_at(int& row, int& column) const
+  {
+    for (int r = 0; r < rows_; ++r) {
+      for (int c = 0; c < cols_; ++c) {
+        Gtk::TextView* view = views_[static_cast<size_t>(r)][static_cast<size_t>(c)];
+        if (view && view->has_focus()) {
+          row = r;
+          column = c;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void focus_next(int row, int column)
+  {
+    ++column;
+    if (column >= cols_) {
+      column = 0;
+      ++row;
+    }
+    if (row < rows_)
+      focus_slot(row, column);
+  }
+
+  void focus_previous(int row, int column)
+  {
+    --column;
+    if (column < 0) {
+      column = cols_ - 1;
+      --row;
+    }
+    if (row >= 0)
+      focus_slot(row, column);
+  }
+
+  bool on_key(GdkEventKey* event, int row, int column)
+  {
+    if (!event)
+      return false;
+    const guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+    const bool shift = (mods & GDK_SHIFT_MASK) != 0;
+    const bool tab = event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab;
+    const bool back = event->keyval == GDK_KEY_ISO_Left_Tab || (tab && shift);
+    if ((mods & GDK_CONTROL_MASK) == 0 && back) {
+      focus_previous(row, column);
+      return true;
+    }
+    if ((mods & GDK_CONTROL_MASK) == 0 && tab) {
+      if (row + 1 == rows_ && column + 1 == cols_) {
+        // extend_table rebuilds the buffer and destroys this sheet. Leave
+        // the key handler before that happens.
+        TableSheet* self = this;
+        Glib::signal_idle().connect_once([self] { self->window_.extend_table(*self); });
+        return true;
+      }
+      focus_next(row, column);
+      return true;
+    }
+    if ((mods & GDK_CONTROL_MASK) == 0)
+      return false;
+    if (event->keyval == GDK_KEY_z && !shift) {
+      MainWindow& window = window_;
+      Glib::signal_idle().connect_once([&window] { window.undo(); });
+      return true;
+    }
+    if (event->keyval == GDK_KEY_y || (event->keyval == GDK_KEY_z && shift) ||
+        event->keyval == GDK_KEY_Z) {
+      MainWindow& window = window_;
+      Glib::signal_idle().connect_once([&window] { window.redo(); });
+      return true;
+    }
+    if (event->keyval == GDK_KEY_a || event->keyval == GDK_KEY_c || event->keyval == GDK_KEY_v ||
+        event->keyval == GDK_KEY_x || event->keyval == GDK_KEY_A || event->keyval == GDK_KEY_C ||
+        event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_X)
+      return false;
+    return true;
+  }
+
+  MainWindow& window_;
+  int rows_ = 0;
+  int cols_ = 0;
+  std::vector<int> widths_;
+  std::vector<std::vector<Gtk::TextView*>> views_;
+  std::vector<std::vector<CellFrame*>> frames_;
+  std::vector<std::vector<std::vector<Paragraph>>> forms_;
+};
+
+void MainWindow::mount_table(const std::vector<Paragraph>& cells, bool separator)
+{
+  auto anchor = buffer_->create_child_anchor(buffer_->end());
+  if (separator)
+    buffer_->insert(buffer_->end(), "\n");
+  auto* sheet = Gtk::manage(new TableSheet(*this, cells));
+  text_.add_child_at_anchor(*sheet, anchor);
+  g_object_set_data(G_OBJECT(anchor->gobj()), "writeit-table", sheet);
+  sheet->show_all();
+}
+
+void MainWindow::append_table(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor,
+                              std::vector<Paragraph>& out) const
+{
+  if (TableSheet* sheet = sheet_from(anchor))
+    sheet->append(out);
+}
+
+int MainWindow::table_paragraph_count(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor) const
+{
+  TableSheet* sheet = sheet_from(anchor);
+  return sheet ? sheet->paragraph_count() : 0;
+}
+
+TableSheet* MainWindow::focused_sheet() const
+{
+  if (!buffer_)
+    return nullptr;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (sheet && sheet->contains_focus())
+      return sheet;
+  }
+  return nullptr;
+}
+
+TableSheet* MainWindow::sheet_at_cursor() const
+{
+  if (!buffer_)
+    return nullptr;
+  return sheet_from(buffer_->get_insert()->get_iter().get_child_anchor());
+}
+
+void MainWindow::relayout_tables()
+{
+  if (!buffer_)
+    return;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    if (TableSheet* sheet = sheet_from(iter.get_child_anchor()))
+      sheet->relayout();
+  }
+}
+
+void MainWindow::extend_table(TableSheet& sheet)
+{
+  // `sheet` is destroyed when the buffer is rebuilt. Read it first.
+  if (cell_step_)
+    on_cell_end();
+  if (!buffer_ || focused_sheet() != &sheet)
+    return;
+  size_t index = static_cast<size_t>(std::max(0, sheet.index_in_table()));
+  bool skip_sep = false;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    if (skip_sep) {
+      skip_sep = false;
+      if (iter.get_char() == '\n' && !iter.get_child_anchor())
+        continue;
+    }
+    if (auto anchor = iter.get_child_anchor()) {
+      if (sheet_from(anchor) == &sheet)
+        break;
+      TableSheet* other = sheet_from(anchor);
+      index += static_cast<size_t>(other ? other->paragraph_count() : 0);
+      skip_sep = true;
+      continue;
+    }
+    if (iter.get_char() == '\n')
+      ++index;
+  }
+  Document before = capture();
+  Document after = before;
+  if (index >= after.paragraphs.size() || !insert_table_row(after.paragraphs, index)) {
+    text_.grab_focus();
+    return;
+  }
+  size_t first = index;
+  const int id = after.paragraphs[index].cell.table;
+  while (first > 0 && after.paragraphs[first - 1].cell.table == id)
+    --first;
+  const int rows = after.paragraphs[index].cell.rows;
+  commit_document(before, after, chars_before(after.paragraphs, first));
+  if (TableSheet* next = sheet_at_cursor())
+    next->focus_slot(rows - 1, 0);
+}
+
+size_t MainWindow::document_index_at(int offset) const
+{
+  if (!buffer_)
+    return 0;
+  // A focused cell wins over the body caret: the body mark stays on the
+  // anchor while the keyboard is in the grid.
+  if (TableSheet* focused = focused_sheet()) {
+    size_t index = 0;
+    bool skip_sep = false;
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      if (skip_sep) {
+        skip_sep = false;
+        if (iter.get_char() == '\n' && !iter.get_child_anchor())
+          continue;
+      }
+      if (auto anchor = iter.get_child_anchor()) {
+        TableSheet* sheet = sheet_from(anchor);
+        if (sheet == focused)
+          return index + static_cast<size_t>(std::max(0, focused->index_in_table()));
+        index += static_cast<size_t>(sheet ? sheet->paragraph_count() : 0);
+        skip_sep = true;
+        continue;
+      }
+      if (iter.get_char() == '\n')
+        ++index;
+    }
+    return index + static_cast<size_t>(std::max(0, focused->index_in_table()));
+  }
+  size_t index = 0;
+  bool skip_sep = false;
+  const int count = buffer_->get_char_count();
+  const int at = std::max(0, std::min(offset, count));
+  const auto caret = buffer_->get_iter_at_offset(at);
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    if (skip_sep) {
+      skip_sep = false;
+      if (iter.get_char() == '\n' && !iter.get_child_anchor())
+        continue;
+    }
+    if (auto anchor = iter.get_child_anchor()) {
+      if (!(iter.compare(caret) < 0))
+        break;
+      TableSheet* sheet = sheet_from(anchor);
+      index += static_cast<size_t>(sheet ? sheet->paragraph_count() : 0);
+      skip_sep = true;
+      continue;
+    }
+    if (!(iter.compare(caret) < 0))
+      break;
+    if (iter.get_char() == '\n')
+      ++index;
+  }
+  return index;
+}
+
+void MainWindow::focus_table_caret()
+{
+  if (TableSheet* sheet = sheet_at_cursor())
+    sheet->focus_slot(0, 0);
+}
 
 void MainWindow::apply_document_page(PageSetup page)
 {

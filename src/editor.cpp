@@ -413,6 +413,38 @@ void MainWindow::lend_primary(bool lend)
 
 void MainWindow::build_editor()
 {
+  // A delete that covers a table anchor would drop the child widget. The
+  // anchor character in the undo log cannot put the grid back, so the delete
+  // is taken as a document edit instead. Connected before undo, and it stops
+  // the signal, so the history never records the bare character.
+  buffer_->signal_erase().connect([this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+    if (loading_ || restoring_ || !buffer_)
+      return;
+    bool anchor = false;
+    for (auto iter = start; iter.compare(end) < 0; ++iter) {
+      if (iter.get_child_anchor()) {
+        anchor = true;
+        break;
+      }
+    }
+    if (!anchor)
+      return;
+    const int from = start.get_offset();
+    const int to = end.get_offset();
+    const Document before = capture();
+    capture_skip_from_ = from;
+    capture_skip_to_ = to;
+    const Document after = capture();
+    capture_skip_from_ = -1;
+    capture_skip_to_ = -1;
+    g_signal_stop_emission_by_name(buffer_->gobj(), "delete-range");
+    std::weak_ptr<bool> alive = alive_;
+    Glib::signal_idle().connect_once([this, alive, before, after, from] {
+      if (alive.expired())
+        return;
+      commit_document(before, after, from);
+    });
+  });
   // Undo records every buffer change but the screen-only list tags, which
   // are recomputed after each change and may leave the tag table.
   undo_.attach(buffer_, [](const Glib::RefPtr<Gtk::TextTag>& tag) {
@@ -1036,8 +1068,38 @@ Document MainWindow::capture() const
     heading = 0;
     have_para = false;
   };
+  bool skip_sep = false;
+  // Set only when the buffer's tail is a table anchor (and its separator).
+  // A trailing newline in ordinary text still needs the final flush: that
+  // newline is an empty paragraph.
+  bool ended_on_anchor = false;
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
     const gunichar ch = iter.get_char();
+    const bool omitted = capture_skip_from_ >= 0 && iter.get_offset() >= capture_skip_from_ &&
+                         iter.get_offset() < capture_skip_to_;
+    if (skip_sep) {
+      skip_sep = false;
+      if (omitted || (ch == '\n' && !iter.get_child_anchor()))
+        continue;
+    }
+    if (omitted)
+      continue;
+    if (auto anchor = iter.get_child_anchor()) {
+      // The anchor is one character for the whole table. A tag GTK painted
+      // on it is not a paragraph of its own.
+      if (in_run || !paragraph.runs.empty() || have_para)
+        flush_paragraph();
+      append_table(anchor, doc.paragraphs);
+      paragraph = Paragraph{};
+      run = Run{};
+      in_run = false;
+      heading = 0;
+      have_para = false;
+      skip_sep = true;
+      ended_on_anchor = true;
+      continue;
+    }
+    ended_on_anchor = false;
     if (!have_para) {
       ParaFormat format;
       if (auto tag = para_tag_at(iter)) {
@@ -1091,10 +1153,16 @@ Document MainWindow::capture() const
     }
     run.text += Glib::ustring(1, ch).raw();
   }
-  // An empty last paragraph has no newline to hold its format.
-  if (!in_run && paragraph.runs.empty() && pending_mark_set_)
-    paragraph.mark = pending_mark_;
-  flush_paragraph();
+  // An anchor with nothing after it is the tail of the document. Flushing
+  // again would invent an empty paragraph. A pending empty paragraph, and a
+  // buffer that held none, still flush.
+  const bool skip_final = ended_on_anchor && !in_run && paragraph.runs.empty() && !have_para &&
+                          !pending_para_set_ && !pending_mark_set_ && !doc.paragraphs.empty();
+  if (!skip_final) {
+    if (!in_run && paragraph.runs.empty() && pending_mark_set_)
+      paragraph.mark = pending_mark_;
+    flush_paragraph();
+  }
   if (doc.paragraphs.empty())
     doc.paragraphs.push_back(Paragraph{});
   doc.styles = styles_;
@@ -1123,7 +1191,19 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   pending_para_ = ParaFormat{};
   pending_mark_set_ = false;
   pending_mark_ = Run{};
-  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+  size_t i = 0;
+  while (i < doc.paragraphs.size()) {
+    if (doc.paragraphs[i].cell.table != 0) {
+      const int id = doc.paragraphs[i].cell.table;
+      size_t j = i + 1;
+      while (j < doc.paragraphs.size() && doc.paragraphs[j].cell.table == id)
+        ++j;
+      std::vector<Paragraph> cells(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(i),
+                                   doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(j));
+      mount_table(cells, j < doc.paragraphs.size());
+      i = j;
+      continue;
+    }
     const Paragraph& paragraph = doc.paragraphs[i];
     const auto para = para_tag(para_format(paragraph));
     bool any = false;
@@ -1173,6 +1253,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
         pending_mark_set_ = true;
       }
     }
+    ++i;
   }
   // Newlines carry the line height. Tag them from the paragraph they end,
   // before the caret can paint every blank line with the widget font.
@@ -1260,7 +1341,8 @@ void MainWindow::update_actions()
   sens(table_insert_item_, true);
   sens(page_break_item_, true);
   sens(footnote_item_, notes_.size() < static_cast<size_t>(kMaxNotes));
-  const bool in_cell = buffer_ && para_at(cursor_offset()).cell.table != 0;
+  const bool in_cell =
+      buffer_ && (focused_sheet() || sheet_at_cursor() || para_at(cursor_offset()).cell.table != 0);
   sens(table_row_item_, in_cell);
   sens(table_column_item_, in_cell);
   sens(table_delete_row_item_, in_cell);
@@ -1696,15 +1778,18 @@ void MainWindow::set_heading(int from, int to, int level)
   }
 }
 
-Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag(const Run& run)
+Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                                                     const Run& run)
 {
+  if (!buffer)
+    return {};
   Run key = run;
   if (key.font.empty())
     key.font = "Sans";
   if (!known_size(key.size))
     key.size = 11;
   const Glib::ustring name = fmt_name(key);
-  auto table = buffer_->get_tag_table();
+  auto table = buffer->get_tag_table();
   auto tag = table->lookup(name);
   if (!tag) {
     tag = Gtk::TextTag::create(name);
@@ -1714,9 +1799,195 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag(const Run& run)
     tag->property_style() = key.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL;
     tag->property_underline() = key.underline ? Pango::UNDERLINE_SINGLE : Pango::UNDERLINE_NONE;
     table->add(tag);
-    raise_headings();
+    if (buffer == buffer_)
+      raise_headings();
   }
   return tag;
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag(const Run& run)
+{
+  return format_tag_on(buffer_, run);
+}
+
+void MainWindow::fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs)
+{
+  auto buffer = view.get_buffer();
+  buffer->set_text("");
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const Paragraph& paragraph = paragraphs[i];
+    for (const Run& run : paragraph.runs) {
+      if (run.image) {
+        if (auto pix = pixbuf_for(*run.image)) {
+          image_pix_[pix->gobj()] = *run.image;
+          buffer->insert_pixbuf(buffer->end(), pix);
+          continue;
+        }
+      }
+      if (run.text.empty() && run.note == 0)
+        continue;
+      Run shown = run;
+      if (shown.text.empty() && shown.note != 0)
+        shown.text = std::to_string(shown.note);
+      buffer->insert_with_tag(buffer->end(), shown.text, format_tag_on(buffer, shown));
+    }
+    if (i + 1 < paragraphs.size())
+      buffer->insert(buffer->end(), "\n");
+  }
+}
+
+std::vector<Paragraph> MainWindow::read_cell(const Gtk::TextView& view,
+                                             const std::vector<Paragraph>& forms) const
+{
+  auto buffer = const_cast<Gtk::TextView&>(view).get_buffer();
+  if (!buffer || buffer->get_char_count() == 0) {
+    if (forms.empty())
+      return {Paragraph{}};
+    Paragraph paragraph = forms.front();
+    paragraph.runs.clear();
+    return {paragraph};
+  }
+  struct Line {
+    std::vector<Run> runs;
+    std::optional<Run> mark;
+    bool saw_mark = false;
+  };
+  std::vector<Line> lines;
+  Line line;
+  Run run;
+  bool in_run = false;
+  auto flush_run = [&]() {
+    if (!in_run)
+      return;
+    Paragraph holder;
+    holder.runs = std::move(line.runs);
+    add_run(holder, run);
+    line.runs = std::move(holder.runs);
+    run = Run{};
+    in_run = false;
+  };
+  auto flush_line = [&]() {
+    flush_run();
+    lines.push_back(std::move(line));
+    line = Line{};
+  };
+  bool trailing_newline = false;
+  for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+    if (auto pix = iter.get_pixbuf()) {
+      flush_run();
+      Run image_run;
+      const auto found = image_pix_.find(pix->gobj());
+      if (found != image_pix_.end())
+        image_run.image = found->second;
+      else {
+        Image missing;
+        missing.alt = "image";
+        image_run.image = missing;
+      }
+      Paragraph holder;
+      holder.runs = std::move(line.runs);
+      add_run(holder, std::move(image_run));
+      line.runs = std::move(holder.runs);
+      trailing_newline = false;
+      continue;
+    }
+    const gunichar ch = iter.get_char();
+    if (ch == '\n') {
+      if (!in_run && line.runs.empty() && has_fmt(iter)) {
+        line.mark = format_of(iter);
+        line.saw_mark = true;
+      }
+      flush_line();
+      trailing_newline = true;
+      continue;
+    }
+    trailing_newline = false;
+    if (in_run && !iter.toggles_tag()) {
+      run.text += Glib::ustring(1, ch).raw();
+      continue;
+    }
+    const Run format = format_of(iter);
+    if (!in_run || !same_format(run, format)) {
+      flush_run();
+      run = format;
+      in_run = true;
+    }
+    run.text += Glib::ustring(1, ch).raw();
+  }
+  if (trailing_newline || lines.empty() || in_run || !line.runs.empty())
+    flush_line();
+  std::vector<Paragraph> out;
+  out.reserve(lines.size());
+  for (size_t i = 0; i < lines.size(); ++i) {
+    Paragraph paragraph;
+    if (!forms.empty())
+      paragraph = i < forms.size() ? forms[i] : forms.back();
+    if (i >= forms.size())
+      paragraph.page_break = false;
+    paragraph.runs = std::move(lines[i].runs);
+    if (paragraph.runs.empty()) {
+      if (lines[i].saw_mark)
+        paragraph.mark = lines[i].mark;
+    } else {
+      paragraph.mark.reset();
+    }
+    out.push_back(std::move(paragraph));
+  }
+  if (out.empty()) {
+    if (forms.empty())
+      return {Paragraph{}};
+    Paragraph paragraph = forms.front();
+    paragraph.runs.clear();
+    return {paragraph};
+  }
+  return out;
+}
+
+void MainWindow::restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
+{
+  if (!buffer)
+    return;
+  const double zoom = zoom_factor();
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    Run run;
+    if (parse_fmt(tag_name(tag), run))
+      tag->property_size_points() = run.size * zoom;
+  });
+}
+
+void MainWindow::on_cell_begin()
+{
+  if (loading_ || restoring_ || cell_step_ || undo_.is_open())
+    return;
+  cell_before_ = capture();
+  open_step();
+  cell_step_ = true;
+}
+
+void MainWindow::on_cell_end()
+{
+  if (!cell_step_)
+    return;
+  cell_step_ = false;
+  Document after = capture();
+  if (!(after == cell_before_)) {
+    const Document before = cell_before_;
+    const int caret = cursor_offset();
+    undo_.record_custom(
+        [this, before, caret] {
+          restoring_ = true;
+          replace_buffer(before, caret);
+          restoring_ = false;
+        },
+        [this, after, caret] {
+          restoring_ = true;
+          replace_buffer(after, caret);
+          restoring_ = false;
+        });
+  }
+  close_step(false);
+  update_title();
+  update_actions();
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
@@ -1771,6 +2042,7 @@ void MainWindow::restyle_tags()
   queue_list_tabs();
   caret_key_.clear();
   update_caret_font();
+  relayout_tables();
 }
 
 ViewGeometry MainWindow::geometry() const
@@ -2693,14 +2965,7 @@ void MainWindow::tag_paragraph(int start, const ParaFormat& format)
 
 size_t MainWindow::caret_paragraph() const
 {
-  size_t index = 0;
-  if (!buffer_)
-    return index;
-  const auto caret = buffer_->get_insert()->get_iter();
-  for (auto iter = buffer_->begin(); iter.compare(caret) < 0; ++iter)
-    if (iter.get_char() == '\n')
-      ++index;
-  return index;
+  return document_index_at(cursor_offset());
 }
 
 bool MainWindow::renumber_list(bool restart)

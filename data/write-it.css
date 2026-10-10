@@ -32,6 +32,21 @@ textview.page-text {
   border: none;
 }
 
+/* A table cell. The frame draws the grid; the text wraps inside the cell. */
+frame.table-cell {
+  border: 1px solid #444444;
+  background-color: #ffffff;
+}
+frame.table-cell border {
+  border: none;
+}
+textview.table-cell-text,
+textview.table-cell-text text {
+  background-color: #ffffff;
+  color: #000000;
+  caret-color: #000000;
+}
+
 .ruler {
   background-color: #f4f3f2;
   border-bottom: 1px solid #c8c6c4;

@@ -147,9 +147,14 @@ void UndoHistory::open(int caret, bool selection)
   redo_.clear();
 }
 
+void UndoHistory::suspend(bool on)
+{
+  suspended_ = on;
+}
+
 bool UndoHistory::recording()
 {
-  if (replaying_ || !buffer_)
+  if (suspended_ || replaying_ || !buffer_)
     return false;
   if (open_)
     return true;

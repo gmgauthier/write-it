@@ -293,12 +293,25 @@ void MainWindow::apply_next_style()
 
 void MainWindow::commit_document(const Document& before, const Document& after, int caret)
 {
+  if (cell_step_)
+    on_cell_end();
   if (before == after) {
     text_.grab_focus();
+    focus_table_caret();
     return;
   }
   const int insert = caret >= 0 ? caret : buffer_->get_insert()->get_iter().get_offset();
   const int bound = caret >= 0 ? caret : buffer_->get_selection_bound()->get_iter().get_offset();
+  auto has_table = [](const Document& doc) {
+    for (const Paragraph& paragraph : doc.paragraphs) {
+      if (paragraph.cell.table != 0)
+        return true;
+    }
+    return false;
+  };
+  // A child widget is not in the buffer's own history. While a table is
+  // involved, the rebuild is one custom step that mounts the grid again.
+  const bool table = has_table(before) || has_table(after);
   // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
   // so the rebuild's operations stand for the whole document this once.
   open_step();
@@ -307,19 +320,53 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   const std::vector<Paragraph> old_header = header_;
   const std::vector<Paragraph> old_footer = footer_;
   const std::vector<std::vector<Paragraph>> old_notes = notes_;
-  restoring_ = true;
-  // With the text the same (a style or a style's format changed), only the
-  // paragraphs that changed are retagged, so the step records them and not
-  // the whole document. Page setup and the stories are not in the buffer.
-  if (!retag_paragraphs(before, after))
-    replace_buffer(after, insert);
-  else
-    install_stories(after);
-  const int count = buffer_->get_char_count();
-  const int at = std::max(0, std::min(insert, count));
-  const int to = std::max(0, std::min(bound, count));
-  buffer_->select_range(buffer_->get_iter_at_offset(at), buffer_->get_iter_at_offset(to));
-  restoring_ = false;
+  {
+    struct Suspend {
+      UndoHistory& undo;
+      bool on;
+      Suspend(UndoHistory& history, bool hold)
+          : undo(history),
+            on(hold)
+      {
+        if (on)
+          undo.suspend(true);
+      }
+      ~Suspend()
+      {
+        if (on)
+          undo.suspend(false);
+      }
+    } suspend(undo_, table);
+    restoring_ = true;
+    // With the text the same (a style or a style's format changed), only the
+    // paragraphs that changed are retagged, so the step records them and not
+    // the whole document. Page setup and the stories are not in the buffer.
+    // A table always rebuilds: retagging would leave the anchor without a grid.
+    if (!table && retag_paragraphs(before, after))
+      install_stories(after);
+    else
+      replace_buffer(after, insert);
+    const int count = buffer_->get_char_count();
+    const int at = std::max(0, std::min(insert, count));
+    const int to = std::max(0, std::min(bound, count));
+    buffer_->select_range(buffer_->get_iter_at_offset(at), buffer_->get_iter_at_offset(to));
+    restoring_ = false;
+  }
+  if (table) {
+    const Document undo_doc = before;
+    const Document redo_doc = after;
+    undo_.record_custom(
+        [this, undo_doc, insert] {
+          restoring_ = true;
+          replace_buffer(undo_doc, insert);
+          restoring_ = false;
+        },
+        [this, redo_doc, insert] {
+          restoring_ = true;
+          replace_buffer(redo_doc, insert);
+          restoring_ = false;
+        });
+  }
   if (!(old_styles == styles_)) {
     const std::vector<Style> new_styles = styles_;
     undo_.record_custom([this, old_styles] { styles_ = old_styles; },
@@ -357,6 +404,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   ruler_.queue_draw();
   text_.queue_draw();
   text_.grab_focus();
+  focus_table_caret();
 }
 
 bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
