@@ -335,6 +335,26 @@ write_it_window_lifetime_tests = executable(
 )
 test('window-lifetime', write_it_window_lifetime_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: 2,000 key presses queued at once arrive
+# intact, and update_actions() never runs inside itself (it must not wait on
+# the clipboard, whose wait runs a main loop that takes the next key).
+write_it_fast_typing_tests = executable(
+  'write-it-fast-typing-tests',
+  'tests/test_fast_typing.cpp',
+  dependencies: [writeit_dep],
+)
+test('fast-typing', write_it_fast_typing_tests, timeout: 60, is_parallel: false)
+
+# The real window under a display: Paste follows the clipboard once the main
+# loop has run, and a window closed with a clipboard question in flight is
+# not reached by the answer.
+write_it_clipboard_paste_tests = executable(
+  'write-it-clipboard-paste-tests',
+  'tests/test_clipboard_paste.cpp',
+  dependencies: [writeit_dep],
+)
+test('clipboard-paste', write_it_clipboard_paste_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: what overflows the toolbars at 960 px and
 # at the narrowest reaches the overflow menus with its label, and does there
 # what its button or box does.

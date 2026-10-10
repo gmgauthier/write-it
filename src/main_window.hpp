@@ -155,6 +155,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool dirty() const;
   void update_title();
   void update_actions();
+  // Asks the clipboard, without waiting, whether it holds text; the answer
+  // sets clipboard_text_ and Paste.
+  void refresh_clipboard();
+  void apply_paste();
   int cursor_offset() const;
   void update_caret_font();
 
@@ -445,6 +449,20 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::map<std::string, int> tab_widths_;
   // Paste's sensitivity follows the clipboard, which outlives the window.
   sigc::connection clipboard_owner_;
+  // Whether the clipboard held text when it last answered. Never waited
+  // for: a wait runs a main loop of its own, which takes the next key press
+  // and updates the actions inside themselves until the stack overflows.
+  // refresh_clipboard() asks, and the answer sets this through the loop.
+  bool clipboard_text_ = false;
+  // Lives as long as the window. An answer from the clipboard can arrive
+  // after the window has closed; it holds this weakly and finds it gone.
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+  // update_actions() is running: it never runs inside itself.
+  bool updating_actions_ = false;
+  // How deep update_actions() is right now, and the deepest it has been:
+  // the window tests read these to see that it never runs inside itself.
+  int actions_depth_ = 0;
+  int actions_depth_peak_ = 0;
   // The buffer's mark-set. A window closed with text selected gives up the
   // selection as its text view unrealizes, which moves the marks after the
   // menus are gone: the destructor cuts it first.
