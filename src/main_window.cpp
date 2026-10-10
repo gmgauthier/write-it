@@ -755,17 +755,26 @@ void MainWindow::scroll_to_caret()
     if (want != value)
       adj->set_value(want);
   };
-  // On the first line, or the last, all the way: the page's edge and the
-  // gray beyond it show, not a margin short of them.
+  // On the first line, all the way to the top: the page's edge and the gray
+  // above it show. On the last line, all the way to the bottom only when
+  // that line is already within a screen of the sheet's foot, so the edge
+  // and the gray under it show, not a margin short of them. A short page's
+  // last line sits near the top of the sheet; jumping to the foot would
+  // hide the line just typed.
   Gdk::Rectangle first;
   Gdk::Rectangle last;
   text_.get_iter_location(buffer_->begin(), first);
   text_.get_iter_location(buffer_->end(), last);
   auto v = paste_.get_vadjustment();
+  const double page = v->get_page_size();
+  // `y` is the caret line in the board's coordinates, which is what the
+  // pasteboard's adjustment measures. At the foot, scrolling to the bottom
+  // still leaves that line on screen.
+  const bool last_at_foot = page > 0 && v->get_upper() - static_cast<double>(y) <= page;
   if (rect.get_y() <= first.get_y())
     v->set_value(v->get_lower());
-  else if (rect.get_y() >= last.get_y())
-    v->set_value(std::max(v->get_lower(), v->get_upper() - v->get_page_size()));
+  else if (rect.get_y() >= last.get_y() && last_at_foot)
+    v->set_value(std::max(v->get_lower(), v->get_upper() - page));
   else
     reveal(v, y, rect.get_height());
   // Sideways too, for a page wider than the window (200% on a 960 px window).

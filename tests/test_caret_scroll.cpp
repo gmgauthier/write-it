@@ -289,7 +289,7 @@ std::string long_letter()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 179;
+constexpr int kChecks = 183;
 
 int main(int argc, char* argv[])
 {
@@ -308,6 +308,30 @@ int main(int argc, char* argv[])
   const std::string letter = Glib::build_filename(home, "long.rtf");
   Glib::file_set_contents(letter, long_letter());
   const auto ctrl = GDK_CONTROL_MASK;
+
+  // A short page. Return at the end of the first line leaves the caret on
+  // the buffer's last line, near the top of the A4 sheet. The pasteboard
+  // stays there. The foot of the sheet is empty, and jumping to it would
+  // hide the line just typed.
+  {
+    writeit::MainWindow window;
+    window.show();
+    settle();
+    MainWindowProbe::zoom(window, 100);
+    settle();
+    MainWindowProbe::text(window).grab_focus();
+    settle();
+    key(window, GDK_KEY_h);
+    key(window, GDK_KEY_i);
+    key(window, GDK_KEY_Return);
+    CHECK(caret_line(window) == 1);
+    auto v = MainWindowProbe::scroller(window).get_vadjustment();
+    CHECK(v->get_upper() - v->get_page_size() > v->get_lower() + 1);
+    CHECK(caret_visible(window, "short page Return"));
+    CHECK(at_top(window, "short page Return"));
+    window.hide();
+    settle();
+  }
 
   // A first launch is at Fit width. The caret stays in view there, and when
   // a zoom takes the page from Fit width to 200% and back.
