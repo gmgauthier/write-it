@@ -12,7 +12,7 @@ LCOS itself: [https://github.com/BryanLunduke/LCOS](https://github.com/BryanLund
 
 ## Status
 
-**M4 (Spell, print, templates) is done. M5 is next.** Typing, character format, undo, find and replace, and RTF open and save are in. Recent files are in. Plain text imports as paragraphs, and Markdown import and export cover headings, paragraphs, bold, italic, and image paths. From M2, paragraph indents in inches or centimetres, left, center, right, and justified alignment, Draft view, bulleted and numbered lists, and named styles are in. From M3, page setup, columns, tables, headers, footers, footnotes, and pictures are in. From M4, spelling, the system print dialog, a shipped RTF starter, and Markdown lists and pipe tables are in. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
+**Write-It 1.0.0 is released.** Typing, character format, undo, find and replace, and RTF open and save are in. Recent files are in. Plain text imports as paragraphs, and Markdown import and export cover headings, paragraphs, bold, italic, and image paths. From M2, paragraph indents in inches or centimetres, left, center, right, and justified alignment, Draft view, bulleted and numbered lists, and named styles are in. From M3, page setup, columns, tables, headers, footers, footnotes, and pictures are in. From M4, spelling, the system print dialog, a shipped RTF starter, and Markdown lists and pipe tables are in. The packaged release is `v1.0.0` at M5. The specification and the M0–M5 milestone plan are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Save writes RTF. Export writes Markdown.
 
