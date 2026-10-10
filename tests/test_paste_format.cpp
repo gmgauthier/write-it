@@ -292,7 +292,8 @@ std::string as(const writeit::Document& doc, size_t i, const std::string& text)
 
 // A document of one paragraph per text, each in the style given ("Bullet"
 // and "Number" make a Normal list item), through RTF as a file would come.
-writeit::Document make(const std::vector<std::pair<std::string, std::string>>& paras)
+writeit::Document make(const std::vector<std::pair<std::string, std::string>>& paras,
+                       const std::vector<int>& left = {})
 {
   writeit::Document d = writeit::blank_document("Sans", 11);
   d.paragraphs.clear();
@@ -311,6 +312,11 @@ writeit::Document make(const std::vector<std::pair<std::string, std::string>>& p
       d.paragraphs[i].list = writeit::ListFormat(writeit::ListKind::Number, 0);
     else if (style != "Normal")
       writeit::apply_style(d, i, i, style);
+    // A left indent set directly, in twips.
+    if (i < left.size() && left[i] > 0) {
+      d.paragraphs[i].indents.left = left[i];
+      d.paragraphs[i].direct |= writeit::kDirectLeft;
+    }
   }
   writeit::Document back;
   writeit::rtf_import(writeit::rtf_export(d), back);
@@ -366,7 +372,7 @@ void para_case(const char* name, const writeit::Document& doc, int from, int to,
 }
 }  // namespace
 
-constexpr int kChecks = 168;
+constexpr int kChecks = 176;
 
 int main(int argc, char* argv[])
 {
@@ -620,6 +626,17 @@ int main(int argc, char* argv[])
               return as(d, 0, "hhhh") + as(d, 0, "bbbbhh") + as(d, 1, "bbbb") + as(d, 1, "nn") +
                      as(d, 2, "nnnn");
             });
+  // Direct indents: A at 1", D at 0.5". The paragraph the first pasted end
+  // closes gets A's indents; the text after the last end keeps D's.
+  {
+    const writeit::Document doc =
+        make({{"aaaa", "Normal"}, {"bbbb", "Block Text"}, {"dddd", "Normal"}}, {1440, 0, 720});
+    para_case("direct indents", doc, 2, 12, 12, "aaaa\nbbbb\nddaa\nbbbb\ndddd",
+              [](const writeit::Document& d) {
+                return as(d, 0, "aaaa") + as(d, 1, "bbbb") + as(d, 0, "ddaa") + as(d, 1, "bbbb") +
+                       as(d, 2, "dddd");
+              });
+  }
   // No paragraph end in the paste: no paragraph format changes.
   para_case("no paragraph end", hbn, 6, 8, 12, "hhhh\nbbbb\nnnbbnn",
             [](const writeit::Document& d) {
