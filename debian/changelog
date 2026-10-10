@@ -1,0 +1,5 @@
+write-it (0.1.0-1) unstable; urgency=medium
+
+  * Package the word processor.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sat, 10 Oct 2026 22:56:18 +0100

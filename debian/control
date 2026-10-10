@@ -1,0 +1,31 @@
+Source: write-it
+Section: editors
+Priority: optional
+Maintainer: Greg Gauthier <gmgauthier@protonmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ meson (>= 0.57),
+ ninja-build,
+ pkg-config,
+ g++,
+ libgtkmm-3.0-dev,
+ zlib1g-dev,
+ xvfb,
+ xauth,
+ desktop-file-utils
+Standards-Version: 4.7.0
+Homepage: https://github.com/gmgauthier/write-it
+Vcs-Git: https://github.com/gmgauthier/write-it.git
+Vcs-Browser: https://github.com/gmgauthier/write-it
+Rules-Requires-Root: no
+
+Package: write-it
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends}
+Recommends:
+ aspell
+Description: word processor for The Lunduke Computer Operating System
+ Write-It is a single-window gtkmm-3 word processor in the Word 97
+ shape. It saves RTF. Local files only.

@@ -85,6 +85,12 @@ install_data(
 )
 
 install_data(
+  'brand/icon-tile.svg',
+  rename: 'write-it.svg',
+  install_dir: get_option('datadir') / 'icons' / 'hicolor' / 'scalable' / 'apps',
+)
+
+install_data(
   'data/write-it.css',
   install_dir: get_option('datadir') / 'write-it',
 )

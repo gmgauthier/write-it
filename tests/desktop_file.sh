@@ -19,6 +19,8 @@ fail() {
 }
 
 grep -qx 'Exec=write-it %F' "$FILE" || fail "Exec is not 'write-it %F'"
+grep -qx 'Name=Write-It' "$FILE" || fail "Name is not 'Write-It'"
+grep -qx 'Icon=write-it' "$FILE" || fail "Icon is not 'write-it'"
 mime=$(sed -n 's/^MimeType=//p' "$FILE")
 has_type() {
   case ";$mime" in
