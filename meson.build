@@ -374,6 +374,16 @@ write_it_font_size_ui_tests = executable(
 )
 test('font-size-ui', write_it_font_size_ui_tests, timeout: 60, is_parallel: false)
 
+# The real window under a display: Format > Style...'s size field refuses
+# what the toolbar's size box refuses, with its messages, keeping the dialog
+# open and the style as it was.
+write_it_style_size_ui_tests = executable(
+  'write-it-style-size-ui-tests',
+  'tests/test_style_size_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('style-size-ui', write_it_style_size_ui_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: a list label wider than its hang moves a
 # left-aligned or justified item's text to the next default tab stop.
 write_it_list_tabs_tests = executable(
