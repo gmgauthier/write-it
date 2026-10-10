@@ -30,6 +30,8 @@ struct Settings {
   std::vector<std::string> recent;
   // Tools > Options... "Measurement units". Stored as units=in or units=cm.
   Units units = Units::Inches;
+  // Tools > Options... "Dictionary". The aspell dictionary Spelling… uses.
+  std::string dictionary = "en";
 
   void load();
   void save() const;
