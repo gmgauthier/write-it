@@ -173,6 +173,14 @@ int page_text_twips(const PageSetup& page)
   return std::max(kMinTextTwips, clamped.paper_width - clamped.margin_left - clamped.margin_right);
 }
 
+int table_width_limit(const PageSetup& page)
+{
+  const PageSetup clamped = clamp_page(page);
+  const int text = page_text_twips(clamped);
+  const int through_right = clamped.paper_width - clamped.margin_left;
+  return std::max(text, through_right);
+}
+
 bool insert_table(std::vector<Paragraph>& paragraphs, size_t at, int rows, int columns,
                   int text_width)
 {
@@ -332,6 +340,164 @@ bool delete_table_column(std::vector<Paragraph>& paragraphs, size_t index)
   if (paragraphs.empty())
     paragraphs.emplace_back();
   return true;
+}
+
+bool fit_table_widths(std::vector<int>& widths, int total, int limit)
+{
+  const int columns = static_cast<int>(widths.size());
+  if (columns < 1)
+    return false;
+  const int floor_sum = kMinCellTwips * columns;
+  if (limit < floor_sum)
+    return false;
+  const int target = std::max(floor_sum, std::min(total, limit));
+  if (columns == 1) {
+    widths[0] = target;
+    return true;
+  }
+  long long sum = 0;
+  for (int width : widths)
+    sum += std::max(0, width);
+  std::vector<int> next(static_cast<size_t>(columns), kMinCellTwips);
+  if (sum <= 0) {
+    const int each = target / columns;
+    int used = 0;
+    for (int i = 0; i + 1 < columns; ++i) {
+      next[static_cast<size_t>(i)] = each;
+      used += each;
+    }
+    next.back() = target - used;
+  } else {
+    long long used = 0;
+    for (int i = 0; i + 1 < columns; ++i) {
+      long long piece =
+          (static_cast<long long>(std::max(0, widths[static_cast<size_t>(i)])) * target) / sum;
+      if (piece < kMinCellTwips)
+        piece = kMinCellTwips;
+      if (piece > target)
+        piece = target;
+      next[static_cast<size_t>(i)] = static_cast<int>(piece);
+      used += piece;
+    }
+    long long last = static_cast<long long>(target) - used;
+    // The last column takes the remainder, and borrows from earlier columns
+    // when that remainder is under the minimum.
+    if (last < kMinCellTwips) {
+      long long need = kMinCellTwips - last;
+      last = kMinCellTwips;
+      for (int i = columns - 2; i >= 0 && need > 0; --i) {
+        int& earlier = next[static_cast<size_t>(i)];
+        const long long spare = static_cast<long long>(earlier) - kMinCellTwips;
+        const long long take = std::min(std::max(0LL, spare), need);
+        earlier -= static_cast<int>(take);
+        need -= take;
+      }
+    }
+    next.back() = static_cast<int>(last);
+  }
+  widths = std::move(next);
+  return true;
+}
+
+bool set_table_column_width(std::vector<int>& widths, int column, int width, int limit)
+{
+  const int columns = static_cast<int>(widths.size());
+  if (columns < 1 || column < 0 || column >= columns)
+    return false;
+  const int floor_sum = kMinCellTwips * columns;
+  if (limit < floor_sum)
+    return false;
+  const int max_column = limit - kMinCellTwips * (columns - 1);
+  const int desired = std::max(kMinCellTwips, std::min(width, max_column));
+  if (columns == 1) {
+    widths[0] = desired;
+    return true;
+  }
+  long long others = 0;
+  for (int i = 0; i < columns; ++i) {
+    if (i != column)
+      others += std::max(0, widths[static_cast<size_t>(i)]);
+  }
+  if (static_cast<long long>(desired) + others <= limit) {
+    widths[static_cast<size_t>(column)] = desired;
+    return true;
+  }
+  std::vector<int> rest;
+  rest.reserve(static_cast<size_t>(columns - 1));
+  for (int i = 0; i < columns; ++i) {
+    if (i != column)
+      rest.push_back(std::max(0, widths[static_cast<size_t>(i)]));
+  }
+  const int room = limit - desired;
+  if (!fit_table_widths(rest, room, room))
+    return false;
+  std::vector<int> next = widths;
+  next[static_cast<size_t>(column)] = desired;
+  size_t at = 0;
+  for (int i = 0; i < columns; ++i) {
+    if (i == column)
+      continue;
+    next[static_cast<size_t>(i)] = rest[at++];
+  }
+  widths = std::move(next);
+  return true;
+}
+
+bool move_table_edge(std::vector<int>& widths, int column, int delta, int limit)
+{
+  const int columns = static_cast<int>(widths.size());
+  if (column < 0 || column >= columns)
+    return false;
+  if (delta == 0)
+    return true;
+  if (column + 1 == columns) {
+    long long sum = 0;
+    for (int width : widths) {
+      sum += std::max(0, width);
+      if (sum > 2000000000LL)
+        sum = 2000000000LL;
+    }
+    long long total = sum + static_cast<long long>(delta);
+    if (total > 2000000000LL)
+      total = 2000000000LL;
+    if (total < 0)
+      total = 0;
+    return fit_table_widths(widths, static_cast<int>(total), limit);
+  }
+  const long long left = widths[static_cast<size_t>(column)];
+  const long long right = widths[static_cast<size_t>(column + 1)];
+  const long long pair = left + right;
+  if (pair < static_cast<long long>(kMinCellTwips) * 2)
+    return false;
+  long long next = left + static_cast<long long>(delta);
+  const long long low = kMinCellTwips;
+  const long long high = pair - kMinCellTwips;
+  if (next < low)
+    next = low;
+  if (next > high)
+    next = high;
+  widths[static_cast<size_t>(column)] = static_cast<int>(next);
+  widths[static_cast<size_t>(column + 1)] = static_cast<int>(pair - next);
+  return true;
+}
+
+bool apply_table_widths(std::vector<Paragraph>& paragraphs, size_t index,
+                        const std::vector<int>& widths)
+{
+  if (!in_table(paragraphs, index))
+    return false;
+  const int id = paragraphs[index].cell.table;
+  const int columns = paragraphs[index].cell.columns;
+  if (columns < 1 || static_cast<int>(widths.size()) != columns)
+    return false;
+  bool any = false;
+  for (Paragraph& paragraph : paragraphs) {
+    if (paragraph.cell.table != id)
+      continue;
+    paragraph.cell.widths = widths;
+    any = true;
+  }
+  return any;
 }
 
 }  // namespace writeit

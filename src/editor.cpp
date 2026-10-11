@@ -290,6 +290,50 @@ int heading_level_name(const std::string& name)
   return 0;
 }
 
+// A cell's own paragraph tag: indents and alignment only. The body's para
+// tag carries the page margins, so a cell does not use it.
+std::string cpara_name(const Indents& indents, Align align)
+{
+  std::string name = "cpara";
+  append_field(name, indents.left);
+  append_field(name, indents.right);
+  append_field(name, indents.first);
+  append_field(name, static_cast<int>(align));
+  return name;
+}
+
+bool parse_cpara(const std::string& name, Indents& indents, Align& align)
+{
+  const std::string prefix = std::string("cpara") + '\x1f';
+  if (name.compare(0, prefix.size(), prefix) != 0)
+    return false;
+  std::vector<int> values;
+  std::string current;
+  for (size_t i = prefix.size(); i <= name.size(); ++i) {
+    if (i == name.size() || name[i] == '\x1f') {
+      if (current.empty())
+        return false;
+      try {
+        values.push_back(std::stoi(current));
+      } catch (const std::exception&) {
+        return false;
+      }
+      current.clear();
+      if (i == name.size())
+        break;
+    } else {
+      current.push_back(name[i]);
+    }
+  }
+  if (values.size() != 4 || values[3] < 0 || values[3] > static_cast<int>(Align::Justify))
+    return false;
+  indents.left = values[0];
+  indents.right = values[1];
+  indents.first = values[2];
+  align = static_cast<Align>(values[3]);
+  return true;
+}
+
 void add_run(Paragraph& paragraph, Run run)
 {
   const bool keep = !run.text.empty() || run.image || run.note != 0;
@@ -613,18 +657,11 @@ void MainWindow::build_editor()
   buffer_->signal_apply_tag().connect(changes_on_tag);
   buffer_->signal_remove_tag().connect(changes_on_tag);
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
-  // The style combo takes the keyboard without the caret leaving the cell.
-  // Only the body text view clears that memory.
-  text_.signal_focus_in_event().connect(
-      [this](GdkEventFocus*) {
-        if (!loading_ && !restoring_) {
-          // The caret came here. A highlight left in a cell is no longer the
-          // selection. The style combo never focuses the body, so it does not
-          // take that highlight.
-          release_other_selections(&text_);
-          cell_edit_.on = false;
-          cell_typing_on_ = false;
-        }
+  // The style list and the Table menu focus the body while the caret is still
+  // in the cell. A click or a key here is the caret actually moving.
+  text_.signal_button_press_event().connect(
+      [this](GdkEventButton*) {
+        leave_cell_edit();
         return false;
       },
       false);
@@ -708,13 +745,15 @@ void MainWindow::connect_format()
   });
   if (style_item_)
     style_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_style_dialog));
+  // The list takes the keyboard from a cell. Put it back there, as the style
+  // list does; the body is the fallback when no cell was being edited.
   font_combo_.property_popup_shown().signal_changed().connect([this] {
     if (!font_combo_.property_popup_shown().get_value())
-      text_.grab_focus();
+      restore_edit_focus();
   });
   size_combo_.property_popup_shown().signal_changed().connect([this] {
     if (!size_combo_.property_popup_shown().get_value()) {
-      text_.grab_focus();
+      restore_edit_focus();
       return;
     }
     // Text in the box that the list does not hold (a size being typed)
@@ -1487,6 +1526,9 @@ void MainWindow::update_actions()
   sens(table_column_item_, in_cell);
   sens(table_delete_row_item_, in_cell);
   sens(table_delete_column_item_, in_cell);
+  // Opening the Table menu leaves the cell, and the body caret may still be
+  // outside the table. The cell that was edited stays available.
+  sens(table_width_item_, in_cell || cell_edit_.on);
   updating_actions_ = false;
   --actions_depth_;
 }
@@ -1965,6 +2007,7 @@ void MainWindow::fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& pa
   buffer->set_text("");
   for (size_t i = 0; i < paragraphs.size(); ++i) {
     const Paragraph& paragraph = paragraphs[i];
+    const int start = buffer->end().get_offset();
     for (const Run& run : paragraph.runs) {
       if (run.image) {
         if (auto pix = pixbuf_for(*run.image)) {
@@ -1982,6 +2025,9 @@ void MainWindow::fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& pa
     }
     if (i + 1 < paragraphs.size())
       buffer->insert(buffer->end(), "\n");
+    // Signals are connected after fill_cell, so these tags do not re-enter
+    // tag_cell_insert.
+    tag_cell_paragraph(buffer, start, buffer->end().get_offset(), paragraph);
   }
 }
 
@@ -2101,7 +2147,38 @@ void MainWindow::restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
     Run run;
     if (parse_fmt(tag_name(tag), run))
       tag->property_size_points() = run.size * zoom;
+    const int level = heading_level_name(tag_name(tag));
+    if (level > 0) {
+      tag->property_pixels_above_lines() = static_cast<int>(8 * zoom);
+      tag->property_pixels_below_lines() = static_cast<int>(4 * zoom);
+    }
+    Indents indents;
+    Align align = Align::Left;
+    if (parse_cpara(tag_name(tag), indents, align))
+      style_cell_para(tag, indents, align);
   });
+}
+
+void MainWindow::style_cell_face(Gtk::TextView& view, const std::vector<Paragraph>& forms)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer || forms.empty())
+    return;
+  for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+    if (iter.get_char() == '\n')
+      continue;
+    if (has_fmt(iter))
+      return;
+  }
+  const Paragraph& paragraph = forms.front();
+  const Run face = paragraph.mark ? *paragraph.mark : style_typing(paragraph.style);
+  Pango::FontDescription desc;
+  desc.set_family(face.font.empty() ? "Sans" : face.font);
+  const double size = known_size(face.size) ? face.size : 11;
+  desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
+  desc.set_weight(face.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
+  desc.set_style(face.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
+  view.override_font(desc);
 }
 
 void MainWindow::on_cell_begin()
@@ -2139,10 +2216,13 @@ void MainWindow::on_cell_end()
   update_actions();
 }
 
-Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
+Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                                                      int level)
 {
+  if (!buffer)
+    return {};
   const Glib::ustring name = "heading-" + std::to_string(level);
-  auto table = buffer_->get_tag_table();
+  auto table = buffer->get_tag_table();
   auto tag = table->lookup(name);
   if (tag)
     return tag;
@@ -2154,6 +2234,76 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
   tag->property_pixels_below_lines() = static_cast<int>(4 * z);
   table->add(tag);
   return tag;
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
+{
+  return heading_tag_on(buffer_, level);
+}
+
+void MainWindow::style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents,
+                                 Align align) const
+{
+  if (!tag)
+    return;
+  if (align == Align::Center)
+    tag->property_justification() = Gtk::JUSTIFY_CENTER;
+  else if (align == Align::Right)
+    tag->property_justification() = Gtk::JUSTIFY_RIGHT;
+  else if (align == Align::Justify)
+    tag->property_justification() = Gtk::JUSTIFY_FILL;
+  else
+    tag->property_justification() = Gtk::JUSTIFY_LEFT;
+  // No indent leaves the cell view's own padding in charge. A tag margin
+  // replaces that padding, the way a body paragraph tag replaces the page's.
+  if (indents == Indents{})
+    return;
+  const int hang = std::min(0, indents.first);
+  tag->property_left_margin() = std::max(0, indent_px(indents.left + hang));
+  tag->property_right_margin() = std::max(0, indent_px(indents.right));
+  tag->property_indent() = indent_px(indents.first);
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                                                     const Indents& indents, Align align)
+{
+  if (!buffer)
+    return {};
+  const Glib::ustring name = cpara_name(indents, align);
+  auto table = buffer->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    style_cell_para(tag, indents, align);
+    table->add(tag);
+  }
+  return tag;
+}
+
+void MainWindow::tag_cell_paragraph(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int from, int to,
+                                    const Paragraph& paragraph)
+{
+  if (!buffer || from >= to)
+    return;
+  if (auto tag = cell_para_tag(buffer, paragraph.indents, paragraph.align)) {
+    buffer->apply_tag(tag, buffer->get_iter_at_offset(from), buffer->get_iter_at_offset(to));
+  }
+  if (paragraph.heading < 1 || paragraph.heading > 6)
+    return;
+  auto heading = heading_tag_on(buffer, paragraph.heading);
+  if (!heading)
+    return;
+  for (int i = from; i < to;) {
+    if (buffer->get_iter_at_offset(i).get_char() == '\n') {
+      ++i;
+      continue;
+    }
+    int j = i + 1;
+    while (j < to && buffer->get_iter_at_offset(j).get_char() != '\n')
+      ++j;
+    buffer->apply_tag(heading, buffer->get_iter_at_offset(i), buffer->get_iter_at_offset(j));
+    i = j;
+  }
 }
 
 void MainWindow::raise_headings()
@@ -2742,10 +2892,15 @@ void MainWindow::on_font_changed()
   const Glib::ustring name = font_combo_.get_active_text();
   if (name.empty())
     return;
-  apply_run_edit([name](Run& run) {
+  auto edit = [name](Run& run) {
     run.font = name.raw();
     run.direct |= kDirectFont;
-  });
+  };
+  if (editing_cell()) {
+    edit_cell_runs(edit);
+    return;
+  }
+  apply_run_edit(edit);
 }
 
 void MainWindow::on_size_changed()
@@ -2759,10 +2914,15 @@ void MainWindow::on_size_changed()
   const double size = parse_size(size_combo_.get_active_text().raw());
   if (size == 0)
     return;
-  apply_run_edit([size](Run& run) {
+  auto edit = [size](Run& run) {
     run.size = size;
     run.direct |= kDirectSize;
-  });
+  };
+  if (editing_cell()) {
+    edit_cell_runs(edit);
+    return;
+  }
+  apply_run_edit(edit);
 }
 
 void MainWindow::on_size_entered()
@@ -2773,25 +2933,33 @@ void MainWindow::on_size_entered()
   const std::string refusal = size_refusal(typed);
   if (refusal.empty()) {
     const double size = parse_size(typed);
-    apply_run_edit([size](Run& run) {
+    auto edit = [size](Run& run) {
       run.size = size;
       run.direct |= kDirectSize;
-    });
+    };
+    if (editing_cell())
+      edit_cell_runs(edit);
+    else
+      apply_run_edit(edit);
     return;
   }
   // Not a size Word takes (10.3, 2000, "big"). As Word 97 does, say why,
   // then show the size of the text, which keeps it, selected in the box to
-  // type over.
+  // type over. A cell keeps the entry: restoring the cell would take it.
   Gtk::MessageDialog dialog(*this, refusal, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
   dialog.set_title("Write-It");
   dialog.run();
   dialog.hide();
-  Gtk::TextBuffer::iterator start_iter;
-  Gtk::TextBuffer::iterator end_iter;
-  if (buffer_->get_selection_bounds(start_iter, end_iter) && start_iter != end_iter)
-    show_format(format_of(start_iter));
-  else
-    show_format(typing_);
+  if (editing_cell()) {
+    show_cell_format();
+  } else {
+    Gtk::TextBuffer::iterator start_iter;
+    Gtk::TextBuffer::iterator end_iter;
+    if (buffer_->get_selection_bounds(start_iter, end_iter) && start_iter != end_iter)
+      show_format(format_of(start_iter));
+    else
+      show_format(typing_);
+  }
   if (Gtk::Entry* entry = size_combo_.get_entry()) {
     entry->grab_focus();
     entry->select_region(0, -1);
@@ -3300,6 +3468,9 @@ bool MainWindow::shift_list_level(int delta)
 
 bool MainWindow::on_text_key(GdkEventKey* event)
 {
+  // Typing in the body leaves the cell a menu or the style list had focused
+  // away from. The key still does what it would in the body.
+  leave_cell_edit();
   // Word's list keys. Tab and Shift+Tab at the start of a list item, or over
   // several paragraphs, move it down or up a level. Enter on an empty item
   // and Backspace at the start of one end the list there.

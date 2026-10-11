@@ -264,6 +264,9 @@ PageSetup clamp_page(PageSetup page);
 bool page_metrics_default(const PageSetup& page);
 // The text width between the margins, at least a quarter inch.
 int page_text_twips(const PageSetup& page);
+// How wide a table may be: the text width, or out through the right margin
+// to the page edge, whichever is wider.
+int table_width_limit(const PageSetup& page);
 
 // Inserts `rows` by `columns` empty cells at `at` (clamped to the vector).
 // Widths share `text_width`. False when the counts are out of range.
@@ -277,6 +280,25 @@ bool insert_table_row(std::vector<Paragraph>& paragraphs, size_t index);
 bool delete_table_row(std::vector<Paragraph>& paragraphs, size_t index);
 bool insert_table_column(std::vector<Paragraph>& paragraphs, size_t index);
 bool delete_table_column(std::vector<Paragraph>& paragraphs, size_t index);
+// Scales `widths` so the columns add up to `total`, each at least 200 twips.
+// `total` is brought inside the columns' minimum and `limit`. The last column
+// takes the remainder. False when `limit` cannot hold the columns.
+bool fit_table_widths(std::vector<int>& widths, int total, int limit);
+// Sets one column. The others stay when the table still fits in `limit`;
+// otherwise they scale into the room that is left. A one-column table's
+// width is the table width. False when the column is out of range or `limit`
+// cannot hold the columns.
+bool set_table_column_width(std::vector<int>& widths, int column, int width, int limit);
+// Moves the right edge of `column` by `delta` twips. An interior edge keeps
+// the table's width and leaves both columns at least 200 twips. The last
+// column's edge changes the table width, within `limit`. False when `column`
+// is out of range, or an interior pair cannot hold two columns. A zero delta
+// leaves `widths` as it is and returns true.
+bool move_table_edge(std::vector<int>& widths, int column, int delta, int limit);
+// Writes `widths` onto every paragraph of the table at `index`. False when
+// `index` is not a cell, or `widths` is not one entry per column.
+bool apply_table_widths(std::vector<Paragraph>& paragraphs, size_t index,
+                        const std::vector<int>& widths);
 
 // The Paragraph dialog's check, as Word 97 does it: false when the first
 // line would start left of the left margin (a hanging indent larger than
