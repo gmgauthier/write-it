@@ -2657,7 +2657,10 @@ void MainWindow::show_size(double run_size)
 Run MainWindow::style_typing(const std::string& name) const
 {
   Run run;
-  if (const Style* style = find_style(sheet(), name))
+  // sheet() is a temporary. find_style's pointer has to outlive that call,
+  // so the vector stays in scope until the format is copied.
+  const std::vector<Style> styles = sheet();
+  if (const Style* style = find_style(styles, name))
     run = style->format;
   if (run.font.empty())
     run.font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
