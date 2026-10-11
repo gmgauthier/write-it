@@ -49,12 +49,15 @@ std::function<bool(const std::string&)> list(std::initializer_list<const char*> 
 
 }  // namespace
 
-constexpr int kChecks = 58;
+constexpr int kChecks = 68;
 
 int main()
 {
   CHECK(writeit::fold_word("Cat") == "cat");
   CHECK(writeit::fold_word("caf\u00e9") == "caf\u00e9");
+  CHECK(writeit::fold_word("Caf\u00e9") == "caf\u00e9");
+  CHECK(writeit::fold_word("CAF\u00c9") == "caf\u00e9");
+  CHECK(writeit::fold_word("\u00c9clair") == "\u00e9clair");
   CHECK(writeit::dictionary_name_ok("en"));
   CHECK(writeit::dictionary_name_ok("en_GB"));
   CHECK(writeit::dictionary_name_ok("en-US"));
@@ -94,6 +97,21 @@ int main()
     CHECK(misses[1].begin == 4);
   }
   CHECK(writeit::spelling_misses({words({"1994"})}, known).empty());
+  CHECK(writeit::spelling_misses({words({"Caf\u00e9"})}, list({"caf\u00e9"})).empty());
+  CHECK(writeit::spelling_misses({words({"\u00c9clair"})}, list({"\u00e9clair"})).empty());
+  {
+    const std::vector<SpellMiss> misses =
+        writeit::spelling_misses({words({"hello\u2014world"})}, list({}));
+    CHECK(misses.size() == 2);
+    CHECK(misses.empty() || misses[0].word == "hello");
+    CHECK(misses.size() < 2 || misses[1].word == "world");
+  }
+  {
+    const std::vector<SpellMiss> misses =
+        writeit::spelling_misses({words({"well-known"})}, list({}));
+    CHECK(misses.size() == 1);
+    CHECK(misses.empty() || misses[0].word == "well-known");
+  }
   CHECK(writeit::spelling_misses({Paragraph{}}, known).empty());
   {
     Paragraph cell = words({"asdf"});

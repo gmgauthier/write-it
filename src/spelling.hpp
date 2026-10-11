@@ -26,17 +26,18 @@ struct SpellMiss {
   size_t note = 0;
 };
 
-// ASCII letters folded. Other bytes, including the rest of a UTF-8 character,
-// stay as they are, so a dictionary can be stored in lowercase.
+// Letters folded, ASCII and the rest of a UTF-8 character, so a dictionary
+// can be stored in lowercase. Éclair and éclair fold to the same word.
 std::string fold_word(const std::string& word);
 
 // A dictionary aspell will accept as -d: letters, digits, '_' and '-'.
 bool dictionary_name_ok(const std::string& name);
 
-// Words `known` rejects. A word is a run of letters. An apostrophe or a
-// hyphen stays in the word when it has a letter on each side, so "don't"
-// and "well-known" are each one word. A picture is not text. `known` is
-// given the word as it is written; fold_word() is how a fixed list compares.
+// Words `known` rejects. A word is a run of Unicode letters. An em dash or
+// any other non-letter ends the word. An apostrophe or an ASCII hyphen stays
+// in the word when it has a letter on each side, so "don't" and "well-known"
+// are each one word. A picture is not text. `known` is given the word as it
+// is written; fold_word() is how a fixed list compares.
 std::vector<SpellMiss> spelling_misses(const std::vector<Paragraph>& paragraphs,
                                        const std::function<bool(const std::string&)>& known);
 

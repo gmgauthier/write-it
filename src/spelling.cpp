@@ -2,6 +2,7 @@
 
 #include "spelling.hpp"
 
+#include <glib.h>
 #include <glibmm/spawn.h>
 
 #include <fcntl.h>
@@ -24,9 +25,33 @@ std::string quoted(const std::string& text)
   return "\u201c" + text + "\u201d";
 }
 
-bool letter_byte(unsigned char c)
+// One code point. A byte that is not valid UTF-8 is one byte and not a letter.
+struct Code {
+  size_t len = 1;
+  bool letter = false;
+  unsigned char ascii = 0;
+};
+
+Code code_at(const std::string& text, size_t i)
 {
-  return std::isalpha(c) || c >= 0x80;
+  Code code;
+  if (i >= text.size())
+    return code;
+  const auto c = static_cast<unsigned char>(text[i]);
+  if (c < 0x80) {
+    code.ascii = c;
+    code.letter = std::isalpha(c) != 0;
+    return code;
+  }
+  const char* p = text.data() + i;
+  const gunichar u = g_utf8_get_char_validated(p, static_cast<gssize>(text.size() - i));
+  if (u == static_cast<gunichar>(-1) || u == static_cast<gunichar>(-2))
+    return code;
+  code.len = static_cast<size_t>(g_utf8_next_char(p) - p);
+  if (code.len == 0)
+    code.len = 1;
+  code.letter = g_unichar_isalpha(u) != 0;
+  return code;
 }
 
 bool word_join(unsigned char c)
@@ -98,11 +123,22 @@ std::string drain(int fd)
 
 std::string fold_word(const std::string& word)
 {
-  std::string out = word;
-  for (char& c : out) {
-    const auto u = static_cast<unsigned char>(c);
-    if (u < 128)
-      c = static_cast<char>(std::tolower(u));
+  std::string out;
+  const char* p = word.data();
+  const char* end = p + word.size();
+  while (p < end) {
+    const gunichar u = g_utf8_get_char_validated(p, static_cast<gssize>(end - p));
+    if (u == static_cast<gunichar>(-1) || u == static_cast<gunichar>(-2)) {
+      out.push_back(*p);
+      ++p;
+      continue;
+    }
+    char buf[6];
+    const int n = g_unichar_to_utf8(g_unichar_tolower(u), buf);
+    if (n > 0)
+      out.append(buf, static_cast<size_t>(n));
+    const char* next = g_utf8_next_char(p);
+    p = next > p ? next : p + 1;
   }
   return out;
 }
@@ -128,24 +164,27 @@ std::vector<SpellMiss> spelling_misses(const std::vector<Paragraph>& paragraphs,
     const std::string text = paragraph_text(paragraphs[p]);
     size_t i = 0;
     while (i < text.size()) {
-      if (!letter_byte(static_cast<unsigned char>(text[i]))) {
-        ++i;
+      const Code code = code_at(text, i);
+      if (!code.letter) {
+        i += code.len;
         continue;
       }
       const size_t begin = i;
-      ++i;
+      i += code.len;
       while (i < text.size()) {
-        const auto c = static_cast<unsigned char>(text[i]);
-        if (letter_byte(c)) {
-          ++i;
+        const Code more = code_at(text, i);
+        if (more.letter) {
+          i += more.len;
           continue;
         }
-        // An apostrophe or a hyphen is part of the word only with a letter
-        // after it, so a trailing mark stays punctuation.
-        if (word_join(c) && i + 1 < text.size() &&
-            letter_byte(static_cast<unsigned char>(text[i + 1]))) {
-          i += 2;
-          continue;
+        // An apostrophe or an ASCII hyphen is part of the word only with a
+        // letter after it, so a trailing mark stays punctuation.
+        if (more.len == 1 && word_join(more.ascii) && i + 1 < text.size()) {
+          const Code after = code_at(text, i + 1);
+          if (after.letter) {
+            i += 1 + after.len;
+            continue;
+          }
         }
         break;
       }
