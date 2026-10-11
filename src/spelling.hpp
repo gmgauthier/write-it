@@ -11,6 +11,9 @@
 
 namespace writeit {
 
+// Which story a miss was found in. A note also carries its index.
+enum class SpellWhere { Body, Header, Footer, Note };
+
 // One word a spelling check did not know. `begin` and `end` are byte offsets
 // in the paragraph's text, pictures skipped. The word is the text between them.
 struct SpellMiss {
@@ -18,6 +21,9 @@ struct SpellMiss {
   size_t begin = 0;
   size_t end = 0;
   std::string word;
+  SpellWhere where = SpellWhere::Body;
+  // notes[note] when where is Note. Unused for the other stories.
+  size_t note = 0;
 };
 
 // ASCII letters folded. Other bytes, including the rest of a UTF-8 character,
@@ -33,6 +39,14 @@ bool dictionary_name_ok(const std::string& name);
 // given the word as it is written; fold_word() is how a fixed list compares.
 std::vector<SpellMiss> spelling_misses(const std::vector<Paragraph>& paragraphs,
                                        const std::function<bool(const std::string&)>& known);
+
+// The body, then the header, the footer, and each note. A miss records which
+// story it came from, so a change can be written back there.
+std::vector<SpellMiss> spelling_misses(const Document& document,
+                                       const std::function<bool(const std::string&)>& known);
+
+// The paragraph a miss points at, or null when that story has no such paragraph.
+Paragraph* spell_paragraph(Document& document, const SpellMiss& miss);
 
 // Replaces the bytes [begin, end) of the paragraph's text. False when the
 // range is not inside that text. A word split across runs is rewritten in

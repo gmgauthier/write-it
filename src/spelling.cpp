@@ -161,6 +161,49 @@ std::vector<SpellMiss> spelling_misses(const std::vector<Paragraph>& paragraphs,
   return misses;
 }
 
+std::vector<SpellMiss> spelling_misses(const Document& document,
+                                       const std::function<bool(const std::string&)>& known)
+{
+  // Body misses already say where they came from.
+  std::vector<SpellMiss> misses = spelling_misses(document.paragraphs, known);
+  auto take = [&](SpellWhere where, size_t note, const std::vector<Paragraph>& paragraphs) {
+    for (SpellMiss miss : spelling_misses(paragraphs, known)) {
+      miss.where = where;
+      miss.note = note;
+      misses.push_back(std::move(miss));
+    }
+  };
+  take(SpellWhere::Header, 0, document.header);
+  take(SpellWhere::Footer, 0, document.footer);
+  for (size_t n = 0; n < document.notes.size(); ++n)
+    take(SpellWhere::Note, n, document.notes[n]);
+  return misses;
+}
+
+Paragraph* spell_paragraph(Document& document, const SpellMiss& miss)
+{
+  std::vector<Paragraph>* story = nullptr;
+  switch (miss.where) {
+    case SpellWhere::Body:
+      story = &document.paragraphs;
+      break;
+    case SpellWhere::Header:
+      story = &document.header;
+      break;
+    case SpellWhere::Footer:
+      story = &document.footer;
+      break;
+    case SpellWhere::Note:
+      if (miss.note >= document.notes.size())
+        return nullptr;
+      story = &document.notes[miss.note];
+      break;
+  }
+  if (!story || miss.paragraph >= story->size())
+    return nullptr;
+  return &(*story)[miss.paragraph];
+}
+
 bool replace_word(Paragraph& paragraph, size_t begin, size_t end, const std::string& replacement)
 {
   if (end < begin)

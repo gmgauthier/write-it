@@ -4,6 +4,7 @@
 // the dialog's aspell process is not part of this suite.
 
 #include "check.hpp"
+#include "document.hpp"
 #include "spelling.hpp"
 
 #include <functional>
@@ -48,7 +49,7 @@ std::function<bool(const std::string&)> list(std::initializer_list<const char*> 
 
 }  // namespace
 
-constexpr int kChecks = 40;
+constexpr int kChecks = 58;
 
 int main()
 {
@@ -119,6 +120,47 @@ int main()
     CHECK(misses.size() == 1);
     CHECK(misses[0].paragraph == 1);
     CHECK(misses[0].word == "Hello");
+  }
+
+  // Header, footer, and notes are checked as well as the body.
+  {
+    writeit::Document doc;
+    doc.paragraphs = {words({"The cat sat."})};
+    doc.header = {words({"Hedr"})};
+    doc.footer = {words({"Footr"})};
+    doc.notes = {{words({"Notte"})}};
+    const std::vector<SpellMiss> misses = writeit::spelling_misses(doc, known);
+    auto at = [&](size_t i) { return i < misses.size() ? misses[i] : SpellMiss{}; };
+    CHECK(misses.size() == 4);
+    CHECK(at(0).where == writeit::SpellWhere::Body);
+    CHECK(at(0).word == "sat");
+    CHECK(at(1).where == writeit::SpellWhere::Header);
+    CHECK(at(1).word == "Hedr");
+    CHECK(at(2).where == writeit::SpellWhere::Footer);
+    CHECK(at(2).word == "Footr");
+    CHECK(at(3).where == writeit::SpellWhere::Note);
+    CHECK(at(3).note == 0);
+    CHECK(at(3).word == "Notte");
+  }
+  {
+    writeit::Document doc;
+    doc.paragraphs = {words({"The"})};
+    doc.header = {words({"Cat"})};
+    CHECK(writeit::spelling_misses(doc, known).empty());
+  }
+  {
+    writeit::Document doc;
+    doc.notes = {{words({"Cat"})}, {words({"Quxx"})}};
+    const std::vector<SpellMiss> misses = writeit::spelling_misses(doc, known);
+    const SpellMiss miss = misses.empty() ? SpellMiss{} : misses[0];
+    CHECK(misses.size() == 1);
+    CHECK(miss.where == writeit::SpellWhere::Note);
+    CHECK(miss.note == 1);
+    CHECK(miss.word == "Quxx");
+    writeit::Paragraph* paragraph = writeit::spell_paragraph(doc, miss);
+    CHECK(paragraph != nullptr);
+    CHECK(paragraph && writeit::replace_word(*paragraph, miss.begin, miss.end, "Note"));
+    CHECK(doc.notes[1][0].runs[0].text == "Note");
   }
 
   {
