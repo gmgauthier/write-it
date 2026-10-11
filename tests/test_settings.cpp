@@ -21,7 +21,7 @@ std::string temp_ini()
 }
 
 // Exactly the checks this suite runs on a working temp directory.
-constexpr int kChecks = 93;
+constexpr int kChecks = 102;
 
 }  // namespace
 
@@ -208,6 +208,27 @@ int main()
     // An unknown area (0) leaves that side alone.
     CHECK(clamp(960, 700, 0, 0) == "960x700");
     CHECK(clamp(1400, 700, 1024, 0) == "1024x700");
+  }
+
+  // The frame sits in the work area too. The client shrinks by it and never
+  // grows. A zero frame has not been reported, so it is not guessed.
+  {
+    auto fit = [](int width, int height, int area_width, int area_height, int frame_width,
+                  int frame_height) {
+      writeit::fit_window_frame(width, height, area_width, area_height, frame_width, frame_height);
+      return std::to_string(width) + "x" + std::to_string(height);
+    };
+    // Client already clamped to a 1024×576 work area, with a 58 px title bar.
+    CHECK(fit(960, 576, 1024, 576, 0, 58) == "960x518");
+    // 960×700 still fits a large screen, frame and all.
+    CHECK(fit(960, 700, 2560, 1440, 2, 58) == "960x700");
+    CHECK(fit(960, 700, 800, 600, 10, 40) == "790x560");
+    CHECK(fit(960, 700, 800, 600, 0, 0) == "960x700");
+    CHECK(fit(960, 700, 0, 0, 8, 58) == "960x700");
+    CHECK(fit(1400, 700, 1024, 0, 8, 58) == "1016x700");
+    CHECK(fit(100, 100, 1024, 576, 0, 58) == "100x100");
+    CHECK(fit(960, 700, 50, 40, 80, 90) == "1x1");
+    CHECK(fit(960, 700, 800, 600, -5, -8) == "960x700");
   }
 
   // The size the window remembers is the last it had while not maximised,
