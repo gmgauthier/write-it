@@ -12,6 +12,8 @@
 // sheet) is recorded by the window as a custom operation with its own undo
 // and redo.
 
+#include "document.hpp"
+
 #include <gtkmm.h>
 
 #include <cstddef>
@@ -44,6 +46,14 @@ class UndoHistory {
 
   void attach(const Glib::RefPtr<Gtk::TextBuffer>& buffer, IgnoreTag ignore);
   void detach();
+
+  // Pictures are not text. `take` copies the image bytes for a pixbuf that
+  // is about to leave the buffer and drops the window's copy. Undo of that
+  // erase inserts the same pixbuf and `restore` puts the bytes back. Redo
+  // calls `drop`. The history keeps the pixbuf alive until the step is gone.
+  void set_pictures(std::function<bool(GdkPixbuf*, Image&)> take,
+                    std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&, const Image&)> restore,
+                    std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&)> drop);
 
   // --- The saved-state hook. ---
   // Names the document state the history is at. Every new step, and every
@@ -148,6 +158,9 @@ class UndoHistory {
 
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   IgnoreTag ignore_;
+  std::function<bool(GdkPixbuf*, Image&)> picture_take_;
+  std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&, const Image&)> picture_restore_;
+  std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&)> picture_drop_;
   std::vector<sigc::connection> connections_;
   std::vector<std::unique_ptr<Step>> undo_;
   std::vector<std::unique_ptr<Step>> redo_;

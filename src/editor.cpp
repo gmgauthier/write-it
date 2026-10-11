@@ -455,6 +455,25 @@ void MainWindow::build_editor()
     const std::string name = tag_name(tag);
     return is_list_shift(name) || is_list_tab(name);
   });
+  // Undo attaches before the erase below, and takes the picture bytes here
+  // while the pixbuf is still in the buffer. Undo inserts that pixbuf again.
+  undo_.set_pictures(
+      [this](GdkPixbuf* pix, Image& image) {
+        const auto found = image_pix_.find(pix);
+        if (found == image_pix_.end())
+          return false;
+        image = found->second;
+        image_pix_.erase(found);
+        return true;
+      },
+      [this](const Glib::RefPtr<Gdk::Pixbuf>& pix, const Image& image) {
+        if (pix)
+          image_pix_[pix->gobj()] = image;
+      },
+      [this](const Glib::RefPtr<Gdk::Pixbuf>& pix) {
+        if (pix)
+          image_pix_.erase(pix->gobj());
+      });
   for (int level = 1; level <= 6; ++level)
     heading_tag(level);
   raise_headings();
@@ -2939,9 +2958,9 @@ void MainWindow::normalise_paragraphs()
 void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
                           const Gtk::TextBuffer::iterator& to)
 {
-  // A deleted picture leaves the buffer. Drop its bytes while the pixbuf is
-  // still alive. Undo of that delete does not bring the picture back: the
-  // buffer restores the object character without this map entry.
+  // A deleted picture leaves the buffer. The undo step has already copied
+  // its bytes. Drop the map entry while the pixbuf is still alive. A replay
+  // puts the entry back itself, so leave the map alone then.
   if (!loading_ && !restoring_ && from != to) {
     for (auto iter = from; iter.compare(to) < 0; ++iter) {
       if (auto pix = iter.get_pixbuf())

@@ -1313,6 +1313,59 @@ Document long_document(int count)
   return document(paragraphs);
 }
 
+// Deleting a picture and undoing that delete keeps the file bytes. The erase
+// used to drop them from the window while the pixbuf was still alive, and
+// undo put back only the object character.
+void picture_bytes(writeit::MainWindow& w)
+{
+  writeit::Image image;
+  image.type = "png";
+  image.alt = "cat";
+  image.data = std::string("\x89PNG\r\n\x1a\n", 8) + "picture-bytes";
+  image.width = 1440;
+  image.height = 720;
+  Paragraph paragraph;
+  Run picture;
+  picture.image = image;
+  paragraph.runs.push_back(run("ab"));
+  paragraph.runs.push_back(picture);
+  paragraph.runs.push_back(run("cd"));
+  const Document before = document({paragraph});
+  MainWindowProbe::load(w, before);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == before);
+
+  auto no_bytes = [](const Document& doc) {
+    for (const Paragraph& item : doc.paragraphs)
+      for (const Run& run : item.runs)
+        if (run.image && !run.image->data.empty())
+          return false;
+    return true;
+  };
+
+  // The picture is the character between "ab" and "cd".
+  MainWindowProbe::caret(w, 2);
+  MainWindowProbe::del(w);
+  settle();
+  CHECK(no_bytes(MainWindowProbe::doc(w)));
+
+  MainWindowProbe::undo(w);
+  settle();
+  const Document restored = MainWindowProbe::doc(w);
+  CHECK(restored == before);
+  const std::string rtf = writeit::rtf_export(restored);
+  CHECK(rtf.find("\\pngblip") != std::string::npos);
+  CHECK(rtf.find("\\picwgoal1440") != std::string::npos);
+  CHECK(rtf.find("706963747572652d6279746573") != std::string::npos);
+
+  MainWindowProbe::redo(w);
+  settle();
+  CHECK(no_bytes(MainWindowProbe::doc(w)));
+  MainWindowProbe::undo(w);
+  settle();
+  CHECK(MainWindowProbe::doc(w) == before);
+}
+
 // The undo bookkeeping of one keystroke does not grow with the document.
 void timing(writeit::MainWindow& w)
 {
@@ -1384,11 +1437,12 @@ int main(int argc, char* argv[])
     lists(window);
     last_paragraph(window);
     cap(window);
+    picture_bytes(window);
     timing(window);
     window.hide();
     settle();
   }
   g_remove(Glib::build_filename(home, "saved.rtf").c_str());
   g_rmdir(home.c_str());
-  return suite_test::done("undo", 236);
+  return suite_test::done("undo", 244);
 }

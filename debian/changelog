@@ -1,3 +1,9 @@
+write-it (1.0.1-1) unstable; urgency=medium
+
+  * Undo of a deleted picture keeps the picture bytes.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sun, 11 Oct 2026 11:25:43 +0100
+
 write-it (1.0.0-1) unstable; urgency=medium
 
   * Release 1.0.0.
