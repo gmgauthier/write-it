@@ -163,6 +163,10 @@ void MainWindow::show_style()
 {
   if (!buffer_)
     return;
+  if (editing_cell()) {
+    show_cell_style();
+    return;
+  }
   const std::vector<Style> styles = sheet();
   auto style_at = [&](int offset) {
     const Style* style = find_style(styles, para_at(offset).style);
@@ -207,6 +211,17 @@ void MainWindow::on_style_chosen()
 
 void MainWindow::apply_named_style(const std::string& name)
 {
+  // The style combo takes the keyboard, so a cell no longer has_focus().
+  // The style belongs to that cell, not to wherever the body caret sits.
+  if (focused_sheet() || cell_edit_.on) {
+    if (TableSheet* sheet = editing_sheet())
+      apply_cell_style(*sheet, name);
+    else {
+      show_style();
+      restore_edit_focus();
+    }
+    return;
+  }
   Gtk::TextBuffer::iterator start_iter;
   Gtk::TextBuffer::iterator end_iter;
   buffer_->get_selection_bounds(start_iter, end_iter);
@@ -233,7 +248,11 @@ void MainWindow::apply_named_style(const std::string& name)
   // What is typed next follows the style too, keeping any direct format.
   if (to)
     restyle_run(typing_, from ? *from : styles.front(), *to);
+  // The rebuild moves the body insert. Keep the pasteboard on the caret
+  // instead of following that insert to the first line.
+  hold_view();
   commit_document(before, after);
+  release_view();
 }
 
 void MainWindow::apply_next_style()

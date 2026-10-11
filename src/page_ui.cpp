@@ -507,10 +507,30 @@ class TableSheet : public Gtk::Grid {
         view->signal_key_press_event().connect([this, at_row, at_column](GdkEventKey* event) {
           return on_key(event, at_row, at_column);
         });
-        view->get_buffer()->signal_begin_user_action().connect([this] { window_.on_cell_begin(); });
-        view->get_buffer()->signal_end_user_action().connect([this] { window_.on_cell_end(); });
-        view->signal_focus_in_event().connect([this](GdkEventFocus*) {
-          window_.update_actions();
+        auto buffer = view->get_buffer();
+        buffer->signal_begin_user_action().connect([this] { window_.on_cell_begin(); });
+        buffer->signal_end_user_action().connect([this] { window_.on_cell_end(); });
+        buffer->signal_insert().connect(
+            [this, at_row, at_column](const Gtk::TextIter& end, const Glib::ustring& text, int) {
+              window_.tag_cell_insert(*this, at_row, at_column, end, text);
+            },
+            true);
+        buffer->signal_mark_set().connect([this, at_row, at_column](
+                                              const Gtk::TextBuffer::iterator&,
+                                              const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
+          Gtk::TextView* cell = views_[static_cast<size_t>(at_row)][static_cast<size_t>(at_column)];
+          if (!cell)
+            return;
+          auto live = cell->get_buffer();
+          if (live && (mark == live->get_insert() || mark == live->get_selection_bound()))
+            window_.note_cell_marks(*this, at_row, at_column);
+        });
+        view->signal_focus_in_event().connect([this, at_row, at_column](GdkEventFocus*) {
+          window_.note_cell_focus(*this, at_row, at_column);
+          return false;
+        });
+        view->signal_focus_out_event().connect([this, at_row, at_column](GdkEventFocus*) {
+          window_.note_cell_blur(*this, at_row, at_column);
           return false;
         });
         // The cell places the caret, then this click bubbles to the body
@@ -625,6 +645,15 @@ class TableSheet : public Gtk::Grid {
     queue_resize();
   }
 
+  int table_id() const;
+  Gtk::TextView* view_at(int row, int column) const;
+  const Paragraph* form_at(int row, int column, int line) const;
+  int paragraphs_before(int row, int column) const;
+  int line_at(int row, int column, int offset) const;
+  void caret_of(int row, int column, int& caret, int& bound) const;
+  bool focused_place(int& row, int& column, int& caret, int& bound) const;
+  void collapse_selections(const Gtk::TextView* keep) const;
+
  private:
   bool focused_at(int& row, int& column) const
   {
@@ -714,6 +743,104 @@ class TableSheet : public Gtk::Grid {
   std::vector<std::vector<CellFrame*>> frames_;
   std::vector<std::vector<std::vector<Paragraph>>> forms_;
 };
+
+int TableSheet::table_id() const
+{
+  if (forms_.empty() || forms_[0].empty() || forms_[0][0].empty())
+    return 0;
+  return forms_[0][0][0].cell.table;
+}
+
+Gtk::TextView* TableSheet::view_at(int row, int column) const
+{
+  if (row < 0 || column < 0 || row >= rows_ || column >= cols_)
+    return nullptr;
+  return views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+}
+
+const Paragraph* TableSheet::form_at(int row, int column, int line) const
+{
+  if (row < 0 || column < 0 || row >= rows_ || column >= cols_)
+    return nullptr;
+  const auto& forms = forms_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+  if (forms.empty())
+    return nullptr;
+  if (line < 0)
+    line = 0;
+  if (line >= static_cast<int>(forms.size()))
+    return &forms.back();
+  return &forms[static_cast<size_t>(line)];
+}
+
+int TableSheet::paragraphs_before(int row, int column) const
+{
+  int index = 0;
+  for (int r = 0; r < rows_; ++r) {
+    for (int c = 0; c < cols_; ++c) {
+      if (r == row && c == column)
+        return index;
+      index +=
+          buffer_paragraphs(views_[static_cast<size_t>(r)][static_cast<size_t>(c)]->get_buffer());
+    }
+  }
+  return index;
+}
+
+int TableSheet::line_at(int row, int column, int offset) const
+{
+  Gtk::TextView* view = view_at(row, column);
+  if (!view || !view->get_buffer())
+    return 0;
+  auto buffer = view->get_buffer();
+  int line = 0;
+  const int at = std::max(0, offset);
+  for (auto iter = buffer->begin(); !iter.is_end() && iter.get_offset() < at; ++iter) {
+    if (iter.get_char() == '\n')
+      ++line;
+  }
+  const int lines = buffer_paragraphs(buffer);
+  if (line >= lines)
+    line = std::max(0, lines - 1);
+  return line;
+}
+
+void TableSheet::caret_of(int row, int column, int& caret, int& bound) const
+{
+  caret = 0;
+  bound = 0;
+  Gtk::TextView* view = view_at(row, column);
+  if (!view || !view->get_buffer())
+    return;
+  auto buffer = view->get_buffer();
+  caret = buffer->get_insert()->get_iter().get_offset();
+  bound = buffer->get_selection_bound()->get_iter().get_offset();
+}
+
+bool TableSheet::focused_place(int& row, int& column, int& caret, int& bound) const
+{
+  if (!focused_at(row, column))
+    return false;
+  caret_of(row, column, caret, bound);
+  return true;
+}
+
+void TableSheet::collapse_selections(const Gtk::TextView* keep) const
+{
+  for (const auto& row : views_) {
+    for (Gtk::TextView* view : row) {
+      if (!view || view == keep)
+        continue;
+      auto buffer = view->get_buffer();
+      if (!buffer)
+        continue;
+      Gtk::TextIter start;
+      Gtk::TextIter end;
+      if (!buffer->get_selection_bounds(start, end))
+        continue;
+      buffer->place_cursor(buffer->get_insert()->get_iter());
+    }
+  }
+}
 
 void MainWindow::mount_table(const std::vector<Paragraph>& cells, bool separator)
 {
@@ -869,6 +996,644 @@ void MainWindow::focus_table_caret()
 {
   if (TableSheet* sheet = sheet_at_cursor())
     sheet->focus_slot(0, 0);
+}
+
+void MainWindow::note_cell_focus(TableSheet& sheet, int row, int column)
+{
+  if (loading_ || restoring_)
+    return;
+  if (cell_typing_on_ && (!cell_edit_.on || cell_edit_.table != sheet.table_id() ||
+                          cell_edit_.row != row || cell_edit_.column != column))
+    cell_typing_on_ = false;
+  cell_edit_.on = true;
+  cell_edit_.table = sheet.table_id();
+  cell_edit_.row = row;
+  cell_edit_.column = column;
+  sheet.caret_of(row, column, cell_edit_.caret, cell_edit_.bound);
+  // The caret is in this cell now. A highlight in another cell, or in the
+  // body, is no longer where it was placed.
+  if (Gtk::TextView* view = sheet.view_at(row, column))
+    release_other_selections(view);
+  update_actions();
+  sync_format_controls();
+}
+
+void MainWindow::release_other_selections(const Gtk::TextView* keep)
+{
+  if (releasing_)
+    return;
+  releasing_ = true;
+  auto collapse = [](Gtk::TextView* view) {
+    if (!view)
+      return;
+    auto buffer = view->get_buffer();
+    if (!buffer)
+      return;
+    Gtk::TextIter start;
+    Gtk::TextIter end;
+    if (!buffer->get_selection_bounds(start, end))
+      return;
+    buffer->place_cursor(buffer->get_insert()->get_iter());
+  };
+  if (keep != &text_)
+    collapse(&text_);
+  if (buffer_) {
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      if (TableSheet* sheet = sheet_from(iter.get_child_anchor()))
+        sheet->collapse_selections(keep);
+    }
+  }
+  releasing_ = false;
+}
+
+bool MainWindow::editing_caret_on_board(int& y, int& height)
+{
+  Gtk::TextView* view = nullptr;
+  int offset = 0;
+  if (TableSheet* sheet = editing_sheet()) {
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+    if (!cell_place(*sheet, row, column, caret, bound))
+      return false;
+    view = sheet->view_at(row, column);
+    offset = std::min(caret, bound);
+  } else if (buffer_) {
+    view = &text_;
+    offset = buffer_->get_insert()->get_iter().get_offset();
+  }
+  if (!view || !view->get_realized() || !view->get_buffer())
+    return false;
+  auto buffer = view->get_buffer();
+  const int count = buffer->get_char_count();
+  offset = std::max(0, std::min(offset, count));
+  Gdk::Rectangle rect;
+  view->get_iter_location(buffer->get_iter_at_offset(offset), rect);
+  if (rect.get_height() <= 0)
+    return false;
+  int wx = 0;
+  int wy = 0;
+  view->buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(), rect.get_y(), wx, wy);
+  int bx = 0;
+  int by = 0;
+  if (!view->translate_coordinates(board_, wx, wy, bx, by))
+    return false;
+  y = by;
+  height = rect.get_height();
+  return true;
+}
+
+void MainWindow::reveal_editing_caret()
+{
+  int y = 0;
+  int height = 0;
+  if (!editing_caret_on_board(y, height))
+    return;
+  auto v = paste_.get_vadjustment();
+  if (!v)
+    return;
+  const double page = v->get_page_size();
+  if (page <= 0)
+    return;
+  const double value = v->get_value();
+  const double from = y;
+  const double size = std::max(1, height);
+  // Already where the style left the caret.
+  if (from >= value && from + size <= value + page)
+    return;
+  // A style does not move the caret up the document. A coordinate still at
+  // the top while the view was held further down has not been laid out yet.
+  if (from + size < value - 4)
+    return;
+  double want = from < value ? from : from + size - page;
+  const double room = std::max(v->get_lower(), v->get_upper() - page);
+  want = std::max(v->get_lower(), std::min(want, room));
+  if (want != value)
+    v->set_value(want);
+}
+
+void MainWindow::note_cell_blur(TableSheet& sheet, int row, int column)
+{
+  if (loading_ || restoring_ || !cell_edit_.on)
+    return;
+  // Focus leaves this cell before the next one is entered. Refresh only the
+  // caret, so a move into another cell cannot be overwritten by this one.
+  if (cell_edit_.table != sheet.table_id() || cell_edit_.row != row || cell_edit_.column != column)
+    return;
+  sheet.caret_of(row, column, cell_edit_.caret, cell_edit_.bound);
+}
+
+void MainWindow::note_cell_marks(TableSheet& sheet, int row, int column)
+{
+  if (loading_ || restoring_ || cell_tagging_ || !cell_edit_.on)
+    return;
+  Gtk::TextView* view = sheet.view_at(row, column);
+  if (!view || !view->has_focus())
+    return;
+  if (cell_edit_.table != sheet.table_id() || cell_edit_.row != row || cell_edit_.column != column)
+    return;
+  sheet.caret_of(row, column, cell_edit_.caret, cell_edit_.bound);
+  // Arrow keys move the caret before the insert signal. The pending format
+  // stays through that signal, and goes if the caret is still elsewhere
+  // once the insert has had its turn.
+  if (cell_typing_on_ &&
+      (cell_edit_.caret != cell_typing_caret_ || cell_edit_.bound != cell_typing_bound_) &&
+      !cell_typing_idle_.connected()) {
+    cell_typing_idle_ = Glib::signal_idle().connect([this] {
+      if (cell_typing_on_ && (!cell_edit_.on || cell_edit_.caret != cell_typing_caret_ ||
+                              cell_edit_.bound != cell_typing_bound_))
+        cell_typing_on_ = false;
+      return false;
+    });
+  }
+  sync_format_controls();
+}
+
+void MainWindow::tag_cell_insert(TableSheet& sheet, int row, int column, const Gtk::TextIter& end,
+                                 const Glib::ustring& text)
+{
+  if (loading_ || restoring_ || text.empty() || cell_tagging_)
+    return;
+  auto buffer = end.get_buffer();
+  if (!buffer)
+    return;
+  const int length = static_cast<int>(text.length());
+  const int at = end.get_offset() - length;
+  if (length <= 0 || at < 0)
+    return;
+  Run format;
+  bool continued = false;
+  bool from_typing = false;
+  if (cell_typing_on_) {
+    format = cell_typing_;
+    continued = true;
+    from_typing = true;
+    cell_typing_on_ = false;
+  } else if (at > 0) {
+    auto prev = buffer->get_iter_at_offset(at - 1);
+    // format_of() invents Sans 11 when a character has no format tag. Only a
+    // real tag is the run to continue; otherwise the paragraph style types.
+    if (prev.get_char() != '\n' && has_fmt(prev)) {
+      format = format_of(prev);
+      continued = true;
+    }
+  }
+  if (!continued) {
+    const Paragraph* form = sheet.form_at(row, column, sheet.line_at(row, column, at));
+    format = style_typing(form ? form->style : std::string(kNormalStyle));
+  }
+  format.text.clear();
+  format.note = 0;
+  format.image.reset();
+  if (!continued)
+    format.direct = 0;
+  auto tag = format_tag_on(buffer, format);
+  if (!tag)
+    return;
+  struct Tagging {
+    bool& flag;
+    explicit Tagging(bool& flag_in)
+        : flag(flag_in)
+    {
+      flag = true;
+    }
+    ~Tagging()
+    {
+      flag = false;
+    }
+  } tagging(cell_tagging_);
+  buffer->apply_tag(tag, buffer->get_iter_at_offset(at), buffer->get_iter_at_offset(at + length));
+  if (from_typing)
+    show_format(format);
+}
+
+bool MainWindow::editing_cell() const
+{
+  return focused_sheet() != nullptr || cell_edit_.on;
+}
+
+TableSheet* MainWindow::editing_sheet() const
+{
+  if (TableSheet* focused = focused_sheet())
+    return focused;
+  if (!cell_edit_.on)
+    return nullptr;
+  return sheet_by_id(cell_edit_.table);
+}
+
+TableSheet* MainWindow::sheet_by_id(int id) const
+{
+  if (!buffer_ || id == 0)
+    return nullptr;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (sheet && sheet->table_id() == id)
+      return sheet;
+  }
+  return nullptr;
+}
+
+Gtk::TextView* MainWindow::nth_cell_view(int which, int row, int column) const
+{
+  if (!buffer_ || which < 0)
+    return nullptr;
+  int seen = 0;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (!sheet)
+      continue;
+    if (seen == which)
+      return sheet->view_at(row, column);
+    ++seen;
+  }
+  return nullptr;
+}
+
+bool MainWindow::cell_place(TableSheet& sheet, int& row, int& column, int& caret, int& bound) const
+{
+  if (sheet.focused_place(row, column, caret, bound))
+    return true;
+  if (!cell_edit_.on || cell_edit_.table != sheet.table_id())
+    return false;
+  row = cell_edit_.row;
+  column = cell_edit_.column;
+  caret = cell_edit_.caret;
+  bound = cell_edit_.bound;
+  return sheet.view_at(row, column) != nullptr;
+}
+
+size_t MainWindow::cell_paragraph_index(const TableSheet& sheet, int row, int column,
+                                        int line) const
+{
+  size_t index = 0;
+  bool skip_sep = false;
+  bool found = false;
+  if (buffer_) {
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      if (skip_sep) {
+        skip_sep = false;
+        if (iter.get_char() == '\n' && !iter.get_child_anchor())
+          continue;
+      }
+      if (auto anchor = iter.get_child_anchor()) {
+        TableSheet* other = sheet_from(anchor);
+        if (other == &sheet) {
+          found = true;
+          break;
+        }
+        index += static_cast<size_t>(other ? other->paragraph_count() : 0);
+        skip_sep = true;
+        continue;
+      }
+      if (iter.get_char() == '\n')
+        ++index;
+    }
+  }
+  if (!found)
+    return static_cast<size_t>(-1);
+  return index + static_cast<size_t>(sheet.paragraphs_before(row, column) + std::max(0, line));
+}
+
+void MainWindow::toggle_cell_flag(TextFlag flag)
+{
+  TableSheet* sheet = editing_sheet();
+  if (!sheet) {
+    restore_edit_focus();
+    return;
+  }
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound)) {
+    restore_edit_focus();
+    return;
+  }
+  Gtk::TextView* view = sheet->view_at(row, column);
+  if (!view || !view->get_buffer()) {
+    restore_edit_focus();
+    return;
+  }
+  auto buffer = view->get_buffer();
+  Gtk::TextBuffer::iterator sel_from;
+  Gtk::TextBuffer::iterator sel_to;
+  if (buffer->get_selection_bounds(sel_from, sel_to)) {
+    const int live_lo = std::min(sel_from.get_offset(), sel_to.get_offset());
+    const int live_hi = std::max(sel_from.get_offset(), sel_to.get_offset());
+    const int saved_lo = std::min(caret, bound);
+    const int saved_hi = std::max(caret, bound);
+    if (live_hi - live_lo > saved_hi - saved_lo) {
+      caret = sel_from.get_offset();
+      bound = sel_to.get_offset();
+    }
+  }
+  const int start = std::min(caret, bound);
+  const int end = std::max(caret, bound);
+  CellEdit saved;
+  saved.on = true;
+  saved.table = sheet->table_id();
+  saved.row = row;
+  saved.column = column;
+  saved.caret = caret;
+  saved.bound = bound;
+
+  if (start == end) {
+    Run format;
+    if (cell_typing_on_ && cell_typing_caret_ == start && cell_typing_bound_ == end)
+      format = cell_typing_;
+    else {
+      const int count = buffer->get_char_count();
+      const int at = std::max(0, std::min(start, count));
+      bool have = false;
+      if (at > 0) {
+        auto prev = buffer->get_iter_at_offset(at - 1);
+        if (prev.get_char() != '\n' && has_fmt(prev)) {
+          format = format_of(prev);
+          have = true;
+        }
+      }
+      if (!have && at < count) {
+        auto here = buffer->get_iter_at_offset(at);
+        if (here.get_char() != '\n' && has_fmt(here)) {
+          format = format_of(here);
+          have = true;
+        }
+      }
+      if (!have) {
+        const Paragraph* form = sheet->form_at(row, column, sheet->line_at(row, column, at));
+        format = style_typing(form ? form->style : std::string(kNormalStyle));
+      }
+    }
+    format.text.clear();
+    format.note = 0;
+    format.image.reset();
+    set_text_flag(format, flag, !text_flag(format, flag));
+    cell_typing_ = format;
+    cell_typing_on_ = true;
+    cell_typing_caret_ = start;
+    cell_typing_bound_ = end;
+    show_format(format);
+    restore_cell_edit(saved);
+    return;
+  }
+
+  cell_typing_on_ = false;
+  bool all = true;
+  bool any = false;
+  for (int i = start; i < end; ++i) {
+    auto iter = buffer->get_iter_at_offset(i);
+    if (iter.get_char() == '\n' && !iter.starts_line())
+      continue;
+    any = true;
+    if (!text_flag(format_of(iter), flag)) {
+      all = false;
+      break;
+    }
+  }
+  if (!any) {
+    restore_cell_edit(saved);
+    return;
+  }
+  const bool turn_on = !all;
+  buffer->begin_user_action();
+  for (int i = start; i < end;) {
+    auto iter = buffer->get_iter_at_offset(i);
+    if (iter.get_char() == '\n') {
+      if (i == 0 || buffer->get_iter_at_offset(i - 1).get_char() == '\n') {
+        Run mark = format_of(iter);
+        set_text_flag(mark, flag, turn_on);
+        set_fmt_on(buffer, iter, buffer->get_iter_at_offset(i + 1), format_tag_on(buffer, mark));
+      }
+      ++i;
+      continue;
+    }
+    Run run = format_of(iter);
+    int j = i + 1;
+    while (j < end) {
+      auto next = buffer->get_iter_at_offset(j);
+      if (next.get_char() == '\n' || !same_format(format_of(next), run))
+        break;
+      ++j;
+    }
+    set_text_flag(run, flag, turn_on);
+    set_fmt_on(buffer, buffer->get_iter_at_offset(i), buffer->get_iter_at_offset(j),
+               format_tag_on(buffer, run));
+    i = j;
+  }
+  buffer->end_user_action();
+  restore_cell_edit(saved);
+}
+
+void MainWindow::apply_cell_style(TableSheet& sheet, const std::string& name)
+{
+  cell_typing_on_ = false;
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(sheet, row, column, caret, bound)) {
+    show_style();
+    restore_edit_focus();
+    return;
+  }
+  Gtk::TextView* view = sheet.view_at(row, column);
+  if (!view || !view->get_buffer()) {
+    show_style();
+    restore_edit_focus();
+    return;
+  }
+  auto buffer = view->get_buffer();
+  Gtk::TextBuffer::iterator sel_from;
+  Gtk::TextBuffer::iterator sel_to;
+  if (buffer->get_selection_bounds(sel_from, sel_to)) {
+    const int live_lo = std::min(sel_from.get_offset(), sel_to.get_offset());
+    const int live_hi = std::max(sel_from.get_offset(), sel_to.get_offset());
+    const int saved_lo = std::min(caret, bound);
+    const int saved_hi = std::max(caret, bound);
+    // A collapsed PRIMARY selection must not throw away the range the cell had.
+    if (live_hi - live_lo > saved_hi - saved_lo) {
+      caret = sel_from.get_offset();
+      bound = sel_to.get_offset();
+    }
+  }
+  const int start = std::min(caret, bound);
+  const int end = std::max(caret, bound);
+  const int count = buffer->get_char_count();
+  const int from = std::max(0, std::min(start, count));
+  const int to = std::max(0, std::min(end, count));
+  const int first_line = sheet.line_at(row, column, from);
+  const int last_line = sheet.line_at(row, column, to > from ? to - 1 : to);
+
+  CellEdit saved;
+  saved.on = true;
+  saved.table = sheet.table_id();
+  saved.row = row;
+  saved.column = column;
+  saved.caret = caret;
+  saved.bound = bound;
+  auto keep = [&]() {
+    show_style();
+    restore_cell_edit(saved);
+  };
+
+  const Document before = capture();
+  Document after = before;
+  adopt_sheet(after, typing_.font, typing_.size);
+  const std::vector<Style> styles = complete_sheet(style_sheet(after));
+  const Style* to_style = find_style(styles, name);
+  if (!to_style) {
+    keep();
+    return;
+  }
+  bool any = false;
+  for (int line = first_line; line <= last_line; ++line) {
+    const size_t index = cell_paragraph_index(sheet, row, column, line);
+    if (index >= after.paragraphs.size())
+      continue;
+    Paragraph& paragraph = after.paragraphs[index];
+    if (paragraph.cell.table == 0 || paragraph.cell.table != sheet.table_id())
+      continue;
+    if (paragraph.cell.row != row || paragraph.cell.column != column)
+      continue;
+    take_paragraph_style(paragraph, *to_style);
+    any = true;
+  }
+  if (!any || after.paragraphs == before.paragraphs) {
+    keep();
+    return;
+  }
+  const std::string applied = to_style->name;
+  // commit_document() rebuilds the body and follows its insert, which is
+  // often still the first line while the caret is in this cell.
+  hold_view();
+  commit_document(before, after);
+  typing_ = style_typing(applied);
+  restore_cell_edit(saved);
+  release_view();
+}
+
+void MainWindow::show_cell_style()
+{
+  TableSheet* sheet = editing_sheet();
+  if (!sheet)
+    return;
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound))
+    return;
+  const int start = std::min(caret, bound);
+  const int end = std::max(caret, bound);
+  const int first = sheet->line_at(row, column, start);
+  const int last = sheet->line_at(row, column, end > start ? end - 1 : end);
+  const std::vector<Style> styles = this->sheet();
+  auto style_of = [&](int line) -> const Style* {
+    const Paragraph* form = sheet->form_at(row, column, line);
+    const Style* style = form ? find_style(styles, form->style) : nullptr;
+    return style ? style : (styles.empty() ? nullptr : &styles.front());
+  };
+  const Style* style = style_of(first);
+  for (int line = first; style && line <= last; ++line) {
+    if (style_of(line) != style)
+      style = nullptr;
+  }
+  const bool guard = suppress_format_;
+  suppress_format_ = true;
+  if (!style) {
+    if (style_combo_.get_active_row_number() != -1)
+      style_combo_.set_active(-1);
+  } else if (style_combo_.get_active_text() != style->name) {
+    style_combo_.set_active_text(style->name);
+  }
+  suppress_format_ = guard;
+}
+
+void MainWindow::show_cell_format()
+{
+  show_cell_style();
+  TableSheet* sheet = editing_sheet();
+  if (!sheet)
+    return;
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound))
+    return;
+  Gtk::TextView* view = sheet->view_at(row, column);
+  if (!view || !view->get_buffer())
+    return;
+  auto buffer = view->get_buffer();
+  const int count = buffer->get_char_count();
+  caret = std::max(0, std::min(caret, count));
+  bound = std::max(0, std::min(bound, count));
+  if (cell_typing_on_ && caret == cell_typing_caret_ && bound == cell_typing_bound_) {
+    Run pending = cell_typing_;
+    pending.text.clear();
+    show_format(pending);
+    return;
+  }
+  Run run;
+  bool have = false;
+  if (caret > 0) {
+    auto prev = buffer->get_iter_at_offset(caret - 1);
+    if (prev.get_char() != '\n' && has_fmt(prev)) {
+      run = format_of(prev);
+      have = true;
+    }
+  }
+  if (!have && caret < count) {
+    auto at = buffer->get_iter_at_offset(caret);
+    if (at.get_char() != '\n' && has_fmt(at)) {
+      run = format_of(at);
+      have = true;
+    }
+  }
+  if (!have) {
+    const Paragraph* form = sheet->form_at(row, column, sheet->line_at(row, column, caret));
+    run = style_typing(form ? form->style : std::string(kNormalStyle));
+  }
+  run.text.clear();
+  show_format(run);
+}
+
+void MainWindow::restore_edit_focus()
+{
+  if (cell_edit_.on) {
+    if (TableSheet* sheet = sheet_by_id(cell_edit_.table)) {
+      sheet->focus_slot(cell_edit_.row, cell_edit_.column);
+      return;
+    }
+  }
+  text_.grab_focus();
+}
+
+void MainWindow::restore_cell_edit(const CellEdit& saved)
+{
+  if (!saved.on) {
+    cell_edit_.on = false;
+    return;
+  }
+  TableSheet* sheet = sheet_by_id(saved.table);
+  Gtk::TextView* view = sheet ? sheet->view_at(saved.row, saved.column) : nullptr;
+  if (!sheet || !view || !view->get_buffer()) {
+    cell_edit_.on = false;
+    text_.grab_focus();
+    return;
+  }
+  cell_edit_ = saved;
+  sheet->focus_slot(saved.row, saved.column);
+  auto buffer = view->get_buffer();
+  const int chars = buffer->get_char_count();
+  const int caret = std::max(0, std::min(saved.caret, chars));
+  const int bound = std::max(0, std::min(saved.bound, chars));
+  buffer->select_range(buffer->get_iter_at_offset(caret), buffer->get_iter_at_offset(bound));
+  cell_edit_.on = true;
+  cell_edit_.caret = caret;
+  cell_edit_.bound = bound;
+  sync_format_controls();
 }
 
 void MainWindow::apply_document_page(PageSetup page)

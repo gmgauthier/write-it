@@ -16,6 +16,7 @@
 #include <gtkmm.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -115,6 +116,52 @@ struct MainWindowProbe {
   {
     return w.export_page(path);
   }
+  static void place(MainWindow& w, int offset)
+  {
+    const int count = w.buffer_->get_char_count();
+    const int at = std::max(0, std::min(offset, count));
+    w.buffer_->place_cursor(w.buffer_->get_iter_at_offset(at));
+  }
+  static std::vector<int> seam_offsets(MainWindow& w)
+  {
+    std::vector<int> offsets;
+    auto iter = w.buffer_->begin();
+    while (true) {
+      int seam = 0;
+      for (const auto& tag : iter.get_tags())
+        seam = std::max(seam, page_seam_pixels(tag->property_name().get_value()));
+      if (seam > 0)
+        offsets.push_back(iter.get_offset());
+      bool more = false;
+      while (!iter.is_end()) {
+        if (iter.get_char() == '\n') {
+          iter.forward_char();
+          more = !iter.is_end();
+          break;
+        }
+        iter.forward_char();
+      }
+      if (!more)
+        break;
+    }
+    return offsets;
+  }
+  static int iter_y(MainWindow& w, int offset)
+  {
+    const int count = w.buffer_->get_char_count();
+    const int at = std::max(0, std::min(offset, count));
+    Gdk::Rectangle loc;
+    w.text_.get_iter_location(w.buffer_->get_iter_at_offset(at), loc);
+    return loc.get_y();
+  }
+  static int per_page(MainWindow& w)
+  {
+    return std::max(1, page_text_height(w.page_setup_, w.zoom_factor()));
+  }
+  static int chars(MainWindow& w)
+  {
+    return w.buffer_->get_char_count();
+  }
 };
 
 }  // namespace writeit
@@ -202,7 +249,7 @@ int pdf_pages(const std::string& pdf)
 
 }  // namespace
 
-constexpr int kChecks = 14;
+constexpr int kChecks = 19;
 
 int main(int argc, char* argv[])
 {
@@ -246,6 +293,20 @@ int main(int argc, char* argv[])
       std::cerr << "first gap at " << gap << ", sheet " << sheet << "\n";
     CHECK(std::abs(gap - sheet) <= 2);
 
+    // The first line of the next sheet is that page. A line that did not fit
+    // the room left behind used to keep the previous page number.
+    const std::vector<int> breaks = MainWindowProbe::seam_offsets(window);
+    const int first_break = breaks.empty() ? 0 : breaks.front();
+    MainWindowProbe::place(window, first_break > 0 ? first_break - 1 : 0);
+    settle();
+    CHECK(MainWindowProbe::page(window) == "Page 1 of " + std::to_string(pages));
+    MainWindowProbe::place(window, first_break);
+    settle();
+    const std::string on_next = MainWindowProbe::page(window);
+    if (on_next != "Page 2 of " + std::to_string(pages))
+      std::cerr << "first line of sheet 2: " << on_next << "\n";
+    CHECK(on_next == "Page 2 of " + std::to_string(pages));
+
     MainWindowProbe::caret(window, true);
     settle();
     const std::string at_end = MainWindowProbe::page(window);
@@ -282,6 +343,50 @@ int main(int argc, char* argv[])
     MainWindowProbe::draft(window, false);
     settle();
     CHECK(!MainWindowProbe::seams(window).empty());
+
+    // A block too tall for the room left on the sheet moves to the next one.
+    // Its top, and a point a third of the way down that sheet, are the new
+    // page. The old count stayed on the previous page until that leftover
+    // room had been walked off, about halfway down when the block is tall.
+    std::string tall;
+    for (int i = 0; i < 15; ++i)
+      tall += "Line " + std::to_string(i) + " of the first sheet.\n";
+    for (int i = 0; i < 40; ++i)
+      tall += "The quick brown fox jumps over the lazy dog. ";
+    tall += "\n";
+    MainWindowProbe::zoom(window, 100);
+    MainWindowProbe::load(window, tall);
+    settle();
+    const std::vector<int> pushed = MainWindowProbe::seam_offsets(window);
+    if (pushed.empty())
+      std::cerr << "tall block did not cross a sheet, chars " << MainWindowProbe::chars(window)
+                << " per " << MainWindowProbe::per_page(window) << " endy "
+                << MainWindowProbe::iter_y(window, MainWindowProbe::chars(window)) << "\n";
+    CHECK(!pushed.empty());
+    const int at_block = pushed.empty() ? 0 : pushed.front();
+    MainWindowProbe::place(window, at_block);
+    settle();
+    const std::string block_top = MainWindowProbe::page(window);
+    const int block_pages = pages_in(block_top);
+    if (block_top != "Page 2 of " + std::to_string(block_pages))
+      std::cerr << "pushed block: " << block_top << "\n";
+    CHECK(block_top == "Page 2 of " + std::to_string(block_pages));
+    const int sample_y =
+        MainWindowProbe::iter_y(window, at_block) + MainWindowProbe::per_page(window) / 3;
+    int mid = at_block;
+    const int count = MainWindowProbe::chars(window);
+    for (int off = at_block; off < count; ++off) {
+      if (MainWindowProbe::iter_y(window, off) >= sample_y) {
+        mid = off;
+        break;
+      }
+    }
+    MainWindowProbe::place(window, mid);
+    settle();
+    const std::string block_mid = MainWindowProbe::page(window);
+    if (block_mid != "Page 2 of " + std::to_string(block_pages))
+      std::cerr << "a third down the pushed sheet: " << block_mid << "\n";
+    CHECK(block_mid == "Page 2 of " + std::to_string(block_pages));
     window.hide();
     settle();
   }

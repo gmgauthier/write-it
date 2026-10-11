@@ -175,6 +175,8 @@ MainWindow::~MainWindow()
   alive_.reset();
   page_idle_.disconnect();
   caret_idle_.disconnect();
+  restore_idle_.disconnect();
+  cell_typing_idle_.disconnect();
   page_status_idle_.disconnect();
   frame_fit_idle_.disconnect();
   list_shifts_idle_.disconnect();
@@ -739,6 +741,8 @@ void MainWindow::build_page()
       // depended on the zooms before. Size it again to the text as it is.
       queue_page_size();
     }
+    if (restore_scroll_)
+      restore_held_view(false);
     scroll_to_caret();
   });
   g_signal_connect(text_.gobj(), "move-cursor", G_CALLBACK(&MainWindow::on_move_cursor), this);
@@ -807,6 +811,10 @@ bool MainWindow::page_caret(int count, bool extend)
 
 void MainWindow::follow_caret()
 {
+  // A style apply, or collapsing a selection the caret has left, moves marks
+  // without the user going to the first line.
+  if (hold_scroll_ || releasing_)
+    return;
   follow_caret_ = true;
   // Opening a file or an undo rebuilds the buffer in many edits; the idle
   // below scrolls once, after the last of them.
@@ -822,9 +830,61 @@ void MainWindow::follow_caret()
   });
 }
 
+void MainWindow::hold_view()
+{
+  auto v = paste_.get_vadjustment();
+  auto h = paste_.get_hadjustment();
+  if (!v || !h)
+    return;
+  held_v_ = v->get_value();
+  held_h_ = h->get_value();
+  hold_scroll_ = true;
+  restore_scroll_ = true;
+  follow_caret_ = false;
+}
+
+void MainWindow::restore_held_view(bool finish)
+{
+  if (!hold_scroll_ && !restore_scroll_)
+    return;
+  auto v = paste_.get_vadjustment();
+  auto h = paste_.get_hadjustment();
+  if (!v || !h)
+    return;
+  hold_scroll_ = true;
+  follow_caret_ = false;
+  auto clamp = [](const Glib::RefPtr<Gtk::Adjustment>& adj, double want) {
+    const double page = adj->get_page_size();
+    const double room = std::max(adj->get_lower(), adj->get_upper() - std::max(0.0, page));
+    adj->set_value(std::max(adj->get_lower(), std::min(want, room)));
+  };
+  clamp(v, held_v_);
+  clamp(h, held_h_);
+  if (!finish)
+    return;
+  restore_scroll_ = false;
+  hold_scroll_ = false;
+  reveal_editing_caret();
+}
+
+void MainWindow::release_view()
+{
+  restore_held_view(false);
+  if (restore_idle_.connected())
+    return;
+  // After the page-size idle and the resize it queues, so the caret's
+  // coordinates are the laid-out ones.
+  restore_idle_ = Glib::signal_idle().connect(
+      [this] {
+        restore_held_view(true);
+        return false;
+      },
+      Glib::PRIORITY_LOW);
+}
+
 void MainWindow::scroll_to_caret()
 {
-  if (!follow_caret_ || !buffer_ || !text_.get_realized())
+  if (hold_scroll_ || !follow_caret_ || !buffer_ || !text_.get_realized())
     return;
   Gdk::Rectangle rect;
   text_.get_iter_location(buffer_->get_insert()->get_iter(), rect);
@@ -986,7 +1046,9 @@ void MainWindow::apply_page_size()
 
 // The page's height for the view, the zoom, the window and the text as they
 // are now, and nothing else: the least height (A4 in Page, the pasteboard's
-// in Draft), or the text's own when it is taller.
+// in Draft), or the text's own when it is taller. In Page, every sheet the
+// text needs is a whole page, with the gray gap between sheets. A short
+// first page stays one sheet.
 int MainWindow::page_height() const
 {
   const ViewGeometry g = geometry();
@@ -1006,7 +1068,16 @@ int MainWindow::page_height() const
     story->get_preferred_height_for_width(std::max(1, width), story_min, story_nat);
     extra += story_nat;
   }
-  return std::max(base_h, nat_h + extra);
+  int height = std::max(base_h, nat_h + extra);
+  if (g.chrome && buffer_ && text_.get_realized()) {
+    const int sheets = std::max(1, print_page_count());
+    if (sheets > 1) {
+      const int stack =
+          sheets * std::max(1, g.page_height) + (sheets - 1) * std::max(0, g.gap) + extra;
+      height = std::max(height, stack);
+    }
+  }
+  return height;
 }
 
 bool MainWindow::page_height_stale() const
@@ -1063,8 +1134,8 @@ void MainWindow::update_page_status()
   Gdk::Rectangle caret;
   text_.get_iter_location(caret_iter, caret);
   const int per = page_text_height(page_setup_, zoom_factor());
-  const int content_end = end_y + end_h - seam_extra_through(buffer_->get_char_count());
-  const int content_caret = caret.get_y() - seam_extra_through(caret_iter.get_offset());
+  const int content_end = page_content_y(end_y + end_h, buffer_->get_char_count());
+  const int content_caret = page_content_y(caret.get_y(), caret_iter.get_offset());
   const Glib::ustring label = page_label(page_count(content_end, content_caret, per));
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
@@ -1201,7 +1272,7 @@ int MainWindow::print_page_count() const
   int end_y = 0;
   int end_h = 0;
   text_.get_line_yrange(buffer_->end(), end_y, end_h);
-  const int content = std::max(0, end_y + end_h - seam_extra_through(buffer_->get_char_count()));
+  const int content = std::max(0, page_content_y(end_y + end_h, buffer_->get_char_count()));
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
   return std::max(1, (content + per - 1) / per);
 }

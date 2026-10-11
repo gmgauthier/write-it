@@ -1,3 +1,13 @@
+write-it (1.0.9-1) unstable; urgency=medium
+
+  * A heading after a table styles that paragraph, and a heading inside a cell styles the cell.
+  * Bold, italic, and underline apply inside a table cell.
+  * A selection clears when the caret is placed somewhere else.
+  * Each page is a full sheet, and the page number changes at that sheet.
+  * Applying a style leaves the view on the caret.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sun, 11 Oct 2026 19:09:30 +0100
+
 write-it (1.0.8-1) unstable; urgency=medium
 
   * Spelling splits on an em dash and folds accented letters.

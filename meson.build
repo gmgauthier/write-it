@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '1.0.8',
+  version: '1.0.9',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [

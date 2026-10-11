@@ -3,11 +3,12 @@
 // The real window, under a display (CI runs the suite in xvfb-run). In Page
 // view the white sheet is A4, 21 x 29.7 cm: at every zoom it is the zoom's
 // sheet width across and at least the A4 proportion of that width tall,
-// the same height the status bar's page count takes for a page. Text longer
-// than a page makes the sheet taller. Its size depends only on the view,
-// the zoom, the window's width and the text, never on the zooms before: 50%
-// reached from Fit width, from 100% or from 75% is the same sheet, for a
-// short letter and for one longer than a page.
+// the same height the status bar's page count takes for a page. Text that
+// needs another page makes each of those pages a whole sheet, with the gray
+// gap between them, not a strip as tall as the lines that spilled over. Its
+// size depends only on the view, the zoom, the window's width and the text,
+// never on the zooms before: 50% reached from Fit width, from 100% or from
+// 75% is the same sheet, for a short letter and for one longer than a page.
 
 #include "check.hpp"
 #include "main_window.hpp"
@@ -125,8 +126,8 @@ Sheet go(writeit::MainWindow& window, int percent)
 }
 
 // The sheet at a zoom: the zoom's width across; for a short letter exactly
-// the A4 height, the proportion of that width, and for a long one as tall
-// as its text. Four checks.
+// the A4 height, the proportion of that width, and for a long one a stack of
+// whole sheets. Four checks.
 void expect_sheet(writeit::MainWindow& window, int percent, bool long_text, const char* doc)
 {
   const Sheet sheet = go(window, percent);
@@ -139,11 +140,14 @@ void expect_sheet(writeit::MainWindow& window, int percent, bool long_text, cons
   const bool ok_a4 = std::abs(want.page_height - a4) <= 1.5;
   // The page count's page is this sheet less the page's top and bottom insets.
   const bool ok_count = writeit::page_text_height(z) == want.page_height - 2 * want.margin_y;
-  // A long letter's sheet is as tall as its text, no taller: a sheet left
-  // over from an earlier zoom is blank white below the last line.
-  const bool ok_height = long_text
-                             ? sheet.height > want.page_height && std::abs(sheet.height - text) <= 2
-                             : sheet.height == want.page_height;
+  // A long letter's sheet is whole pages: n sheets and the n-1 gaps between
+  // them. Taller than the lines, and not by a further empty page. A sheet
+  // left over from an earlier zoom is not an extra page on top of that.
+  const int stride = want.page_height + want.gap;
+  const bool whole = stride > 0 && (sheet.height + want.gap) % stride == 0 &&
+                     sheet.height + 4 >= text && sheet.height < text + want.page_height + want.gap;
+  const bool ok_height =
+      long_text ? sheet.height > want.page_height && whole : sheet.height == want.page_height;
   if (!(ok_width && ok_a4 && ok_count && ok_height))
     std::cerr << doc << " " << label(percent) << ": sheet " << sheet.width << "x" << sheet.height
               << " (want " << want.page_width << " across, least " << want.page_height << ", A4 "

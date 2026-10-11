@@ -1003,6 +1003,70 @@ bool apply_style(Document& doc, size_t first, size_t last, const std::string& na
   return true;
 }
 
+namespace {
+
+// Copies the style's character attributes whose direct bits are unset, and
+// does not set those bits. A value that merely differs is not direct.
+void take_character(Run& run, const Run& format)
+{
+  if ((run.direct & kDirectFont) == 0)
+    run.font = format.font;
+  if ((run.direct & kDirectSize) == 0)
+    run.size = format.size;
+  if ((run.direct & kDirectBold) == 0)
+    run.bold = format.bold;
+  if ((run.direct & kDirectItalic) == 0)
+    run.italic = format.italic;
+  if ((run.direct & kDirectUnderline) == 0)
+    run.underline = format.underline;
+}
+
+}  // namespace
+
+void take_paragraph_style(Paragraph& paragraph, const Style& to)
+{
+  for (Run& run : paragraph.runs)
+    take_character(run, to.format);
+  std::vector<Run> merged;
+  for (Run& run : paragraph.runs) {
+    if (!merged.empty() && same_format(merged.back(), run))
+      merged.back().text += run.text;
+    else
+      merged.push_back(std::move(run));
+  }
+  paragraph.runs = std::move(merged);
+  if (paragraph.mark)
+    take_character(*paragraph.mark, to.format);
+  if (paragraph.list.kind == ListKind::None) {
+    if ((paragraph.direct & kDirectLeft) == 0)
+      paragraph.indents.left = to.indents.left;
+    if ((paragraph.direct & kDirectRight) == 0)
+      paragraph.indents.right = to.indents.right;
+    if ((paragraph.direct & kDirectFirst) == 0)
+      paragraph.indents.first = to.indents.first;
+    paragraph.indents = clamp_indents(paragraph.indents);
+  } else {
+    // The list sets the left and first-line indents; the style still gives
+    // the right one, as in Word 97.
+    if ((paragraph.direct & kDirectRight) == 0)
+      paragraph.indents.right = to.indents.right;
+    paragraph.indents = clamp_indents(paragraph.indents);
+    if (paragraph.list.has_own) {
+      if ((paragraph.direct & kDirectLeft) == 0)
+        paragraph.list.own.left = to.indents.left;
+      if ((paragraph.direct & kDirectRight) == 0)
+        paragraph.list.own.right = to.indents.right;
+      if ((paragraph.direct & kDirectFirst) == 0)
+        paragraph.list.own.first = to.indents.first;
+      paragraph.list.own = clamp_indents(paragraph.list.own);
+    }
+  }
+  if ((paragraph.direct & kDirectAlign) == 0)
+    paragraph.align = to.align;
+  paragraph.heading = to.heading;
+  paragraph.style = to.name;
+}
+
 bool update_style(Document& doc, const std::string& name, const Style& changed)
 {
   std::vector<Style> sheet = style_sheet(doc);

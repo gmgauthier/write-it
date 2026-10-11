@@ -509,16 +509,24 @@ int main(int argc, char* argv[])
     CHECK(std::abs(before_up - vvalue(window) - page_size(window)) <= 2 * 21);
 
     // On the first line the pasteboard goes all the way to the top, so the
-    // page's top edge and the gray above it show; on the last line, all the
-    // way to the bottom. In Page and in Draft.
+    // page's top edge and the gray above it show. Draft's last line is the
+    // foot of the white area, so the pasteboard goes to the bottom. In Page
+    // the last sheet is a whole page: the last line stays on screen, and the
+    // empty rest of that sheet is not a reason to scroll past the line.
     for (ViewMode mode : {ViewMode::Page, ViewMode::Draft}) {
       MainWindowProbe::view(window, mode);
       settle();
       const bool page = mode == ViewMode::Page;
       key(window, GDK_KEY_End, ctrl);
-      CHECK(at_bottom(window, page ? "Page Ctrl+End" : "Draft Ctrl+End"));
+      if (page)
+        CHECK(caret_visible(window, "Page Ctrl+End on a whole sheet"));
+      else
+        CHECK(at_bottom(window, "Draft Ctrl+End"));
       key(window, GDK_KEY_Home);
-      CHECK(at_bottom(window, page ? "Page Home on the last line" : "Draft Home on the last line"));
+      if (page)
+        CHECK(caret_visible(window, "Page Home on the last line"));
+      else
+        CHECK(at_bottom(window, "Draft Home on the last line"));
       key(window, GDK_KEY_Home, ctrl);
       CHECK(at_top(window, page ? "Page Ctrl+Home" : "Draft Ctrl+Home"));
       key(window, GDK_KEY_End);

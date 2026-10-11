@@ -613,6 +613,21 @@ void MainWindow::build_editor()
   buffer_->signal_apply_tag().connect(changes_on_tag);
   buffer_->signal_remove_tag().connect(changes_on_tag);
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
+  // The style combo takes the keyboard without the caret leaving the cell.
+  // Only the body text view clears that memory.
+  text_.signal_focus_in_event().connect(
+      [this](GdkEventFocus*) {
+        if (!loading_ && !restoring_) {
+          // The caret came here. A highlight left in a cell is no longer the
+          // selection. The style combo never focuses the body, so it does not
+          // take that highlight.
+          release_other_selections(&text_);
+          cell_edit_.on = false;
+          cell_typing_on_ = false;
+        }
+        return false;
+      },
+      false);
   // The clipboard outlives the window: ~MainWindow disconnects this. It is
   // asked again on every change, and when the window comes back to the
   // front, in case a change was missed while it was away.
@@ -689,7 +704,7 @@ void MainWindow::connect_format()
   style_combo_.signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_style_chosen));
   style_combo_.property_popup_shown().signal_changed().connect([this] {
     if (!style_combo_.property_popup_shown().get_value())
-      text_.grab_focus();
+      restore_edit_focus();
   });
   if (style_item_)
     style_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_style_dialog));
@@ -1297,6 +1312,8 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
 {
   label_geometry_.clear();
   loading_ = true;
+  cell_edit_ = CellEdit{};
+  cell_typing_on_ = false;
   styles_ = doc.styles;
   const PageSetup next_page = clamp_page(doc.page);
   if (!(page_setup_ == next_page))
@@ -1381,7 +1398,10 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   const int count = buffer_->get_char_count();
   const int place = std::max(0, std::min(offset, count));
   buffer_->place_cursor(buffer_->get_iter_at_offset(place));
-  text_.scroll_to(buffer_->get_insert());
+  // A style apply is holding the pasteboard where the caret was. Scrolling
+  // to the body insert here would send a cell on a later page back to the top.
+  if (!hold_scroll_)
+    text_.scroll_to(buffer_->get_insert());
   loading_ = false;
   list_lines_valid_ = false;
   refresh_stories();
@@ -2341,14 +2361,33 @@ void MainWindow::strip_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to)
     buffer_->remove_tag(tag, from, to);
 }
 
-void MainWindow::set_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to,
-                         const Glib::RefPtr<Gtk::TextTag>& tag)
+void MainWindow::set_fmt_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer, const Gtk::TextIter& from,
+                            const Gtk::TextIter& to, const Glib::RefPtr<Gtk::TextTag>& tag)
 {
+  if (!buffer || !tag)
+    return;
   // Offsets, since removing tags can leave the iterators invalid.
   const int a = from.get_offset();
   const int b = to.get_offset();
-  strip_fmt(buffer_->get_iter_at_offset(a), buffer_->get_iter_at_offset(b));
-  buffer_->apply_tag(tag, buffer_->get_iter_at_offset(a), buffer_->get_iter_at_offset(b));
+  std::vector<Glib::RefPtr<Gtk::TextTag>> tags;
+  for (auto iter = buffer->get_iter_at_offset(a); iter != buffer->get_iter_at_offset(b); ++iter) {
+    for (const auto& existing : iter.get_tags()) {
+      Run ignored;
+      if (!parse_fmt(tag_name(existing), ignored))
+        continue;
+      if (std::find(tags.begin(), tags.end(), existing) == tags.end())
+        tags.push_back(existing);
+    }
+  }
+  for (const auto& existing : tags)
+    buffer->remove_tag(existing, buffer->get_iter_at_offset(a), buffer->get_iter_at_offset(b));
+  buffer->apply_tag(tag, buffer->get_iter_at_offset(a), buffer->get_iter_at_offset(b));
+}
+
+void MainWindow::set_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to,
+                         const Glib::RefPtr<Gtk::TextTag>& tag)
+{
+  set_fmt_on(buffer_, from, to, tag);
 }
 
 void MainWindow::on_tag_applied(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& from,
@@ -2529,6 +2568,10 @@ void MainWindow::toggle_flag(TextFlag flag)
 {
   if (suppress_format_)
     return;
+  if (editing_cell()) {
+    toggle_cell_flag(flag);
+    return;
+  }
   Gtk::TextBuffer::iterator start_iter;
   Gtk::TextBuffer::iterator end_iter;
   if (!buffer_->get_selection_bounds(start_iter, end_iter) || start_iter == end_iter) {
@@ -2611,10 +2654,31 @@ void MainWindow::show_size(double run_size)
   suppress_format_ = guard;
 }
 
+Run MainWindow::style_typing(const std::string& name) const
+{
+  Run run;
+  if (const Style* style = find_style(sheet(), name))
+    run = style->format;
+  if (run.font.empty())
+    run.font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
+  if (!known_size(run.size))
+    run.size = known_size(settings_.default_size) ? settings_.default_size : 11;
+  run.text.clear();
+  run.direct = 0;
+  run.note = 0;
+  run.image.reset();
+  return run;
+}
+
 void MainWindow::sync_format_controls()
 {
   if (loading_ || restoring_ || suppress_format_ || in_user_ || !buffer_)
     return;
+  if (editing_cell()) {
+    ruler_.queue_draw();
+    show_cell_format();
+    return;
+  }
   ruler_.queue_draw();
   show_align();
   sync_list_controls();
@@ -3940,6 +4004,46 @@ int MainWindow::seam_extra_through(int offset) const
       break;
   }
   return extra;
+}
+
+int MainWindow::page_content_y(int layout_y, int offset) const
+{
+  if (!buffer_)
+    return layout_y;
+  const int count = buffer_->get_char_count();
+  const int at = std::max(0, std::min(offset, count));
+  const int content = layout_y - seam_extra_through(at);
+  if (view_ != ViewMode::Page)
+    return content;
+  // Each gray gap starts a sheet. The line's content y is short of that
+  // sheet by whatever room the previous sheet did not fill, so a tall block
+  // pushed onto the next page keeps the old page number until the caret has
+  // moved that far down the new sheet.
+  const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
+  int seam_index = 0;
+  int lag = 0;
+  auto iter = buffer_->begin();
+  while (iter.get_offset() <= at) {
+    if (seam_at(iter) > 0) {
+      Gdk::Rectangle loc;
+      text_.get_iter_location(iter, loc);
+      const int origin = loc.get_y() - seam_extra_through(iter.get_offset());
+      ++seam_index;
+      lag = std::max(0, seam_index * per - origin);
+    }
+    bool found = false;
+    while (!iter.is_end()) {
+      if (iter.get_char() == '\n') {
+        iter.forward_char();
+        found = true;
+        break;
+      }
+      iter.forward_char();
+    }
+    if (!found)
+      break;
+  }
+  return content + lag;
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::page_seam_tag(int pixels)
