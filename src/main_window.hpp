@@ -243,6 +243,7 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   Glib::RefPtr<Gtk::TextTag> format_tag(const Run& run);
   Glib::RefPtr<Gtk::TextTag> heading_tag(int level);
+  Glib::RefPtr<Gtk::TextTag> heading_tag_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int level);
   void raise_headings();
   void restyle_tags();
   void apply_margins();
@@ -289,6 +290,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   static void set_text_flag(Run& run, TextFlag flag, bool on);
   void toggle_flag(TextFlag flag);
   void toggle_cell_flag(TextFlag flag);
+  // Font face and size inside the cell that has the caret. An empty selection
+  // waits for the next character, as bold does.
+  void edit_cell_runs(const std::function<void(Run&)>& edit);
   void show_format(const Run& run);
   void sync_format_controls();
   void on_font_changed();
@@ -310,6 +314,11 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
   void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
+  // A cell paragraph's indents and alignment. No page margin and no list.
+  void style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents,
+                       Align align) const;
+  Glib::RefPtr<Gtk::TextTag> cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                                           const Indents& indents, Align align);
   Glib::RefPtr<Gtk::TextTag> para_tag_at(Gtk::TextIter iter) const;
   ParaFormat para_at(int offset) const;
   Indents indents_at(int offset) const;
@@ -368,6 +377,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_insert_column();
   void on_delete_row();
   void on_delete_column();
+  void on_table_width();
+  // Writes `widths` onto table `table_id` and rebuilds the sheet. The caller
+  // must not use a TableSheet after this returns: the rebuild destroys it.
+  void commit_table_widths(int table_id, const std::vector<int>& widths);
   void on_footnote();
   void on_picture();
   // A table is one child widget in the body, not a paragraph per cell.
@@ -381,9 +394,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   TableSheet* sheet_at_cursor() const;
   void relayout_tables();
   void fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs);
+  // Heading space and cell alignment on [from, to). The newline is part of
+  // the paragraph tag and not part of the heading tag.
+  void tag_cell_paragraph(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int from, int to,
+                          const Paragraph& paragraph);
   std::vector<Paragraph> read_cell(const Gtk::TextView& view,
                                    const std::vector<Paragraph>& forms) const;
   void restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer);
+  // An empty cell has no character tag, so the style's face is the view font.
+  // A cell that already has character tags keeps the font relayout() set.
+  void style_cell_face(Gtk::TextView& view, const std::vector<Paragraph>& forms);
   void on_cell_begin();
   void on_cell_end();
   // Tab in the last cell adds a row, as in Word 97.
@@ -406,6 +426,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   };
   void note_cell_focus(TableSheet& sheet, int row, int column);
   void note_cell_blur(TableSheet& sheet, int row, int column);
+  // A menu or the style list can focus the body without the caret leaving the
+  // cell. A click or a key in the body is what leaves it.
+  void leave_cell_edit();
   // Each cell is its own buffer, so a highlight there stays up when the caret
   // is placed in another cell or in the body. Drop every selection but `keep`.
   void release_other_selections(const Gtk::TextView* keep);
@@ -626,6 +649,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* table_column_item_ = nullptr;
   Gtk::MenuItem* table_delete_row_item_ = nullptr;
   Gtk::MenuItem* table_delete_column_item_ = nullptr;
+  Gtk::MenuItem* table_width_item_ = nullptr;
   Gtk::CheckMenuItem* header_footer_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;

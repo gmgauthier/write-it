@@ -9,7 +9,9 @@
 // text's weight, so a heading's label is bold. A style chosen while the
 // caret is in a table cell styles that cell, and typing there follows it.
 // A cell's highlight drops when the caret is placed in another cell or the
-// body. Choosing a heading leaves the pasteboard where the caret is.
+// body. Choosing a heading leaves the pasteboard where the caret is, and a
+// heading in a cell has space above it.
+// The font and the size apply in a cell, and the body paragraph keeps its own.
 
 #include "check.hpp"
 #include "main_window.hpp"
@@ -109,9 +111,43 @@ struct MainWindowProbe {
     auto buffer = view->get_buffer();
     buffer->select_range(buffer->get_iter_at_offset(from), buffer->get_iter_at_offset(to));
   }
-  static void focus_body(MainWindow& w)
+  // A menu or the style list can focus the body without a click. The cell
+  // highlight stays; only a click in the body drops it.
+  static void focus_body_quietly(MainWindow& w)
   {
     w.text_.grab_focus();
+  }
+  static void focus_body(MainWindow& w)
+  {
+    auto text_win = w.text_.get_window(Gtk::TEXT_WINDOW_TEXT);
+    if (!text_win) {
+      w.text_.grab_focus();
+      return;
+    }
+    int origin_x = 0;
+    int origin_y = 0;
+    text_win->get_origin(origin_x, origin_y);
+    auto pointer = text_win->get_display()->get_default_seat()->get_pointer();
+    auto send = [&](GdkEventType type) {
+      GdkEvent* event = gdk_event_new(type);
+      event->button.window = GDK_WINDOW(g_object_ref(text_win->gobj()));
+      event->button.send_event = TRUE;
+      event->button.time = 5000;
+      event->button.x = 8;
+      event->button.y = 8;
+      event->button.x_root = origin_x + 8;
+      event->button.y_root = origin_y + 8;
+      event->button.button = 1;
+      event->button.state = type == GDK_BUTTON_RELEASE ? GDK_BUTTON1_MASK : 0;
+      if (pointer) {
+        gdk_event_set_device(event, pointer->gobj());
+        gdk_event_set_source_device(event, pointer->gobj());
+      }
+      gtk_main_do_event(event);
+      gdk_event_free(event);
+    };
+    send(GDK_BUTTON_PRESS);
+    send(GDK_BUTTON_RELEASE);
   }
   static void place_end(MainWindow& w)
   {
@@ -138,12 +174,30 @@ struct MainWindowProbe {
   {
     w.toggle_flag(MainWindow::TextFlag::Underline);
   }
+  static void font_face(MainWindow& w, const std::string& name)
+  {
+    if (w.font_combo_.get_active_text() == name)
+      return;
+    w.font_combo_.set_active_text(name);
+    if (w.font_combo_.get_active_text() != name) {
+      w.font_combo_.append(name);
+      w.font_combo_.set_active_text(name);
+    }
+  }
+  static void font_size(MainWindow& w, const std::string& size)
+  {
+    w.size_combo_.set_active_text(size);
+  }
   static void scroll_bottom(MainWindow& w)
   {
     w.follow_caret_ = false;
     auto v = w.paste_.get_vadjustment();
     const double page = v->get_page_size();
     v->set_value(std::max(v->get_lower(), v->get_upper() - page));
+  }
+  static Gtk::TextView* cell_view(MainWindow& w, int which, int row, int column)
+  {
+    return w.nth_cell_view(which, row, column);
   }
 };
 
@@ -230,7 +284,7 @@ Measured measure_style_dialog(writeit::MainWindow& window)
 
 }  // namespace
 
-constexpr int kChecks = 68;
+constexpr int kChecks = 83;
 
 int main(int argc, char* argv[])
 {
@@ -394,6 +448,25 @@ int main(int argc, char* argv[])
     CHECK(other_styled == 0);
     CHECK(MainWindowProbe::cell_focused(window, 0, 0, 0));
     CHECK(styles.get_active_text() == "Heading 2");
+    bool cell_heading_space = false;
+    if (Gtk::TextView* cell = MainWindowProbe::cell_view(window, 0, 0, 0)) {
+      for (const auto& tag : cell->get_buffer()->begin().get_tags()) {
+        if (tag->property_pixels_above_lines().get_value() > 0)
+          cell_heading_space = true;
+      }
+    }
+    CHECK(cell_heading_space);
+    MainWindowProbe::focus_table_cell(window, 0, 1, 0);
+    MainWindowProbe::apply_style(window, "Heading 1");
+    settle();
+    bool empty_heading_face = false;
+    if (Gtk::TextView* empty = MainWindowProbe::cell_view(window, 0, 1, 0)) {
+      const auto desc = empty->get_pango_context()->get_font_description();
+      empty_heading_face = desc.get_weight() == Pango::WEIGHT_BOLD && desc.get_size() > 0;
+    }
+    CHECK(empty_heading_face);
+    MainWindowProbe::focus_table_cell(window, 0, 0, 0);
+    settle();
 
     styles.grab_focus();
     settle();
@@ -453,6 +526,9 @@ int main(int argc, char* argv[])
     CHECK(MainWindowProbe::cell_focused(window, 0, 0, 1));
     MainWindowProbe::focus_table_cell(window, 0, 0, 0);
     MainWindowProbe::select_cell(window, 0, 0, 0, 0, 4);
+    settle();
+    CHECK(MainWindowProbe::cell_has_selection(window, 0, 0, 0));
+    MainWindowProbe::focus_body_quietly(window);
     settle();
     CHECK(MainWindowProbe::cell_has_selection(window, 0, 0, 0));
     MainWindowProbe::focus_body(window);
@@ -535,6 +611,59 @@ int main(int argc, char* argv[])
       }
     }
     CHECK(zee);
+
+    // The font and the size land in the cell. The body heading keeps its face
+    // and size. A collapsed caret remembers the size for the next character,
+    // and that character keeps the face just applied.
+    MainWindowProbe::focus_table_cell(window, 0, 0, 1);
+    settle();
+    const writeit::Document before_face = MainWindowProbe::doc(window);
+    const std::string title_font = before_face.paragraphs[0].runs[0].font;
+    const double title_size = before_face.paragraphs[0].runs[0].size;
+    MainWindowProbe::select_cell(window, 0, 0, 1, 0, 5);
+    MainWindowProbe::font_face(window, "Serif");
+    settle();
+    writeit::Document faced = MainWindowProbe::doc(window);
+    CHECK(faced.paragraphs[0].runs[0].text == "Title");
+    CHECK(faced.paragraphs[0].runs[0].font == title_font);
+    CHECK(faced.paragraphs[0].runs[0].size == title_size);
+    const writeit::Run* hello_face = nullptr;
+    for (const writeit::Paragraph& paragraph : faced.paragraphs) {
+      if (paragraph.cell.row != 0 || paragraph.cell.column != 1)
+        continue;
+      for (const writeit::Run& run : paragraph.runs) {
+        if (run.text == "Hello")
+          hello_face = &run;
+      }
+    }
+    CHECK(hello_face != nullptr);
+    CHECK(hello_face && hello_face->font == "Serif" && hello_face->size == 11);
+    CHECK(hello_face && (hello_face->direct & writeit::kDirectFont) != 0);
+    CHECK(hello_face && hello_face->bold);
+    CHECK(MainWindowProbe::cell_focused(window, 0, 0, 1));
+
+    MainWindowProbe::select_cell(window, 0, 0, 1, 5, 5);
+    MainWindowProbe::font_size(window, "18");
+    MainWindowProbe::type_into_cell(window, 0, 0, 1, "Q");
+    settle();
+    faced = MainWindowProbe::doc(window);
+    const writeit::Run* cue = nullptr;
+    const writeit::Run* bang_size = nullptr;
+    for (const writeit::Paragraph& paragraph : faced.paragraphs) {
+      if (paragraph.cell.row != 0 || paragraph.cell.column != 1)
+        continue;
+      for (const writeit::Run& run : paragraph.runs) {
+        if (run.text == "Q")
+          cue = &run;
+        if (run.text == "!")
+          bang_size = &run;
+      }
+    }
+    CHECK(cue != nullptr);
+    CHECK(cue && cue->font == "Serif" && cue->size == 18);
+    CHECK(cue && (cue->direct & writeit::kDirectFont) != 0 &&
+          (cue->direct & writeit::kDirectSize) != 0);
+    CHECK(bang_size && bang_size->size == 11 && (bang_size->direct & writeit::kDirectSize) == 0);
 
     // Choosing a heading while the caret is down the document stays there.
     // The body insert on the first line used to pull the pasteboard to the top.

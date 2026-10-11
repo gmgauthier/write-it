@@ -497,6 +497,9 @@ void MainWindow::build_menus()
       sigc::mem_fun(*this, &MainWindow::on_delete_row));
   table_delete_column_item_->signal_activate().connect(
       sigc::mem_fun(*this, &MainWindow::on_delete_column));
+  table->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
+  table_width_item_ = add_item(*table, "Table _Width…", false);
+  table_width_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_table_width));
 
   auto* help = add_menu("_Help");
   add_item(*help, "_About Write-It", true, GDK_KEY_F1, static_cast<Gdk::ModifierType>(0))

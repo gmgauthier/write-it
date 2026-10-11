@@ -158,10 +158,68 @@ void click_view(Gtk::TextView& view, double x, double y, guint time)
   settle();
 }
 
+// Press near the right edge, move left, and release. `dx` is in window pixels.
+void drag_view(Gtk::TextView& view, double x, double y, double dx, guint time)
+{
+  auto text_win = view.get_window(Gtk::TEXT_WINDOW_TEXT);
+  if (!text_win)
+    return;
+  int origin_x = 0;
+  int origin_y = 0;
+  text_win->get_origin(origin_x, origin_y);
+  auto pointer = text_win->get_display()->get_default_seat()->get_pointer();
+  auto device = [&](GdkEvent* event) {
+    if (!pointer)
+      return;
+    gdk_event_set_device(event, pointer->gobj());
+    gdk_event_set_source_device(event, pointer->gobj());
+  };
+  GdkEvent* press = gdk_event_new(GDK_BUTTON_PRESS);
+  press->button.window = GDK_WINDOW(g_object_ref(text_win->gobj()));
+  press->button.send_event = TRUE;
+  press->button.time = time;
+  press->button.x = x;
+  press->button.y = y;
+  press->button.x_root = origin_x + x;
+  press->button.y_root = origin_y + y;
+  press->button.button = 1;
+  device(press);
+  gtk_main_do_event(press);
+  gdk_event_free(press);
+
+  GdkEvent* motion = gdk_event_new(GDK_MOTION_NOTIFY);
+  motion->motion.window = GDK_WINDOW(g_object_ref(text_win->gobj()));
+  motion->motion.send_event = TRUE;
+  motion->motion.time = time + 1;
+  motion->motion.x = x + dx;
+  motion->motion.y = y;
+  motion->motion.x_root = origin_x + x + dx;
+  motion->motion.y_root = origin_y + y;
+  motion->motion.state = GDK_BUTTON1_MASK;
+  device(motion);
+  gtk_main_do_event(motion);
+  gdk_event_free(motion);
+
+  GdkEvent* release = gdk_event_new(GDK_BUTTON_RELEASE);
+  release->button.window = GDK_WINDOW(g_object_ref(text_win->gobj()));
+  release->button.send_event = TRUE;
+  release->button.time = time + 2;
+  release->button.x = x + dx;
+  release->button.y = y;
+  release->button.x_root = origin_x + x + dx;
+  release->button.y_root = origin_y + y;
+  release->button.button = 1;
+  release->button.state = GDK_BUTTON1_MASK;
+  device(release);
+  gtk_main_do_event(release);
+  gdk_event_free(release);
+  settle();
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 50;
+constexpr int kChecks = 54;
 
 int main(int argc, char* argv[])
 {
@@ -196,6 +254,7 @@ int main(int argc, char* argv[])
     Gtk::MenuItem* insert_column = item_named(table, "Insert _Column");
     Gtk::MenuItem* delete_row = item_named(table, "_Delete Row");
     Gtk::MenuItem* delete_column = item_named(table, "Delete C_olumn");
+    Gtk::MenuItem* table_width = item_named(table, "Table _Width…");
     Gtk::MenuItem* header = item_named(view, "_Header and Footer");
     CHECK(page_setup && page_setup->get_sensitive());
     CHECK(columns && columns->get_sensitive());
@@ -208,6 +267,7 @@ int main(int argc, char* argv[])
     CHECK(insert_column && !insert_column->get_sensitive());
     CHECK(delete_row && !delete_row->get_sensitive());
     CHECK(delete_column && !delete_column->get_sensitive());
+    CHECK(table_width && !table_width->get_sensitive());
     auto* header_check = dynamic_cast<Gtk::CheckMenuItem*>(header);
     CHECK(header_check && !header_check->get_active());
 
@@ -389,6 +449,53 @@ int main(int argc, char* argv[])
     CHECK(other_focus);
     CHECK(cell_left);
     CHECK(same_doc);
+
+    int alloc_before = -1;
+    std::vector<int> widths_before;
+    if (cell && cell->get_parent())
+      alloc_before = cell->get_parent()->get_allocated_width();
+    for (const writeit::Paragraph& paragraph : writeit::MainWindowProbe::doc(window).paragraphs) {
+      if (paragraph.cell.table != 0 && paragraph.cell.widths.size() >= 2) {
+        widths_before = paragraph.cell.widths;
+        break;
+      }
+    }
+    if (cell) {
+      auto text_win = cell->get_window(Gtk::TEXT_WINDOW_TEXT);
+      const int width = text_win ? text_win->get_width() : 0;
+      if (width > 8)
+        drag_view(*cell, width - 2, 4, -40, 4000);
+    }
+    settle();
+    std::vector<int> widths_after;
+    for (const writeit::Paragraph& paragraph : writeit::MainWindowProbe::doc(window).paragraphs) {
+      if (paragraph.cell.table != 0 && paragraph.cell.widths.size() >= 2) {
+        widths_after = paragraph.cell.widths;
+        break;
+      }
+    }
+    Gtk::TextView* resized = nullptr;
+    if (body) {
+      for (Gtk::Widget* child : body->get_children()) {
+        walk(*child, [&](Gtk::Widget& widget) {
+          auto* view = dynamic_cast<Gtk::TextView*>(&widget);
+          if (!view || view == body || resized)
+            return;
+          if (view->get_buffer()->get_text().raw().compare(0, 15, "asdfasfdsafddsf") == 0)
+            resized = view;
+        });
+      }
+    }
+    int alloc_after = -1;
+    if (resized && resized->get_parent())
+      alloc_after = resized->get_parent()->get_allocated_width();
+    const bool narrower = widths_after.size() >= 2 && widths_before.size() >= 2 &&
+                          widths_after[0] < widths_before[0];
+    const bool pair_kept = widths_after.size() >= 2 && widths_before.size() >= 2 &&
+                           widths_after[0] + widths_after[1] == widths_before[0] + widths_before[1];
+    CHECK(narrower);
+    CHECK(pair_kept);
+    CHECK(alloc_after > 0 && alloc_after < alloc_before);
   }
   return suite_test::done("page-ui", kChecks);
 }

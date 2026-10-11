@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -159,6 +160,130 @@ void tables()
   CHECK(doc.paragraphs[1].cell.rows == 2);
   CHECK(!writeit::insert_table_row(doc.paragraphs, 0));
   CHECK(!writeit::delete_table_column(doc.paragraphs, 0));
+}
+
+void table_widths()
+{
+  std::vector<int> widths{1000, 1000};
+  CHECK(writeit::fit_table_widths(widths, 3000, 4000));
+  CHECK(widths == std::vector<int>({1500, 1500}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::fit_table_widths(widths, 100, 5000));
+  CHECK(widths == std::vector<int>({200, 200}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::fit_table_widths(widths, 9000, 3000));
+  CHECK(widths[0] + widths[1] == 3000);
+  CHECK(widths[0] >= writeit::kMinCellTwips && widths[1] >= writeit::kMinCellTwips);
+
+  widths = {1000, 1000};
+  CHECK(!writeit::fit_table_widths(widths, 3000, 300));
+  CHECK(widths == std::vector<int>({1000, 1000}));
+
+  widths = {10000, 200};
+  CHECK(writeit::fit_table_widths(widths, 400, 5000));
+  CHECK(widths == std::vector<int>({200, 200}));
+
+  widths = {1000, 3000};
+  CHECK(writeit::fit_table_widths(widths, 2000, 8000));
+  CHECK(widths == std::vector<int>({500, 1500}));
+
+  widths = {10000, 100, 100};
+  CHECK(writeit::fit_table_widths(widths, 600, 5000));
+  CHECK(widths == std::vector<int>({200, 200, 200}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::set_table_column_width(widths, 0, 2000, 4000));
+  CHECK(widths == std::vector<int>({2000, 1000}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::set_table_column_width(widths, 0, 2000, 2500));
+  CHECK(widths == std::vector<int>({2000, 500}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::set_table_column_width(widths, 0, 50, 4000));
+  CHECK(widths == std::vector<int>({200, 1000}));
+
+  widths = {1000};
+  CHECK(writeit::set_table_column_width(widths, 0, 1800, 4000));
+  CHECK(widths == std::vector<int>({1800}));
+  CHECK(writeit::fit_table_widths(widths, 2200, 4000));
+  CHECK(widths == std::vector<int>({2200}));
+
+  widths = {1000, 1000, 1000};
+  CHECK(writeit::set_table_column_width(widths, 1, 2000, 3000));
+  CHECK(widths == std::vector<int>({500, 2000, 500}));
+
+  const std::vector<int> kept = widths;
+  std::vector<int> none;
+  CHECK(!writeit::fit_table_widths(none, 1000, 4000));
+  CHECK(!writeit::set_table_column_width(widths, -1, 1000, 4000));
+  CHECK(!writeit::set_table_column_width(widths, 9, 1000, 4000));
+  CHECK(widths == kept);
+
+  writeit::Document doc;
+  doc.paragraphs.push_back(writeit::Paragraph{});
+  CHECK(writeit::insert_table(doc.paragraphs, 1, 2, 2, 4000));
+  const std::vector<int> next{800, 1200};
+  CHECK(writeit::apply_table_widths(doc.paragraphs, 1, next));
+  int cells = 0;
+  bool all = true;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table == 0)
+      continue;
+    ++cells;
+    if (paragraph.cell.widths != next)
+      all = false;
+  }
+  CHECK(cells == 4 && all);
+  CHECK(doc.paragraphs[0].cell.table == 0);
+  CHECK(!writeit::apply_table_widths(doc.paragraphs, 0, next));
+  CHECK(!writeit::apply_table_widths(doc.paragraphs, 1, std::vector<int>{800}));
+  const std::string rtf = writeit::rtf_export(doc);
+  CHECK(has(rtf, "\\cellx800"));
+  CHECK(has(rtf, "\\cellx2000"));
+  CHECK(same_document(doc, "table-widths"));
+
+  widths = {1000, 1000, 1000};
+  CHECK(writeit::move_table_edge(widths, 0, 300, 8000));
+  CHECK(widths == std::vector<int>({1300, 700, 1000}));
+  CHECK(widths[0] + widths[1] + widths[2] == 3000);
+
+  widths = {1000, 1000};
+  CHECK(writeit::move_table_edge(widths, 0, 5000, 8000));
+  CHECK(widths == std::vector<int>({1800, 200}));
+  CHECK(widths[0] + widths[1] == 2000);
+
+  widths = {1000, 1000};
+  CHECK(writeit::move_table_edge(widths, 0, -5000, 8000));
+  CHECK(widths == std::vector<int>({200, 1800}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::move_table_edge(widths, 1, 400, 8000));
+  CHECK(widths == std::vector<int>({1200, 1200}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::move_table_edge(widths, 1, -500, 8000));
+  CHECK(widths == std::vector<int>({750, 750}));
+
+  widths = {1000, 1000};
+  CHECK(writeit::move_table_edge(widths, 1, 5000, 2200));
+  CHECK(widths[0] + widths[1] == 2200);
+
+  const std::vector<int> held = widths;
+  CHECK(!writeit::move_table_edge(widths, -1, 100, 8000));
+  CHECK(!writeit::move_table_edge(widths, 2, 100, 8000));
+  CHECK(writeit::move_table_edge(widths, 0, 0, 8000));
+  CHECK(widths == held);
+
+  widths = {150, 150};
+  CHECK(!writeit::move_table_edge(widths, 0, 40, 8000));
+  CHECK(widths == std::vector<int>({150, 150}));
+
+  const writeit::PageSetup page = writeit::default_page();
+  CHECK(writeit::table_width_limit(page) == page.paper_width - page.margin_left);
+  CHECK(writeit::table_width_limit(page) > writeit::page_text_twips(page));
 }
 
 std::string paragraph_text(const writeit::Paragraph& paragraph)
@@ -355,7 +480,7 @@ void geometry()
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 98;
+constexpr int kChecks = 160;
 
 int main()
 {
@@ -363,6 +488,7 @@ int main()
   page_setup();
   clamp_limits();
   tables();
+  table_widths();
   sample_table();
   stories();
   images();

@@ -6,7 +6,10 @@
 
 #include <giomm/memoryinputstream.h>
 
+#include <gtkmm/gesturedrag.h>
+
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -423,6 +426,34 @@ class CellFrame : public Gtk::Frame {
   int width_ = 36;
 };
 
+int px_to_twips(int px, double zoom)
+{
+  const double z = std::max(0.01, zoom);
+  return static_cast<int>(std::lround(static_cast<double>(px) * kScreenPageTwips /
+                                      (static_cast<double>(kScreenPageWidth) * z)));
+}
+
+int event_width(GdkEvent* event)
+{
+  if (!event || !event->any.window)
+    return 0;
+  return gdk_window_get_width(event->any.window);
+}
+
+// The right 3 px of a column is that column's edge. The left 3 px of any
+// later column is the previous edge. Four px in from the text still places
+// the caret, which is where a click in the cell is tested.
+int column_edge(int column, int columns, double x, int width)
+{
+  if (column < 0 || column >= columns || width <= 0)
+    return -1;
+  if (x >= static_cast<double>(width - 3))
+    return column;
+  if (x < 3.0 && column > 0)
+    return column - 1;
+  return -1;
+}
+
 int buffer_paragraphs(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
 {
   if (!buffer || buffer->get_char_count() == 0)
@@ -535,10 +566,25 @@ class TableSheet : public Gtk::Grid {
         });
         // The cell places the caret, then this click bubbles to the body
         // text view, whose gesture takes the focus back. Keep the click.
+        const Gdk::EventMask watch = Gdk::BUTTON_PRESS_MASK | Gdk::BUTTON_RELEASE_MASK |
+                                     Gdk::POINTER_MOTION_MASK | Gdk::BUTTON_MOTION_MASK;
+        view->add_events(watch);
+        frame->add_events(watch);
+        // A press on the edge only arms a drag. The caret is placed as before,
+        // and a release without movement does not resize.
+        view->signal_button_press_event().connect([this, at_column, frame](GdkEventButton* event) {
+          return on_cell_press(event, at_column, frame);
+        });
         view->signal_button_press_event().connect([](GdkEventButton*) { return true; }, true);
+        view->signal_button_release_event().connect(
+            [this](GdkEventButton* event) { return on_cell_release(event); });
         view->signal_button_release_event().connect([](GdkEventButton*) { return true; }, true);
+        view->signal_motion_notify_event().connect(
+            [this, at_column](GdkEventMotion* event) { return on_cell_motion(event, at_column); });
         view->signal_motion_notify_event().connect([](GdkEventMotion*) { return true; }, true);
-        frame->add_events(Gdk::BUTTON_PRESS_MASK);
+        frame->signal_button_press_event().connect([this, at_column, frame](GdkEventButton* event) {
+          return on_cell_press(event, at_column, frame);
+        });
         frame->signal_button_press_event().connect([view](GdkEventButton* event) {
           if (!event || event->type != GDK_BUTTON_PRESS)
             return false;
@@ -548,6 +594,14 @@ class TableSheet : public Gtk::Grid {
           }
           return true;
         });
+        frame->signal_motion_notify_event().connect(
+            [this, at_column](GdkEventMotion* event) { return on_cell_motion(event, at_column); });
+        frame->signal_button_release_event().connect(
+            [this](GdkEventButton* event) { return on_cell_release(event); });
+        // The text view's own drag claims the press and then swallows motion,
+        // so a border drag has to claim the press first, and only on the edge.
+        watch_edge(*view, at_column, frame);
+        watch_edge(*frame, at_column, frame);
       }
     }
     relayout();
@@ -640,6 +694,8 @@ class TableSheet : public Gtk::Grid {
         Gtk::TextView* view = views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
         view->override_font(desc);
         window_.restyle_buffer(view->get_buffer());
+        window_.style_cell_face(*view,
+                                forms_[static_cast<size_t>(row)][static_cast<size_t>(column)]);
       }
     }
     queue_resize();
@@ -735,10 +791,27 @@ class TableSheet : public Gtk::Grid {
     return true;
   }
 
+  bool on_cell_press(GdkEventButton* event, int column, CellFrame* frame);
+  bool on_cell_motion(GdkEventMotion* event, int column);
+  bool on_cell_release(GdkEventButton* event);
+  void watch_edge(Gtk::Widget& widget, int column, CellFrame* frame);
+  void arm_edge(int edge, int root_x, CellFrame* frame);
+  void begin_drag(GdkEvent* event);
+  void apply_drag(int root_x);
+  void finish_drag();
+
   MainWindow& window_;
   int rows_ = 0;
   int cols_ = 0;
   std::vector<int> widths_;
+  bool drag_armed_ = false;
+  bool drag_on_ = false;
+  int drag_column_ = -1;
+  int drag_root_x_ = 0;
+  std::vector<int> drag_start_;
+  CellFrame* drag_frame_ = nullptr;
+  Gtk::GestureDrag* drag_gesture_ = nullptr;
+  std::vector<Glib::RefPtr<Gtk::GestureDrag>> edge_gestures_;
   std::vector<std::vector<Gtk::TextView*>> views_;
   std::vector<std::vector<CellFrame*>> frames_;
   std::vector<std::vector<std::vector<Paragraph>>> forms_;
@@ -840,6 +913,180 @@ void TableSheet::collapse_selections(const Gtk::TextView* keep) const
       buffer->place_cursor(buffer->get_insert()->get_iter());
     }
   }
+}
+
+bool TableSheet::on_cell_press(GdkEventButton* event, int column, CellFrame* frame)
+{
+  if (!event || event->type != GDK_BUTTON_PRESS || event->button != 1)
+    return false;
+  const int edge =
+      column_edge(column, cols_, event->x, event_width(reinterpret_cast<GdkEvent*>(event)));
+  if (edge < 0)
+    return false;
+  arm_edge(edge, static_cast<int>(std::lround(event->x_root)), frame);
+  return false;
+}
+
+bool TableSheet::on_cell_motion(GdkEventMotion* event, int column)
+{
+  if (!event)
+    return false;
+  if (drag_on_) {
+    apply_drag(static_cast<int>(std::lround(event->x_root)));
+    return true;
+  }
+  const int moved = static_cast<int>(std::lround(event->x_root)) - drag_root_x_;
+  const int distance = moved < 0 ? -moved : moved;
+  if (drag_armed_ && (event->state & GDK_BUTTON1_MASK) != 0 && distance >= 4) {
+    begin_drag(reinterpret_cast<GdkEvent*>(event));
+    apply_drag(static_cast<int>(std::lround(event->x_root)));
+    return true;
+  }
+  const int edge =
+      column_edge(column, cols_, event->x, event_width(reinterpret_cast<GdkEvent*>(event)));
+  auto window = event->window ? Glib::wrap(event->window, true) : Glib::RefPtr<Gdk::Window>();
+  if (edge >= 0 && window) {
+    window->set_cursor(Gdk::Cursor::create(window->get_display(), Gdk::SB_H_DOUBLE_ARROW));
+    return true;
+  }
+  if (window && !drag_armed_)
+    window->set_cursor({});
+  return false;
+}
+
+bool TableSheet::on_cell_release(GdkEventButton* event)
+{
+  if (!event || event->button != 1)
+    return false;
+  if (!drag_armed_ && !drag_on_)
+    return false;
+  const bool was_drag = drag_on_;
+  finish_drag();
+  return was_drag;
+}
+
+void TableSheet::arm_edge(int edge, int root_x, CellFrame* frame)
+{
+  drag_armed_ = true;
+  drag_on_ = false;
+  drag_column_ = edge;
+  drag_root_x_ = root_x;
+  drag_start_ = widths_;
+  drag_frame_ = frame;
+}
+
+void TableSheet::watch_edge(Gtk::Widget& widget, int column, CellFrame* frame)
+{
+  auto gesture = Gtk::GestureDrag::create(widget);
+  gesture->set_propagation_phase(Gtk::PHASE_CAPTURE);
+  gesture->set_button(1);
+  Gtk::GestureDrag* raw = gesture.get();
+  Gtk::Widget* widget_ptr = &widget;
+  edge_gestures_.push_back(gesture);
+  raw->signal_begin().connect([this, raw, column, frame, widget_ptr](GdkEventSequence*) {
+    GdkEvent* event = gtk_get_current_event();
+    const bool ours = event && widget_ptr && gtk_get_event_widget(event) == widget_ptr->gobj();
+    double x = 0;
+    int width = 0;
+    int root_x = 0;
+    GdkWindow* hit = nullptr;
+    if (ours && event->type == GDK_BUTTON_PRESS) {
+      x = event->button.x;
+      width = event_width(event);
+      root_x = static_cast<int>(std::lround(event->button.x_root));
+      hit = event->button.window;
+    }
+    const int edge = ours ? column_edge(column, cols_, x, width) : -1;
+    if (event)
+      gdk_event_free(event);
+    if (edge < 0) {
+      raw->set_state(Gtk::EVENT_SEQUENCE_DENIED);
+      return;
+    }
+    if (!raw->set_state(Gtk::EVENT_SEQUENCE_CLAIMED))
+      return;
+    arm_edge(edge, root_x, frame);
+    drag_gesture_ = raw;
+    if (hit) {
+      auto window = Glib::wrap(hit, true);
+      if (window)
+        window->set_cursor(Gdk::Cursor::create(window->get_display(), Gdk::SB_H_DOUBLE_ARROW));
+    }
+  });
+  raw->signal_update().connect([this, raw](GdkEventSequence*) {
+    if (raw != drag_gesture_ || !drag_armed_)
+      return;
+    double ox = 0;
+    double oy = 0;
+    if (!raw->get_offset(ox, oy))
+      return;
+    const int moved = static_cast<int>(std::lround(ox));
+    const int distance = moved < 0 ? -moved : moved;
+    if (!drag_on_ && distance < 4)
+      return;
+    drag_on_ = true;
+    apply_drag(drag_root_x_ + moved);
+  });
+  auto finish = [this, raw](GdkEventSequence*) {
+    if (raw != drag_gesture_)
+      return;
+    finish_drag();
+  };
+  raw->signal_end().connect(finish);
+  raw->signal_cancel().connect(finish);
+}
+
+void TableSheet::begin_drag(GdkEvent* event)
+{
+  if (drag_on_)
+    return;
+  drag_on_ = true;
+  if (!event || !event->any.window)
+    return;
+  auto window = Glib::wrap(event->any.window, true);
+  if (!window)
+    return;
+  window->set_cursor(Gdk::Cursor::create(window->get_display(), Gdk::SB_H_DOUBLE_ARROW));
+}
+
+void TableSheet::apply_drag(int root_x)
+{
+  if (drag_column_ < 0)
+    return;
+  const int delta = px_to_twips(root_x - drag_root_x_, window_.zoom_factor());
+  std::vector<int> next = drag_start_;
+  long long sum = 0;
+  for (int width : drag_start_) {
+    sum += std::max(0, width);
+    if (sum > 2000000000LL)
+      sum = 2000000000LL;
+  }
+  const int room = std::max(table_width_limit(window_.page_setup_), static_cast<int>(sum));
+  const int limit = std::max(kMinCellTwips * std::max(cols_, 1), room);
+  if (!move_table_edge(next, drag_column_, delta, limit))
+    return;
+  if (next == widths_)
+    return;
+  widths_ = std::move(next);
+  relayout();
+}
+
+void TableSheet::finish_drag()
+{
+  const bool changed = drag_on_ && widths_ != drag_start_;
+  const int id = table_id();
+  const std::vector<int> now = widths_;
+  drag_armed_ = false;
+  drag_on_ = false;
+  drag_column_ = -1;
+  drag_frame_ = nullptr;
+  drag_gesture_ = nullptr;
+  if (!changed)
+    return;
+  MainWindow& window = window_;
+  // commit rebuilds the body and destroys this sheet, so it waits until the
+  // event handler has returned.
+  Glib::signal_idle().connect_once([&window, id, now] { window.commit_table_widths(id, now); });
 }
 
 void MainWindow::mount_table(const std::vector<Paragraph>& cells, bool separator)
@@ -1113,6 +1360,18 @@ void MainWindow::reveal_editing_caret()
     v->set_value(want);
 }
 
+void MainWindow::leave_cell_edit()
+{
+  if (loading_ || restoring_)
+    return;
+  if (!cell_edit_.on && !cell_typing_on_)
+    return;
+  release_other_selections(&text_);
+  cell_edit_.on = false;
+  cell_typing_on_ = false;
+  update_actions();
+}
+
 void MainWindow::note_cell_blur(TableSheet& sheet, int row, int column)
 {
   if (loading_ || restoring_ || !cell_edit_.on)
@@ -1204,6 +1463,8 @@ void MainWindow::tag_cell_insert(TableSheet& sheet, int row, int column, const G
     }
   } tagging(cell_tagging_);
   buffer->apply_tag(tag, buffer->get_iter_at_offset(at), buffer->get_iter_at_offset(at + length));
+  if (const Paragraph* form = sheet.form_at(row, column, sheet.line_at(row, column, at)))
+    tag_cell_paragraph(buffer, at, at + length, *form);
   if (from_typing)
     show_format(format);
 }
@@ -1417,6 +1678,131 @@ void MainWindow::toggle_cell_flag(TextFlag flag)
       ++j;
     }
     set_text_flag(run, flag, turn_on);
+    set_fmt_on(buffer, buffer->get_iter_at_offset(i), buffer->get_iter_at_offset(j),
+               format_tag_on(buffer, run));
+    i = j;
+  }
+  buffer->end_user_action();
+  restore_cell_edit(saved);
+}
+
+void MainWindow::edit_cell_runs(const std::function<void(Run&)>& edit)
+{
+  TableSheet* sheet = editing_sheet();
+  if (!sheet) {
+    restore_edit_focus();
+    return;
+  }
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound)) {
+    restore_edit_focus();
+    return;
+  }
+  Gtk::TextView* view = sheet->view_at(row, column);
+  if (!view || !view->get_buffer()) {
+    restore_edit_focus();
+    return;
+  }
+  auto buffer = view->get_buffer();
+  Gtk::TextBuffer::iterator sel_from;
+  Gtk::TextBuffer::iterator sel_to;
+  if (buffer->get_selection_bounds(sel_from, sel_to)) {
+    const int live_lo = std::min(sel_from.get_offset(), sel_to.get_offset());
+    const int live_hi = std::max(sel_from.get_offset(), sel_to.get_offset());
+    const int saved_lo = std::min(caret, bound);
+    const int saved_hi = std::max(caret, bound);
+    if (live_hi - live_lo > saved_hi - saved_lo) {
+      caret = sel_from.get_offset();
+      bound = sel_to.get_offset();
+    }
+  }
+  const int start = std::min(caret, bound);
+  const int end = std::max(caret, bound);
+  CellEdit saved;
+  saved.on = true;
+  saved.table = sheet->table_id();
+  saved.row = row;
+  saved.column = column;
+  saved.caret = caret;
+  saved.bound = bound;
+
+  if (start == end) {
+    Run format;
+    if (cell_typing_on_ && cell_typing_caret_ == start && cell_typing_bound_ == end)
+      format = cell_typing_;
+    else {
+      const int count = buffer->get_char_count();
+      const int at = std::max(0, std::min(start, count));
+      bool have = false;
+      if (at > 0) {
+        auto prev = buffer->get_iter_at_offset(at - 1);
+        if (prev.get_char() != '\n' && has_fmt(prev)) {
+          format = format_of(prev);
+          have = true;
+        }
+      }
+      if (!have && at < count) {
+        auto here = buffer->get_iter_at_offset(at);
+        if (here.get_char() != '\n' && has_fmt(here)) {
+          format = format_of(here);
+          have = true;
+        }
+      }
+      if (!have) {
+        const Paragraph* form = sheet->form_at(row, column, sheet->line_at(row, column, at));
+        format = style_typing(form ? form->style : std::string(kNormalStyle));
+      }
+    }
+    format.text.clear();
+    format.note = 0;
+    format.image.reset();
+    edit(format);
+    cell_typing_ = format;
+    cell_typing_on_ = true;
+    cell_typing_caret_ = start;
+    cell_typing_bound_ = end;
+    show_format(format);
+    restore_cell_edit(saved);
+    return;
+  }
+
+  cell_typing_on_ = false;
+  bool any = false;
+  for (int i = start; i < end; ++i) {
+    auto iter = buffer->get_iter_at_offset(i);
+    if (iter.get_char() == '\n' && !iter.starts_line())
+      continue;
+    any = true;
+    break;
+  }
+  if (!any) {
+    restore_cell_edit(saved);
+    return;
+  }
+  buffer->begin_user_action();
+  for (int i = start; i < end;) {
+    auto iter = buffer->get_iter_at_offset(i);
+    if (iter.get_char() == '\n') {
+      if (i == 0 || buffer->get_iter_at_offset(i - 1).get_char() == '\n') {
+        Run mark = format_of(iter);
+        edit(mark);
+        set_fmt_on(buffer, iter, buffer->get_iter_at_offset(i + 1), format_tag_on(buffer, mark));
+      }
+      ++i;
+      continue;
+    }
+    Run run = format_of(iter);
+    int j = i + 1;
+    while (j < end) {
+      auto next = buffer->get_iter_at_offset(j);
+      if (next.get_char() == '\n' || !same_format(format_of(next), run))
+        break;
+      ++j;
+    }
+    edit(run);
     set_fmt_on(buffer, buffer->get_iter_at_offset(i), buffer->get_iter_at_offset(j),
                format_tag_on(buffer, run));
     i = j;
@@ -2207,6 +2593,254 @@ void MainWindow::on_delete_column()
     return;
   }
   commit_document(before, after);
+}
+
+void MainWindow::commit_table_widths(int table_id, const std::vector<int>& widths)
+{
+  if (!buffer_ || table_id == 0 || widths.empty())
+    return;
+  const bool restore_cell = editing_cell();
+  const CellEdit saved = cell_edit_;
+  const Document before = capture();
+  size_t index = before.paragraphs.size();
+  for (size_t i = 0; i < before.paragraphs.size(); ++i) {
+    if (before.paragraphs[i].cell.table == table_id) {
+      index = i;
+      break;
+    }
+  }
+  if (!in_table(before.paragraphs, index) || before.paragraphs[index].cell.widths == widths)
+    return;
+  Document after = before;
+  if (!apply_table_widths(after.paragraphs, index, widths) || after.paragraphs == before.paragraphs)
+    return;
+  hold_view();
+  commit_document(before, after);
+  if (restore_cell)
+    restore_cell_edit(saved);
+  release_view();
+}
+
+void MainWindow::on_table_width()
+{
+  if (!buffer_)
+    return;
+  const bool restore_cell = editing_cell();
+  CellEdit saved = cell_edit_;
+  Document before = capture();
+  size_t index = static_cast<size_t>(-1);
+  int column = 0;
+  if (restore_cell) {
+    if (TableSheet* sheet = editing_sheet()) {
+      int row = 0;
+      int caret = 0;
+      int bound = 0;
+      if (cell_place(*sheet, row, column, caret, bound)) {
+        const int at = std::min(caret, bound);
+        const int line = sheet->line_at(row, column, at);
+        index = cell_paragraph_index(*sheet, row, column, line);
+        saved.on = true;
+        saved.table = sheet->table_id();
+        saved.row = row;
+        saved.column = column;
+        saved.caret = caret;
+        saved.bound = bound;
+      }
+    }
+  }
+  if (index >= before.paragraphs.size() || !in_table(before.paragraphs, index)) {
+    if (TableSheet* at_sheet = sheet_at_cursor()) {
+      const int id = at_sheet->table_id();
+      for (size_t i = 0; i < before.paragraphs.size(); ++i) {
+        if (before.paragraphs[i].cell.table == id) {
+          index = i;
+          break;
+        }
+      }
+    }
+  }
+  if (index >= before.paragraphs.size() || !in_table(before.paragraphs, index)) {
+    index = caret_paragraph();
+    if (!in_table(before.paragraphs, index)) {
+      if (restore_cell)
+        restore_edit_focus();
+      else
+        text_.grab_focus();
+      return;
+    }
+    column = before.paragraphs[index].cell.column;
+  }
+  const Cell cell = before.paragraphs[index].cell;
+  if (cell.columns < 1) {
+    if (restore_cell)
+      restore_edit_focus();
+    else
+      text_.grab_focus();
+    return;
+  }
+  column = cell.column;
+  std::vector<int> working = cell.widths;
+  if (static_cast<int>(working.size()) != cell.columns)
+    working.assign(static_cast<size_t>(cell.columns), kMinCellTwips);
+  if (column < 0 || column >= static_cast<int>(working.size()))
+    column = 0;
+
+  long long wide = 0;
+  for (int width : working) {
+    wide += std::max(0, width);
+    if (wide > 2000000000LL)
+      wide = 2000000000LL;
+  }
+  const int sum = static_cast<int>(wide);
+  const int floor_sum = kMinCellTwips * static_cast<int>(working.size());
+  // A table may reach the page edge, through the right margin. One that is
+  // already wider keeps that width and cannot grow. The floor is the
+  // narrowest the columns can be.
+  const int limit = std::max(floor_sum, std::max(table_width_limit(page_setup_), sum));
+  const int column_cap =
+      std::max(working[static_cast<size_t>(column)], limit - kMinCellTwips * (cell.columns - 1));
+
+  const Units units = settings_.units;
+  Gtk::Dialog dialog("Table Width", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+
+  const double column_upper =
+      std::max(units_round(twips_to_units(column_cap, units), units),
+               units_round(twips_to_units(working[static_cast<size_t>(column)], units), units));
+  const double table_upper = std::max(units_round(twips_to_units(limit, units), units),
+                                      units_round(twips_to_units(sum, units), units));
+  auto* column_spin = measure_spin(units, working[static_cast<size_t>(column)], column_upper);
+  auto* table_spin = measure_spin(units, sum, table_upper);
+
+  const std::string column_text = "_Column " + std::to_string(column + 1) + ":";
+  auto* grid = Gtk::manage(new Gtk::Grid());
+  grid->set_row_spacing(8);
+  grid->set_column_spacing(12);
+  grid->set_margin_top(12);
+  grid->set_margin_bottom(12);
+  grid->set_margin_start(12);
+  grid->set_margin_end(12);
+  grid->attach(*field_label(column_text.c_str(), *column_spin), 0, 0, 1, 1);
+  grid->attach(*column_spin, 1, 0, 1, 1);
+  grid->attach(*field_label("Table _width:", *table_spin), 0, 1, 1, 1);
+  grid->attach(*table_spin, 1, 1, 1, 1);
+  dialog.get_content_area()->pack_start(*grid, Gtk::PACK_SHRINK);
+  dialog.show_all_children();
+
+  const std::vector<int> initial = working;
+  std::vector<int> preview = working;
+  bool guard = false;
+  auto total_of = [](const std::vector<int>& widths) {
+    int total = 0;
+    for (int width : widths)
+      total += width;
+    return total;
+  };
+  auto assign_spin = [&](Gtk::SpinButton& spin, int twips) {
+    const double shown = units_round(twips_to_units(twips, units), units);
+    const double delta = spin.get_value() - shown;
+    if (delta < 0.001 && delta > -0.001)
+      return;
+    spin.set_value(shown);
+  };
+  auto show = [&] {
+    guard = true;
+    assign_spin(*column_spin, preview[static_cast<size_t>(column)]);
+    assign_spin(*table_spin, total_of(preview));
+    guard = false;
+  };
+  column_spin->signal_value_changed().connect([&] {
+    if (guard)
+      return;
+    std::vector<int> next = preview;
+    if (!set_table_column_width(next, column, units_to_twips(column_spin->get_value(), units),
+                                limit))
+      return;
+    preview = std::move(next);
+    show();
+  });
+  table_spin->signal_value_changed().connect([&] {
+    if (guard)
+      return;
+    std::vector<int> next = preview;
+    if (!fit_table_widths(next, units_to_twips(table_spin->get_value(), units), limit))
+      return;
+    preview = std::move(next);
+    show();
+  });
+
+  auto close_focus = [&] {
+    if (restore_cell)
+      restore_edit_focus();
+    else
+      text_.grab_focus();
+  };
+  const std::string too_narrow =
+      "The table must be at least " + format_measure(twips_to_units(floor_sum, units), units) + ".";
+
+  for (;;) {
+    if (dialog.run() != Gtk::RESPONSE_OK) {
+      close_focus();
+      return;
+    }
+    // A typed number that has not been emitted yet. The focused field is
+    // last, so a column typed on top of a fitted table is the one that stays.
+    Gtk::Widget* focus = dialog.get_focus();
+    if (focus != column_spin)
+      column_spin->update();
+    if (focus != table_spin)
+      table_spin->update();
+    if (focus == column_spin)
+      column_spin->update();
+    else if (focus == table_spin)
+      table_spin->update();
+
+    std::string message;
+    int column_twips = 0;
+    int table_twips = 0;
+    if (!read_measure(*column_spin, units, preview[static_cast<size_t>(column)],
+                      column_spin->get_value(), column_twips, message)) {
+      warn(dialog, message, *column_spin);
+      continue;
+    }
+    if (!read_measure(*table_spin, units, total_of(preview), table_spin->get_value(), table_twips,
+                      message)) {
+      warn(dialog, message, *table_spin);
+      continue;
+    }
+    if (focus == column_spin && column_twips != preview[static_cast<size_t>(column)]) {
+      if (!set_table_column_width(preview, column, column_twips, limit)) {
+        warn(dialog, too_narrow, *column_spin);
+        continue;
+      }
+    } else if (focus == table_spin && table_twips != total_of(preview)) {
+      if (!fit_table_widths(preview, table_twips, limit)) {
+        warn(dialog, too_narrow, *table_spin);
+        continue;
+      }
+    }
+    if (preview == initial) {
+      close_focus();
+      return;
+    }
+    Document after = before;
+    if (!apply_table_widths(after.paragraphs, index, preview) ||
+        after.paragraphs == before.paragraphs) {
+      close_focus();
+      return;
+    }
+    if (restore_cell && cell_edit_.on)
+      saved = cell_edit_;
+    hold_view();
+    commit_document(before, after);
+    if (restore_cell)
+      restore_cell_edit(saved);
+    release_view();
+    return;
+  }
 }
 
 void MainWindow::on_footnote()

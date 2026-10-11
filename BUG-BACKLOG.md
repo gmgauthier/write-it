@@ -38,6 +38,33 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ## Closed
 
+### The font face does not change inside a table cell
+
+- Fixed in 1.0.10.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::on_font_changed`; `src/page_ui.cpp` `MainWindow::edit_cell_runs`
+- Trigger: Select text in a table cell, or place the caret there, and choose a font.
+- Outcome: A selection takes that face, and the direct font bit stays when a later style is applied. With only the caret, the next character typed there takes the face. Text outside the cell is left alone.
+
+### The font size does not change inside a table cell
+
+- Fixed in 1.0.10.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::on_size_changed`; `src/page_ui.cpp` `MainWindow::edit_cell_runs`
+- Trigger: Select text in a table cell, or place the caret there, and choose or type a size.
+- Outcome: A selection takes that size. With only the caret, the next character typed there takes the size. A size the box refuses leaves the cell's size and keeps the entry selected.
+
+### A table has no command for column width or table width
+
+- Fixed in 1.0.10.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page.cpp` `fit_table_widths`; `src/page_ui.cpp` `MainWindow::on_table_width`
+- Trigger: Put the caret in a table and choose Table → Table Width….
+- Outcome: The caret's column and the whole table take the widths from the dialog, and dragging a column border resizes that column. Each column is at least 200 twips. The table may extend through the right margin to the page edge, and a table that is already wider can keep that width. OK on an untouched dialog changes nothing.
+
 ### A heading in a table changes text outside the cell
 
 - Fixed in 1.0.9.
@@ -45,7 +72,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Confidence: high
 - Where: `src/styles.cpp` `MainWindow::paragraph_index`; `src/page_ui.cpp` `MainWindow::apply_cell_style`
 - Trigger: Select text in a table cell and choose a heading. Or choose a heading in the paragraph after a table.
-- Outcome: The heading applies to that cell, or to the paragraph after the table. Bold, italic, or underline set directly in the cell stays when a later style is applied. The body paragraph is left alone.
+- Outcome: The heading applies to that cell, or to the paragraph after the table. A heading in a cell has the same space above and below as one in the body, and an empty cell shows that style's face and size. Bold, italic, or underline set directly in the cell stays when a later style is applied. The body paragraph is left alone.
 
 ### Bold, italic, and underline do nothing in a table cell
 
