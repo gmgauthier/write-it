@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### Indents from a file can lay the paragraph off the page
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/document.cpp` `clamp_indents`; Format → Paragraph…
-- Trigger: Open RTF with `\li31680\ri31680`, or any left and right indents that leave less than a quarter inch of the text area. The Paragraph dialog refuses that pair.
-- Outcome: The reader clamps each edge to 0–22 inches on its own and does not require the pair to leave 0.25 inch of text. The paragraph is stored and laid out off the page. `DEVELOPMENT.md` already says this.
-
 ### The first window can be taller than the work area
 
 - Severity: incorrect
@@ -69,6 +61,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
 
 ## Closed
+
+### Indents from a file can lay the paragraph off the page
+
+- Fixed in 1.0.5.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `clamp_indents`; `src/rtf.cpp` `Reader::merge`
+- Trigger: Open RTF with `\li31680\ri31680`, or any left and right indents that leave less than a quarter inch of the text area. The Paragraph dialog refuses that pair.
+- Outcome: After the 22-inch cap, the reader reduces a side that is too wide on its own, then the right indent, then a positive first line, until a quarter inch of that page's text area remains.
 
 ### An empty paragraph after `\par` loses the size in force
 

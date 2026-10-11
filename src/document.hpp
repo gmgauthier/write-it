@@ -252,7 +252,9 @@ bool operator!=(const Style& a, const Style& b);
 
 // Left and right stay between 0 and kMaxIndent. The first line may hang back
 // to the left margin and no further, and may indent up to kMaxIndent.
-Indents clamp_indents(Indents indents);
+// When text_width is zero or more, the indents also leave kMinTextTwips of
+// that text area. A negative text_width skips that fit.
+Indents clamp_indents(Indents indents, int text_width = -1);
 
 // Paper, margins, and columns brought inside the limits above. A landscape
 // flag does not swap the edges; the dialog and the RTF reader do that.
