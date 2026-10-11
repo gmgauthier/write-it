@@ -393,6 +393,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   TableSheet* focused_sheet() const;
   TableSheet* sheet_at_cursor() const;
   void relayout_tables();
+  // GTK keeps the height a table had when its line was first shown. A sheet
+  // that is taller than that leaves the text after it in the table's space.
+  void queue_table_sync();
+  void sync_table_lines();
   void fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs);
   // Heading space and cell alignment on [from, to). The newline is part of
   // the paragraph tag and not part of the heading tag.
@@ -719,6 +723,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection restore_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // sync_table_lines() after a table has its real height. One at a time.
+  sigc::connection table_sync_;
   // update_page_seams() is applying its tags. Their signals are not edits.
   bool seaming_ = false;
   bool list_shifts_queued_ = false;

@@ -1,3 +1,9 @@
+write-it (1.0.11-1) unstable; urgency=medium
+
+  * Text after a table starts below the table.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Mon, 12 Oct 2026 00:04:25 +0100
+
 write-it (1.0.10-1) unstable; urgency=medium
 
   * The font face and the font size apply inside a table cell.
