@@ -1734,7 +1734,9 @@ void MainWindow::finish_pending()
     // A heading tag copied with the word does not change that paragraph.
     ParaFormat landed;
     parse_para(tag_name(landing), landed);
-    const Style* style = find_style(sheet(), landed.style);
+    // sheet() is a temporary. The pointer has to outlive that copy.
+    const std::vector<Style> styles = sheet();
+    const Style* style = find_style(styles, landed.style);
     const int level = style && style->heading >= 1 && style->heading <= 6 ? style->heading : 0;
     set_heading(start, end, level);
   } else {
