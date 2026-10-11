@@ -8,7 +8,8 @@
 
 namespace {
 
-writeit::Run run(const char* text, const char* font, double size, bool bold, bool italic, bool underline)
+writeit::Run run(const char* text, const char* font, double size, bool bold, bool italic,
+                 bool underline)
 {
   writeit::Run item;
   item.text = text;
@@ -20,11 +21,13 @@ writeit::Run run(const char* text, const char* font, double size, bool bold, boo
   return item;
 }
 
-const std::string kHead = "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n{\\fonttbl{\\f0\\fswiss Sans;}}\n";
+const std::string kHead =
+    "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n{\\fonttbl{\\f0\\fswiss Sans;}}\n";
 
 bool read_size(const std::string& fs, writeit::Document& doc)
 {
-  return writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0" + fs + " Text\\par}", doc) &&
+  return writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0" + fs + " Text\\par}",
+                             doc) &&
          doc.paragraphs.size() == 1 && doc.paragraphs[0].runs.size() == 1;
 }
 
@@ -43,11 +46,11 @@ void half_points()
     double size;
     const char* written;
   };
-  for (const Case& c : {Case{"\\fs21", 10.5, "\\fs21\\b0"}, Case{"\\fs17", 8.5, "\\fs17\\b0"},
-                        Case{"\\fs1", 1, "\\fs2\\b0"}, Case{"\\fs0", 1, "\\fs2\\b0"},
-                        Case{"\\fs-21", 1, "\\fs2\\b0"}, Case{"\\fs3275", 1637.5, "\\fs3275\\b0"},
-                        Case{"\\fs3277", 1638, "\\fs3276\\b0"},
-                        Case{"\\fs999999999", 1638, "\\fs3276\\b0"}}) {
+  for (const Case& c :
+       {Case{"\\fs21", 10.5, "\\fs21\\b0"}, Case{"\\fs17", 8.5, "\\fs17\\b0"},
+        Case{"\\fs1", 1, "\\fs2\\b0"}, Case{"\\fs0", 1, "\\fs2\\b0"},
+        Case{"\\fs-21", 1, "\\fs2\\b0"}, Case{"\\fs3275", 1637.5, "\\fs3275\\b0"},
+        Case{"\\fs3277", 1638, "\\fs3276\\b0"}, Case{"\\fs999999999", 1638, "\\fs3276\\b0"}}) {
     writeit::Document doc;
     CHECK(read_size(c.fs, doc) && doc.paragraphs[0].runs[0].size == c.size);
     const std::string out = writeit::rtf_export(doc);
@@ -71,8 +74,8 @@ void half_points()
   CHECK(has(writeit::rtf_export(typed), "\\fs21\\b0\\i0\\ulnone Typed"));
   // A neighbour in another half point is its own run, not merged into 10 pt.
   writeit::Document mixed;
-  CHECK(writeit::rtf_import(
-      "{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0\\fs20 ten\\fs21 half\\par}", mixed));
+  CHECK(writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0\\fs20 ten\\fs21 half\\par}",
+                            mixed));
   CHECK(mixed.paragraphs.size() == 1 && mixed.paragraphs[0].runs.size() == 2 &&
         mixed.paragraphs[0].runs[0].size == 10 && mixed.paragraphs[0].runs[1].size == 10.5);
 }
@@ -91,8 +94,8 @@ void empty_paragraphs()
   CHECK(has(rtf, "\\pard\\f0\\fs40\\b0\\i0\\ulnone\\par\n"));
   writeit::Document back;
   CHECK(writeit::rtf_import(rtf, back));
-  CHECK(back.paragraphs.size() == 3 && back.paragraphs[1].runs.empty() &&
-        back.paragraphs[1].mark && back.paragraphs[1].mark->size == 20);
+  CHECK(back.paragraphs.size() == 3 && back.paragraphs[1].runs.empty() && back.paragraphs[1].mark &&
+        back.paragraphs[1].mark->size == 20);
   CHECK(back == doc);
 
   // The other character properties go with it: font, bold, italic, underline.
@@ -121,13 +124,13 @@ void empty_paragraphs()
 
   // Word writes the size before the empty paragraph's \par, after \plain.
   writeit::Document word;
-  CHECK(writeit::rtf_import(
-      "{\\rtf1\\ansi{\\fonttbl{\\f0 Arial;}}\\pard\\plain\\f0\\fs22 One\\par"
-      "\\pard\\plain\\f0\\fs40\\b \\par\\pard\\plain\\f0\\fs22 Two\\par}",
-      word));
-  CHECK(word.paragraphs.size() == 3 && word.paragraphs[1].runs.empty() &&
-        word.paragraphs[1].mark && word.paragraphs[1].mark->size == 20 &&
-        word.paragraphs[1].mark->bold && word.paragraphs[1].mark->font == "Arial");
+  CHECK(
+      writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Arial;}}\\pard\\plain\\f0\\fs22 One\\par"
+                          "\\pard\\plain\\f0\\fs40\\b \\par\\pard\\plain\\f0\\fs22 Two\\par}",
+                          word));
+  CHECK(word.paragraphs.size() == 3 && word.paragraphs[1].runs.empty() && word.paragraphs[1].mark &&
+        word.paragraphs[1].mark->size == 20 && word.paragraphs[1].mark->bold &&
+        word.paragraphs[1].mark->font == "Arial");
 
   // An empty list item's label takes the item's own size.
   writeit::Document list = doc;
@@ -160,10 +163,50 @@ void byte_round_trip()
   CHECK(writeit::rtf_import(expected, again) && writeit::rtf_export(again) == expected);
 }
 
+// \par does not reset character formatting. An empty paragraph keeps the
+// format still in force, and so does the empty paragraph after that.
+void carried_empty()
+{
+  writeit::Document carried;
+  CHECK(writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\fs40 Big\\par\\par}", carried));
+  CHECK(carried.paragraphs.size() == 2);
+  CHECK(carried.paragraphs[0].runs.size() == 1 && carried.paragraphs[0].runs[0].text == "Big" &&
+        carried.paragraphs[0].runs[0].size == 20);
+  CHECK(carried.paragraphs[1].runs.empty() && carried.paragraphs[1].mark &&
+        carried.paragraphs[1].mark->size == 20 && !carried.paragraphs[1].mark->bold);
+
+  writeit::Document twice;
+  CHECK(
+      writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\fs40 Big\\par\\par\\par}", twice));
+  CHECK(twice.paragraphs.size() == 3 && twice.paragraphs[1].mark &&
+        twice.paragraphs[1].mark->size == 20 && twice.paragraphs[2].mark &&
+        twice.paragraphs[2].mark->size == 20);
+
+  writeit::Document bold;
+  CHECK(writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\b Big\\par\\par}", bold));
+  CHECK(bold.paragraphs.size() == 2 && bold.paragraphs[1].runs.empty() && bold.paragraphs[1].mark &&
+        bold.paragraphs[1].mark->bold);
+
+  // \pard drops the carried format. The empty paragraph has none of its own.
+  writeit::Document reset;
+  CHECK(writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\fs40 Big\\par\\pard\\par}",
+                            reset));
+  CHECK(reset.paragraphs.size() == 2 && reset.paragraphs[0].runs.size() == 1 &&
+        reset.paragraphs[0].runs[0].size == 20 && !reset.paragraphs[1].mark);
+
+  // A character control on an empty paragraph stays in force for the next one.
+  writeit::Document own;
+  CHECK(
+      writeit::rtf_import("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\pard\\f0\\fs40\\par\\par}", own));
+  CHECK(own.paragraphs.size() == 2 && own.paragraphs[0].runs.empty() && own.paragraphs[0].mark &&
+        own.paragraphs[0].mark->size == 20 && own.paragraphs[1].runs.empty() &&
+        own.paragraphs[1].mark && own.paragraphs[1].mark->size == 20);
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 97;
+constexpr int kChecks = 109;
 
 int main()
 {
@@ -203,9 +246,8 @@ int main()
   // toolbar's size box can show, rather than \fs4000's 2000 pt.
   for (const char* fs : {"\\fs4000", "\\fs3277", "\\fs3276", "\\fs999999999"}) {
     writeit::Document huge;
-    CHECK(writeit::rtf_import(std::string("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0") + fs +
-                                  " Huge\\par}",
-                              huge));
+    CHECK(writeit::rtf_import(
+        std::string("{\\rtf1\\ansi{\\fonttbl{\\f0 Sans;}}\\f0") + fs + " Huge\\par}", huge));
     CHECK(huge.paragraphs.size() == 1 && huge.paragraphs[0].runs.size() == 1 &&
           huge.paragraphs[0].runs[0].size == writeit::kMaxFontSize);
   }
@@ -240,7 +282,8 @@ int main()
   styled.paragraphs[1].runs[1].underline = true;
   styled.paragraphs[1].runs[1].size = 24;
   styled.paragraphs[1].runs[1].font = "Times New Roman";
-  const writeit::Document again = writeit::markdown_import(writeit::markdown_export(styled), "Sans", 11);
+  const writeit::Document again =
+      writeit::markdown_import(writeit::markdown_export(styled), "Sans", 11);
   CHECK(again.paragraphs[1].runs[1].text == "bold");
   CHECK(again.paragraphs[1].runs[1].bold);
   CHECK(!again.paragraphs[1].runs[1].underline);
@@ -271,6 +314,7 @@ int main()
   half_points();
   empty_paragraphs();
   byte_round_trip();
+  carried_empty();
 
   return suite_test::done("document", kChecks);
 }

@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### An empty paragraph after `\par` loses the size in force
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/rtf.cpp` `finish_paragraph`
-- Trigger: Open RTF such as `\fs40 Big\par\par`. The empty paragraph has no character control word of its own.
-- Outcome: Word keeps the character format across `\par`, so the empty paragraph is 20 pt. Write-It records a size on an empty paragraph only when that paragraph itself contains a character control word (`\pard\f0\fs40\par`). `\par` clears `char_seen_`, and the following empty `\par` is stored at the default size. `DEVELOPMENT.md` already says this.
-
 ### Indents from a file can lay the paragraph off the page
 
 - Severity: incorrect
@@ -77,6 +69,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
 
 ## Closed
+
+### An empty paragraph after `\par` loses the size in force
+
+- Fixed in 1.0.4.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/rtf.cpp` `finish_paragraph`, `finish_story_paragraph`
+- Trigger: Open RTF such as `\fs40 Big\par\par`. The empty paragraph has no character control word of its own.
+- Outcome: `\par` keeps the character format in force, so the empty paragraph stays 20 pt, and so does a following empty paragraph. Bold carries the same way. `\pard` clears the carried format, so `\pard\par` still has none.
 
 ### Two tables with nothing between them become one
 
