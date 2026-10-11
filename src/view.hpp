@@ -61,6 +61,9 @@ int page_sheet_height(double zoom);
 // the one the caret's line starts on. A page break is kept and written; it
 // does not change the count. Text and page both scale with the zoom, so
 // neither the zoom nor the view changes the count, short of rounding.
+// Page view draws that count as separate sheets, with this gap of the gray
+// pasteboard between them. The gap is screen-only. Draft draws neither it
+// nor the sheet.
 
 struct PageCount {
   int page = 1;
@@ -97,5 +100,12 @@ PageWidths page_widths(ViewMode mode, double zoom);
 
 // Twips to screen pixels at a zoom, on the screen page's scale.
 int twips_to_px(int twips, double zoom);
+
+// A screen-only gap between page sheets. The tag is "page-seam", a unit
+// separator, and the gap's height in pixels. It is not a paragraph format
+// and it is not written to the file.
+bool is_page_seam(const std::string& name);
+// The height in that name, or 0 when `name` is not a page seam.
+int page_seam_pixels(const std::string& name);
 
 }  // namespace writeit

@@ -139,6 +139,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   // wheel or a scrollbar takes the view somewhere else.
   void follow_caret();
   void scroll_to_caret();
+  // A style rebuild must not send the pasteboard to the first line. Hold the
+  // scroll across the rebuild and put it back once the layout has settled.
+  void hold_view();
+  void release_view();
+  void restore_held_view(bool finish);
+  void reveal_editing_caret();
+  bool editing_caret_on_board(int& y, int& height);
   // Page Down and Page Up, with or without Shift. For the same reason GTK
   // would take the whole buffer as one page; these move the caret, and the
   // pasteboard, by the pasteboard's visible height and keep the caret's x.
@@ -147,6 +154,20 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool page_caret(int count, bool extend);
   void sync_zoom_checks();
   void queue_page_status();
+  // Gray pasteboard between the sheets of a long page. Screen-only: Draft
+  // drops it, and the file never stores it.
+  void update_page_seams();
+  void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
+  int natural_line_above(const Gtk::TextIter& iter) const;
+  // Seam pixels above `offset` that are not part of the laid-out text. A
+  // heading's own space, which a seam replaces on screen, is put back.
+  int seam_extra_through(int offset) const;
+  // Layout y mapped onto the sheets the gray gaps draw. A line that did not
+  // fit the room left on a sheet starts the next one, so the gap is the page
+  // boundary even while the line's own content y is still short of it.
+  int page_content_y(int layout_y, int offset) const;
+  Glib::RefPtr<Gtk::TextTag> page_seam_tag(int pixels);
+  void raise_seams();
   void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -245,6 +266,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // (first_doubled_format_tag() in format_tags.hpp checks it).
   void set_fmt(const Gtk::TextIter& from, const Gtk::TextIter& to,
                const Glib::RefPtr<Gtk::TextTag>& tag);
+  void set_fmt_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer, const Gtk::TextIter& from,
+                  const Gtk::TextIter& to, const Glib::RefPtr<Gtk::TextTag>& tag);
   void on_tag_applied(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& from,
                       const Gtk::TextIter& to);
   void clear_applied_fmt();
@@ -265,6 +288,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   static bool text_flag(const Run& run, TextFlag flag);
   static void set_text_flag(Run& run, TextFlag flag, bool on);
   void toggle_flag(TextFlag flag);
+  void toggle_cell_flag(TextFlag flag);
   void show_format(const Run& run);
   void sync_format_controls();
   void on_font_changed();
@@ -317,6 +341,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_named_style(const std::string& name);
   void apply_next_style();
   void on_style_dialog();
+  // The document paragraph at `offset`, table cells included. The same index
+  // document_index_at() and capture() use.
   int paragraph_index(int offset) const;
   // One undo step from `before` to `after`. The selection stays, unless
   // `caret` is given: then the caret is that offset (a page break or a
@@ -368,6 +394,37 @@ class MainWindow : public Gtk::ApplicationWindow {
   // After a document command, the caret sits on the table's anchor. Move
   // the keyboard into its first cell.
   void focus_table_caret();
+  // The cell the caret was in. The style combo takes the keyboard, so the
+  // cell no longer has_focus() when a style is chosen; this is that cell.
+  struct CellEdit {
+    bool on = false;
+    int table = 0;
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+  };
+  void note_cell_focus(TableSheet& sheet, int row, int column);
+  void note_cell_blur(TableSheet& sheet, int row, int column);
+  // Each cell is its own buffer, so a highlight there stays up when the caret
+  // is placed in another cell or in the body. Drop every selection but `keep`.
+  void release_other_selections(const Gtk::TextView* keep);
+  void note_cell_marks(TableSheet& sheet, int row, int column);
+  void tag_cell_insert(TableSheet& sheet, int row, int column, const Gtk::TextIter& end,
+                       const Glib::ustring& text);
+  bool editing_cell() const;
+  TableSheet* editing_sheet() const;
+  TableSheet* sheet_by_id(int id) const;
+  Gtk::TextView* nth_cell_view(int which, int row, int column) const;
+  bool cell_place(TableSheet& sheet, int& row, int& column, int& caret, int& bound) const;
+  size_t cell_paragraph_index(const TableSheet& sheet, int row, int column, int line) const;
+  void apply_cell_style(TableSheet& sheet, const std::string& name);
+  void show_cell_style();
+  void show_cell_format();
+  void restore_edit_focus();
+  void restore_cell_edit(const CellEdit& saved);
+  // The character format typing in a paragraph of style `name` starts in.
+  Run style_typing(const std::string& name) const;
   void on_header_footer();
   void on_story_end(std::vector<Paragraph>* story);
   void on_notes_end();
@@ -381,7 +438,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Tags the paragraph that starts at `start` with `format`, or holds the
   // format aside for the empty last paragraph.
   void tag_paragraph(int start, const ParaFormat& format);
-  // The caret's paragraph, counted in '\n' as capture() counts them.
+  // The caret's document paragraph, cells included, as capture() counts them.
   size_t caret_paragraph() const;
   // Restart Numbering (true) or Continue Previous List (false) at the
   // caret's item, as one undo step. False when it changes nothing.
@@ -625,10 +682,21 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The text wants more height than the page gave it; the idle resizes.
   bool grow_page_ = false;
   bool follow_caret_ = false;
+  // hold_view() is keeping the pasteboard where a style found it.
+  bool hold_scroll_ = false;
+  bool restore_scroll_ = false;
+  // release_other_selections() is collapsing a highlight. That mark move is
+  // not the user placing the caret.
+  bool releasing_ = false;
+  double held_v_ = 0;
+  double held_h_ = 0;
   // The idle follow_caret() queues; one at a time, and gone with the window.
   sigc::connection caret_idle_;
+  sigc::connection restore_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // update_page_seams() is applying its tags. Their signals are not edits.
+  bool seaming_ = false;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;
@@ -727,6 +795,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The document as a cell edit began, so that edit is one undo step.
   Document cell_before_;
   bool cell_step_ = false;
+  CellEdit cell_edit_;
+  // tag_cell_insert() is applying a format tag. That apply is not more typing.
+  bool cell_tagging_ = false;
+  // Bold, italic, or underline with no selection: the next character typed
+  // in this cell. The cell has no character to tag until then.
+  bool cell_typing_on_ = false;
+  Run cell_typing_;
+  int cell_typing_caret_ = 0;
+  int cell_typing_bound_ = 0;
+  sigc::connection cell_typing_idle_;
   // capture() ignores this buffer range for one call. A delete that covers a
   // table anchor is applied to the document, because the anchor character
   // alone cannot bring the grid back.

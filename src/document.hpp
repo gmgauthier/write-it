@@ -380,6 +380,11 @@ void restyle_run(Run& run, const Style& from, const Style& to);
 // remembered indents move instead), the alignment and the outline level.
 // False when the sheet has no such style.
 bool apply_style(Document& doc, size_t first, size_t last, const std::string& name);
+// Gives one paragraph the style `to`. An attribute whose direct bit is unset
+// takes the style's value and the bit stays unset, even when the old value
+// differed from the paragraph's previous style. A set bit is left alone.
+// Body text uses apply_style(), which also keeps a value that merely differs.
+void take_paragraph_style(Paragraph& paragraph, const Style& to);
 // Replaces the style `name` with `changed` and carries the change to the
 // paragraphs using it and to the styles based on it, the same attribute by
 // attribute way. A new name renames it everywhere. False, changing nothing,

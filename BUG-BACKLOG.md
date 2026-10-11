@@ -38,6 +38,60 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ## Closed
 
+### A heading in a table changes text outside the cell
+
+- Fixed in 1.0.9.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/styles.cpp` `MainWindow::paragraph_index`; `src/page_ui.cpp` `MainWindow::apply_cell_style`
+- Trigger: Select text in a table cell and choose a heading. Or choose a heading in the paragraph after a table.
+- Outcome: The heading applies to that cell, or to the paragraph after the table. Bold, italic, or underline set directly in the cell stays when a later style is applied. The body paragraph is left alone.
+
+### Bold, italic, and underline do nothing in a table cell
+
+- Fixed in 1.0.9.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::toggle_cell_flag`
+- Trigger: Select text in a cell, or place the caret there, and toggle bold, italic, or underline.
+- Outcome: A selection is retagged in the cell. With only the caret, the next character typed there takes the toggle.
+
+### A table selection stays highlighted after a click elsewhere
+
+- Fixed in 1.0.9.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::release_other_selections`
+- Trigger: Select text in a cell, then click another cell or the body.
+- Outcome: The other buffer's selection collapses. It no longer stays painted until a new selection is made.
+
+### A new page is only as tall as the lines on it
+
+- Fixed in 1.0.9.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/main_window.cpp` `MainWindow::page_height`
+- Trigger: Type enough that the document needs another page.
+- Outcome: Each page is a full sheet. The gray pasteboard sits between those sheets. A one-page document stays the height of its text.
+
+### Choosing a style jumps to the top of the first page
+
+- Fixed in 1.0.9.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/styles.cpp` `MainWindow::apply_named_style`; `src/main_window.cpp` `hold_view`
+- Trigger: Scroll down and apply a heading or another named style.
+- Outcome: The pasteboard stays where it was. The caret remains in view.
+
+### The page number changes halfway down the next sheet
+
+- Fixed in 1.0.9.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::page_content_y`
+- Trigger: Move the caret onto the first line of the next visual page, including a page that started because a tall block was pushed down.
+- Outcome: That line is the new page. The number does not stay on the previous page until the caret has walked through the unused room at the bottom of the previous sheet. The gray gaps stay where they are.
+
 ### Spelling treats every non-ASCII byte as a letter
 
 - Fixed in 1.0.8.
