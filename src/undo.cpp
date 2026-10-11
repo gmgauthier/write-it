@@ -21,6 +21,15 @@ struct UndoHistory::Op {
   Glib::ustring text;
   // Erase: the tags the erased text had, relative to `start`.
   std::vector<Span> spans;
+  // Erase: a picture at character `index` inside `text`. The pixbuf stays
+  // alive with the step. `kept` means `image` is the file bytes.
+  struct Picture {
+    int index = 0;
+    bool kept = false;
+    Glib::RefPtr<Gdk::Pixbuf> pixbuf;
+    Image image;
+  };
+  std::vector<Picture> pictures;
   // Apply and Remove: the tag, and the ranges it really changed.
   Glib::RefPtr<Gtk::TextTag> tag;
   std::vector<std::pair<int, int>> ranges;
@@ -84,6 +93,16 @@ void UndoHistory::attach(const Glib::RefPtr<Gtk::TextBuffer>& buffer, IgnoreTag 
       [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
              const Gtk::TextIter& end) { on_tag(tag, start, end, false); },
       false));
+}
+
+void UndoHistory::set_pictures(
+    std::function<bool(GdkPixbuf*, Image&)> take,
+    std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&, const Image&)> restore,
+    std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&)> drop)
+{
+  picture_take_ = std::move(take);
+  picture_restore_ = std::move(restore);
+  picture_drop_ = std::move(drop);
 }
 
 void UndoHistory::detach()
@@ -274,6 +293,23 @@ void UndoHistory::on_erase(const Gtk::TextIter& start, const Gtk::TextIter& end)
       }
     }
     it = next;
+  }
+  // The object character is not the picture. Keep the pixbuf and its bytes
+  // when the window still has them. A rebuild clears that map first and
+  // then erases the buffer; those pixbufs stay ordinary object characters,
+  // as before, so undo of the rebuild does not pin a copy with no bytes.
+  int index = 0;
+  for (auto it = start; it.compare(end) < 0; ++it, ++index) {
+    const auto pix = it.get_pixbuf();
+    if (!pix || !picture_take_)
+      continue;
+    Op::Picture picture;
+    picture.index = index;
+    picture.pixbuf = pix;
+    picture.kept = picture_take_(pix->gobj(), picture.image);
+    if (!picture.kept)
+      continue;
+    op.pictures.push_back(std::move(picture));
   }
   Step& step = *current_;
   // Typing over a selection erases it first; the typing may still be an
@@ -492,8 +528,49 @@ void UndoHistory::play(Step& step, bool forward)
 void UndoHistory::play_ops(Step& step, bool forward)
 {
   auto at = [this](int offset) { return buffer_->get_iter_at_offset(offset); };
-  auto insert = [&](const Op& op) { buffer_->insert(at(op.start), op.text); };
-  auto erase = [&](const Op& op) { buffer_->erase(at(op.start), at(op.start + op.length)); };
+  auto insert = [&](const Op& op) {
+    if (op.pictures.empty()) {
+      buffer_->insert(at(op.start), op.text);
+      return;
+    }
+    // Same characters as `text`, with each stored picture put back as a
+    // pixbuf in place of its object-replacement character.
+    int cursor = op.start;
+    int consumed = 0;
+    const int count = static_cast<int>(op.text.length());
+    for (const Op::Picture& picture : op.pictures) {
+      if (picture.index > count)
+        break;
+      if (picture.index > consumed) {
+        const auto slice =
+            op.text.substr(static_cast<Glib::ustring::size_type>(consumed),
+                           static_cast<Glib::ustring::size_type>(picture.index - consumed));
+        buffer_->insert(at(cursor), slice);
+        cursor += picture.index - consumed;
+        consumed = picture.index;
+      }
+      if (picture.kept && picture_restore_)
+        picture_restore_(picture.pixbuf, picture.image);
+      if (picture.pixbuf)
+        buffer_->insert_pixbuf(at(cursor), picture.pixbuf);
+      else
+        buffer_->insert(at(cursor),
+                        op.text.substr(static_cast<Glib::ustring::size_type>(consumed), 1));
+      cursor += 1;
+      consumed += 1;
+    }
+    if (consumed < count)
+      buffer_->insert(at(cursor), op.text.substr(static_cast<Glib::ustring::size_type>(consumed)));
+  };
+  auto erase = [&](const Op& op) {
+    if (picture_drop_) {
+      for (const Op::Picture& picture : op.pictures) {
+        if (picture.kept)
+          picture_drop_(picture.pixbuf);
+      }
+    }
+    buffer_->erase(at(op.start), at(op.start + op.length));
+  };
   auto tags = [&](const Op& op, bool apply) {
     for (const auto& range : op.ranges) {
       if (apply)

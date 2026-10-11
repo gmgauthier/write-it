@@ -1,0 +1,112 @@
+# Bug backlog
+
+Reviewed 2026-10-11 against the v1.0.0 sources (`cc05f40`). The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Font colour, highlight, strikethrough, superscript, sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX import are later majors. They are not listed here.
+
+`meson test` runs the file and document suites (`document`, `rtf-unicode`, `rtf-unicode-fuzz`, `import-clean`, `page`, `lists`, `styles`, `indents`, `alignment`, `spelling`, `open`, `filename`, `settings`, `units`, `font-sizes`, `view`, `page-count`), the window suites (`page-ui`, `justify-ui`, `status-bar`, `page-width`, `page-sheet`, `list-labels`, `list-tabs`, `list-draw`, `caret-scroll`, `window-width`, `window-memory`, `style-direct`, `style-ui`, `style-size-ui`, `font-size-ui`, `paragraph-dialog`, `capture`, `capture-count`, `paste-format`, `clipboard-paste`, `dirty-state`, `fast-typing`, `toolbar-overflow`, `print`, `template`, `undo`, `undo-fuzz`, `heading-paragraphs`, `open-identity`, `window-lifetime`), `smoke-open`, `desktop-file`, and the `guard-*` checks. The three `guard-*-fails` targets are expected to fail. The package build of this tag reported 50 passed, 3 expected failures, and 0 failures. This review did not re-run the suite. It read the 1.0 sources against the specification.
+
+Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file.
+
+## Open
+
+### A markdown body row of hyphens is dropped on import
+
+- Severity: data-loss
+- Confidence: high
+- Where: `src/document.cpp` `escape_cell`, `delimiter_cell`, `table_markdown`, `append_table`
+- Trigger: A table cell whose text is three or more hyphens, optionally with a colon at either end (`---`, `:---`, `---:`). Export, then open that Markdown.
+- Outcome: Export writes the cell as ordinary text. `escape_cell` escapes `\` and `|` only, so the line is `| --- |`. Import treats a row whose every cell looks like that as the delimiter and stops the table. A one-column cell of `---` is such a row by itself. That row is no longer a cell. Later rows are read as the next block, a paragraph or another table.
+
+### Two tables with nothing between them become one
+
+- Severity: data-loss
+- Confidence: high
+- Where: `src/rtf.cpp` `begin_row`
+- Trigger: Open RTF with two `\trowd` tables and no paragraph between them.
+- Outcome: A new row keeps the previous table’s id when the paragraph before it is already in that table. With no paragraph between the tables, the second `\trowd` continues the first. Rows, columns, and cell text are one table afterwards. `DEVELOPMENT.md` already says this.
+
+### A pasted heading word marks the whole paragraph as a heading
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::capture`; `src/rtf.cpp` paragraph writer
+- Trigger: Copy a word from a Heading 1 paragraph and paste it into a Normal paragraph. Save and reopen.
+- Outcome: The paste keeps the heading tag on those characters. The paragraph’s style stays Normal, so the file has no `\s` for Heading 1. Capture takes the paragraph’s outline level from the first character that carries a heading tag, and the writer emits `\outlinelevel0`. The paragraph is a heading in the outline and Normal in the stylesheet. `DEVELOPMENT.md` already says this.
+
+### An empty paragraph after `\par` loses the size in force
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/rtf.cpp` `finish_paragraph`
+- Trigger: Open RTF such as `\fs40 Big\par\par`. The empty paragraph has no character control word of its own.
+- Outcome: Word keeps the character format across `\par`, so the empty paragraph is 20 pt. Write-It records a size on an empty paragraph only when that paragraph itself contains a character control word (`\pard\f0\fs40\par`). `\par` clears `char_seen_`, and the following empty `\par` is stored at the default size. `DEVELOPMENT.md` already says this.
+
+### Indents from a file can lay the paragraph off the page
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `clamp_indents`; Format → Paragraph…
+- Trigger: Open RTF with `\li31680\ri31680`, or any left and right indents that leave less than a quarter inch of the text area. The Paragraph dialog refuses that pair.
+- Outcome: The reader clamps each edge to 0–22 inches on its own and does not require the pair to leave 0.25 inch of text. The paragraph is stored and laid out off the page. `DEVELOPMENT.md` already says this.
+
+### The first window can be taller than the work area
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/settings.cpp` `clamp_window`; `src/main_window.cpp` `MainWindow::MainWindow`
+- Trigger: First launch, or a saved size, on a short screen. The plan’s case is 1024×576.
+- Outcome: The client width and height are clamped to the monitor work area, then passed to `set_default_size`. The frame is not subtracted. On a decorated window manager the title bar sits in the work area and the bottom of the window, status bar included, can sit outside it. The plan measured about 58 px on a 1024×576 screen. This review did not remeasure that screen. This machine’s displays are 2560×1440, where 960×700 fits.
+
+### Typing in a long document misses the 50 ms gate
+
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/editor.cpp` `MainWindow::on_user_end`; `DEVELOPMENT.md` M2 typing-speed gate
+- Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
+- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. That figure was not remeasured on v1.0.0. The script the plan names, `bench.sh`, is not in the tree.
+
+### Spelling skips the header, the footer, and the notes
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::on_spelling`; `src/spelling.cpp` `spelling_misses`
+- Trigger: Misspell a word in the header, the footer, or a footnote. Press F7.
+- Outcome: The dialog checks `capture()`’s body paragraphs only. Header, footer, and note text are separate stories. A miss there is never offered. Body text, including table cells, is checked.
+
+### Spelling treats every non-ASCII byte as a letter
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/spelling.cpp` `letter_byte`, `fold_word`
+- Trigger: A word broken by an em dash or other non-ASCII punctuation, such as `hello—world`. Or Ignore All on `Café`, then the same word as `café`.
+- Outcome: Any byte at or above `0x80` counts as a letter, so the em dash stays inside one token and aspell sees `hello—world`. An apostrophe or ASCII hyphen still joins only when a letter follows. `fold_word` lowercases bytes under 128 only, so Ignore All and the suggestion cache do not treat `Café` and `café` as the same word. A single accented word is still sent to aspell as UTF-8.
+
+## Test defects
+
+These fail because of the display they run on. The package build of v1.0.0 did not report them as failures. They were not re-run for this review.
+
+### `paragraph-dialog` compares the field’s text after GTK rewrites it
+
+- Severity: incorrect
+- Confidence: medium
+- Where: `tests/test_paragraph_dialog.cpp`
+- Trigger: Run the suite under a real window manager.
+- Outcome: The suite expects the typed text to stay exactly `22` (and the same for `99`, `30`, and `1e3`) after the warning. GTK can rewrite the entry to `22"`. The check runs once, before the field is focused again. The dialog’s own refusal of those values is the product behaviour the suite was written to lock.
+
+### `window-memory` and `status-bar` need a screen that holds 960×700
+
+- Severity: incorrect
+- Confidence: medium
+- Where: `tests/test_window_memory.cpp`, `tests/test_status_bar.cpp`
+- Trigger: Run either suite on a screen whose work area is shorter or narrower than the first-launch window.
+- Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
+
+## Closed
+
+### Undo of a deleted picture drops its bytes
+
+- Fixed in 1.0.1.
+- Severity: data-loss
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::on_erase`; `src/undo.cpp` `UndoHistory::on_erase`
+- Trigger: Insert a PNG or JPEG, delete it, then Undo, then Save.
+- Outcome: The erase removes the picture from `image_pix_` while the pixbuf is still alive. The undo step keeps that pixbuf and its bytes. Undo inserts the pixbuf and puts the bytes back, so Save writes the picture. Redo removes it again.
