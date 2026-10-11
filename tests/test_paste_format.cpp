@@ -372,7 +372,7 @@ void para_case(const char* name, const writeit::Document& doc, int from, int to,
 }
 }  // namespace
 
-constexpr int kChecks = 176;
+constexpr int kChecks = 184;
 
 int main(int argc, char* argv[])
 {
@@ -641,6 +641,12 @@ int main(int argc, char* argv[])
   para_case("no paragraph end", hbn, 6, 8, 12, "hhhh\nbbbb\nnnbbnn",
             [](const writeit::Document& d) {
               return as(d, 0, "hhhh") + as(d, 1, "bbbb") + as(d, 2, "nnbbnn");
+            });
+  // A word from a Heading 1 pasted into Normal stays Normal. The heading
+  // tag on those characters must not give the paragraph an outline level.
+  para_case("heading word into normal", hbn, 1, 4, 12, "hhhh\nbbbb\nnnhhhnn",
+            [](const writeit::Document& d) {
+              return as(d, 0, "hhhh") + as(d, 1, "bbbb") + as(d, 2, "nnhhhnn");
             });
 
   return suite_test::done("paste-format", kChecks);

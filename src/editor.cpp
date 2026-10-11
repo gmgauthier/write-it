@@ -1145,7 +1145,6 @@ Document MainWindow::capture() const
   Paragraph paragraph;
   Run run;
   bool in_run = false;
-  int heading = 0;
   bool have_para = false;
   auto flush_run = [&]() {
     if (!in_run)
@@ -1156,7 +1155,6 @@ Document MainWindow::capture() const
   };
   auto flush_paragraph = [&]() {
     flush_run();
-    paragraph.heading = heading;
     if (!have_para) {
       // A paragraph no tag reaches: the empty last one, or one that has not
       // been normalised yet. It follows the paragraph above.
@@ -1179,9 +1177,16 @@ Document MainWindow::capture() const
         paragraph.cell = doc.paragraphs.back().cell;
       }
     }
+    // The outline level belongs to the paragraph's style. A heading tag on
+    // some of its characters, such as a word pasted from a Heading, does not
+    // make the paragraph a heading.
+    paragraph.heading = 0;
+    if (const Style* style = find_style(styles_, paragraph.style)) {
+      if (style->heading >= 1 && style->heading <= 6)
+        paragraph.heading = style->heading;
+    }
     doc.paragraphs.push_back(paragraph);
     paragraph = Paragraph{};
-    heading = 0;
     have_para = false;
   };
   bool skip_sep = false;
@@ -1209,7 +1214,6 @@ Document MainWindow::capture() const
       paragraph = Paragraph{};
       run = Run{};
       in_run = false;
-      heading = 0;
       have_para = false;
       skip_sep = true;
       ended_on_anchor = true;
@@ -1253,14 +1257,12 @@ Document MainWindow::capture() const
       continue;
     }
     // Tags change only where one starts or ends, so between toggles the
-    // format (and the heading) are the previous character's. Reading them at
-    // every character cost most of a keystroke in a long document.
+    // format is the previous character's. Reading it at every character
+    // cost most of a keystroke in a long document.
     if (in_run && !iter.toggles_tag()) {
       run.text += Glib::ustring(1, ch).raw();
       continue;
     }
-    if (heading == 0)
-      heading = heading_of(iter);
     const Run format = format_of(iter);
     if (!in_run || !same_format(run, format)) {
       flush_run();
@@ -1728,6 +1730,15 @@ void MainWindow::finish_pending()
   Glib::RefPtr<Gtk::TextTag> head = landing;
   if (ends.empty()) {
     set_para(start, end, landing);
+    // No paragraph end was pasted, so the word joins the landing paragraph.
+    // A heading tag copied with the word does not change that paragraph.
+    ParaFormat landed;
+    parse_para(tag_name(landing), landed);
+    // sheet() is a temporary. The pointer has to outlive that copy.
+    const std::vector<Style> styles = sheet();
+    const Style* style = find_style(styles, landed.style);
+    const int level = style && style->heading >= 1 && style->heading <= 6 ? style->heading : 0;
+    set_heading(start, end, level);
   } else {
     head = first_end_para(copied_at(ends.front()), landing);
     set_para(head_from, ends.front() + 1, head);
