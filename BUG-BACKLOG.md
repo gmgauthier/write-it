@@ -8,22 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### Two tables with nothing between them become one
-
-- Severity: data-loss
-- Confidence: high
-- Where: `src/rtf.cpp` `begin_row`
-- Trigger: Open RTF with two `\trowd` tables and no paragraph between them.
-- Outcome: A new row keeps the previous table’s id when the paragraph before it is already in that table. With no paragraph between the tables, the second `\trowd` continues the first. Rows, columns, and cell text are one table afterwards. `DEVELOPMENT.md` already says this.
-
-### A pasted heading word marks the whole paragraph as a heading
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/editor.cpp` `MainWindow::capture`; `src/rtf.cpp` paragraph writer
-- Trigger: Copy a word from a Heading 1 paragraph and paste it into a Normal paragraph. Save and reopen.
-- Outcome: The paste keeps the heading tag on those characters. The paragraph’s style stays Normal, so the file has no `\s` for Heading 1. Capture takes the paragraph’s outline level from the first character that carries a heading tag, and the writer emits `\outlinelevel0`. The paragraph is a heading in the outline and Normal in the stylesheet. `DEVELOPMENT.md` already says this.
-
 ### An empty paragraph after `\par` loses the size in force
 
 - Severity: incorrect
@@ -93,6 +77,21 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
 
 ## Closed
+
+### Two tables with nothing between them become one
+
+- Not a defect. No release.
+- Where: `src/rtf.cpp` `begin_row`
+- A `\trowd` is a row, not a table. The rows of one table are consecutive `\trowd` groups with no paragraph between them. The sample 4×4 table is written that way, and `page` requires it to stay one table. A paragraph between two `\trowd` groups is what starts the next table, which the reader already does. Splitting on every `\trowd` would turn every multi-row table into one-row tables. `DEVELOPMENT.md` states this on purpose.
+
+### A pasted heading word marks the whole paragraph as a heading
+
+- Fixed in 1.0.3.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::capture`, `MainWindow::finish_pending`
+- Trigger: Copy a word from a Heading 1 paragraph and paste it into a Normal paragraph. Save and reopen.
+- Outcome: The outline level comes from the paragraph’s style. A paste with no paragraph end keeps the landing paragraph’s style, and the copied heading tag is cleared. The paragraph stays Normal, and the file has no `\outlinelevel`.
 
 ### A markdown body row of hyphens is dropped on import
 

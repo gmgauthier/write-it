@@ -1,3 +1,9 @@
+write-it (1.0.3-1) unstable; urgency=medium
+
+  * A heading word pasted into a Normal paragraph stays Normal.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sun, 11 Oct 2026 11:37:03 +0100
+
 write-it (1.0.2-1) unstable; urgency=medium
 
   * Keep a markdown body row of hyphens as table cells.
