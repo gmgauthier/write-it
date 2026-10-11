@@ -16,14 +16,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
 - Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. That figure was not remeasured on v1.0.0. The script the plan names, `bench.sh`, is not in the tree.
 
-### Spelling skips the header, the footer, and the notes
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/editor.cpp` `MainWindow::on_spelling`; `src/spelling.cpp` `spelling_misses`
-- Trigger: Misspell a word in the header, the footer, or a footnote. Press F7.
-- Outcome: The dialog checks `capture()`’s body paragraphs only. Header, footer, and note text are separate stories. A miss there is never offered. Body text, including table cells, is checked.
-
 ### Spelling treats every non-ASCII byte as a letter
 
 - Severity: incorrect
@@ -53,6 +45,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
 
 ## Closed
+
+### Spelling skips the header, the footer, and the notes
+
+- Fixed in 1.0.7.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/spelling.cpp` `spelling_misses`; `src/editor.cpp` `MainWindow::on_spelling`
+- Trigger: Misspell a word in the header, the footer, or a footnote. Press F7.
+- Outcome: The check walks the body, including table cells, then the header, the footer, and each note. A change is written back into the story the miss came from.
 
 ### The first window can be taller than the work area
 

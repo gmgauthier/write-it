@@ -4469,7 +4469,7 @@ void MainWindow::on_spelling()
   };
 
   Document doc = capture();
-  std::vector<SpellMiss> misses = spelling_misses(doc.paragraphs, known);
+  std::vector<SpellMiss> misses = spelling_misses(doc, known);
   size_t index = 0;
 
   constexpr int kIgnore = 10;
@@ -4567,7 +4567,8 @@ void MainWindow::on_spelling()
   };
   auto shift_later = [](std::vector<SpellMiss>& items, const SpellMiss& miss, long long delta) {
     for (SpellMiss& other : items) {
-      if (other.paragraph != miss.paragraph || other.begin < miss.end)
+      if (other.where != miss.where || other.note != miss.note ||
+          other.paragraph != miss.paragraph || other.begin < miss.end)
         continue;
       other.begin = static_cast<size_t>(static_cast<long long>(other.begin) + delta);
       other.end = static_cast<size_t>(static_cast<long long>(other.end) + delta);
@@ -4605,7 +4606,8 @@ void MainWindow::on_spelling()
       const Document before = doc;
       if (response == kChange) {
         const SpellMiss miss = misses[index];
-        if (replace_word(doc.paragraphs[miss.paragraph], miss.begin, miss.end, replacement)) {
+        Paragraph* paragraph = spell_paragraph(doc, miss);
+        if (paragraph && replace_word(*paragraph, miss.begin, miss.end, replacement)) {
           const long long delta = static_cast<long long>(replacement.size()) -
                                   static_cast<long long>(miss.end - miss.begin);
           shift_later(misses, miss, delta);
@@ -4620,7 +4622,8 @@ void MainWindow::on_spelling()
         }
         for (size_t n = hits.size(); n-- > 0;) {
           const SpellMiss miss = misses[hits[n]];
-          if (!replace_word(doc.paragraphs[miss.paragraph], miss.begin, miss.end, replacement))
+          Paragraph* paragraph = spell_paragraph(doc, miss);
+          if (!paragraph || !replace_word(*paragraph, miss.begin, miss.end, replacement))
             continue;
           const long long delta = static_cast<long long>(replacement.size()) -
                                   static_cast<long long>(miss.end - miss.begin);
