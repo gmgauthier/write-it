@@ -453,7 +453,7 @@ void MainWindow::build_editor()
   // are recomputed after each change and may leave the tag table.
   undo_.attach(buffer_, [](const Glib::RefPtr<Gtk::TextTag>& tag) {
     const std::string name = tag_name(tag);
-    return is_list_shift(name) || is_list_tab(name);
+    return is_list_shift(name) || is_list_tab(name) || is_page_seam(name);
   });
   // Undo attaches before the erase below, and takes the picture bytes here
   // while the pixbuf is still in the buffer. Undo inserts that pixbuf again.
@@ -516,8 +516,10 @@ void MainWindow::build_editor()
         forget_label_geometry(start.get_line(), end.get_line(), start.get_line() - end.get_line());
       },
       false);
-  auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>&, const Gtk::TextIter& start,
+  auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
                                 const Gtk::TextIter& end) {
+    if (seaming_ || is_page_seam(tag_name(tag)))
+      return;
     // A range up to the next line's start, as a paragraph's is, leaves that
     // line's first character, and so its layout, untouched.
     const int last = end.get_line() - (end.starts_line() && end.compare(start) > 0 ? 1 : 0);
@@ -547,10 +549,10 @@ void MainWindow::build_editor()
   // the items below, a character format changes only its own label's font.
   auto lists_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
                              const Gtk::TextIter& end) {
-    if (shifting_ || tabbing_)
+    if (seaming_ || shifting_ || tabbing_)
       return;
     const std::string name = tag_name(tag);
-    if (is_list_shift(name) || is_list_tab(name))
+    if (is_list_shift(name) || is_list_tab(name) || is_page_seam(name))
       return;
     ParaFormat ignored;
     if (parse_para(name, ignored))
@@ -2144,6 +2146,9 @@ void MainWindow::raise_headings()
     if (tag)
       tag->set_priority(table->get_size() - 1);
   }
+  // A seam has to outrank a heading, or the heading's own space wins and the
+  // gap between sheets never opens.
+  raise_seams();
 }
 
 void MainWindow::restyle_tags()
@@ -3871,6 +3876,305 @@ Paragraph MainWindow::label_paragraph(size_t index, int offset) const
   return paragraph;
 }
 
+int MainWindow::natural_line_above(const Gtk::TextIter& iter) const
+{
+  // What sits above this paragraph when no page seam replaces it: a heading's
+  // space, or a page break's. The higher priority tag wins, as GTK draws it.
+  const int heading_px = static_cast<int>(8 * std::max(0.5, zoom_factor()));
+  int best = -1;
+  int pixels = 0;
+  for (const auto& tag : iter.get_tags()) {
+    const std::string name = tag_name(tag);
+    if (is_page_seam(name))
+      continue;
+    int above = -1;
+    if (const int level = heading_level_name(name); level > 0)
+      above = heading_px;
+    else {
+      ParaFormat format;
+      if (parse_para(name, format) && format.page_break)
+        above = 18;
+    }
+    if (above >= 0 && tag->get_priority() >= best) {
+      best = tag->get_priority();
+      pixels = above;
+    }
+  }
+  return pixels;
+}
+
+namespace {
+
+int seam_at(const Gtk::TextIter& iter)
+{
+  int pixels = 0;
+  for (const auto& tag : iter.get_tags())
+    pixels = std::max(pixels, page_seam_pixels(tag_name(tag)));
+  return pixels;
+}
+
+}  // namespace
+
+int MainWindow::seam_extra_through(int offset) const
+{
+  if (!buffer_)
+    return 0;
+  const int count = buffer_->get_char_count();
+  const int at = std::max(0, std::min(offset, count));
+  int extra = 0;
+  auto iter = buffer_->begin();
+  while (iter.get_offset() <= at) {
+    const int seam = seam_at(iter);
+    if (seam > 0)
+      extra += std::max(0, seam - natural_line_above(iter));
+    bool found = false;
+    while (!iter.is_end()) {
+      if (iter.get_char() == '\n') {
+        iter.forward_char();
+        found = true;
+        break;
+      }
+      iter.forward_char();
+    }
+    if (!found)
+      break;
+  }
+  return extra;
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::page_seam_tag(int pixels)
+{
+  const Glib::ustring name = std::string("page-seam") + '\x1f' + std::to_string(pixels);
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    tag->property_pixels_above_lines() = pixels;
+    table->add(tag);
+  }
+  return tag;
+}
+
+void MainWindow::raise_seams()
+{
+  if (!buffer_)
+    return;
+  auto table = buffer_->get_tag_table();
+  std::vector<Glib::RefPtr<Gtk::TextTag>> seams;
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_page_seam(tag_name(tag)))
+      seams.push_back(tag);
+  });
+  if (seams.empty())
+    return;
+  const int top = table->get_size() - 1;
+  const bool low =
+      std::any_of(seams.begin(), seams.end(),
+                  [&](const Glib::RefPtr<Gtk::TextTag>& tag) { return tag->get_priority() < top; });
+  if (!low)
+    return;
+  for (const auto& tag : seams)
+    tag->set_priority(table->get_size() - 1);
+}
+
+void MainWindow::update_page_seams()
+{
+  if (seaming_ || !buffer_)
+    return;
+  // Draft is one column. The gaps belong to Page only.
+  if (view_ != ViewMode::Page) {
+    std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
+    buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+      if (is_page_seam(tag_name(tag)))
+        drop.push_back(tag);
+    });
+    if (drop.empty())
+      return;
+    seaming_ = true;
+    for (const auto& tag : drop)
+      buffer_->remove_tag(tag, buffer_->begin(), buffer_->end());
+    for (const auto& tag : drop)
+      buffer_->get_tag_table()->remove(tag);
+    seaming_ = false;
+    grow_page_ = true;
+    queue_page_size();
+    return;
+  }
+  if (text_.get_allocated_width() <= 1)
+    return;
+
+  struct Block {
+    int start = 0;
+    int end = 0;
+    int top = 0;
+    int text_h = 0;
+    int natural = 0;
+    int seam = 0;
+  };
+  std::vector<Block> blocks;
+  int bottom_y = 0;
+  int bottom_h = 0;
+  text_.get_line_yrange(buffer_->end(), bottom_y, bottom_h);
+  const int bottom = bottom_y + bottom_h;
+  int offset = 0;
+  const int count = buffer_->get_char_count();
+  while (offset <= count) {
+    auto iter = buffer_->get_iter_at_offset(offset);
+    int top = 0;
+    int height = 0;
+    text_.get_line_yrange(iter, top, height);
+    Block block;
+    block.start = offset;
+    block.top = top;
+    block.natural = natural_line_above(iter);
+    block.seam = seam_at(iter);
+    int next = -1;
+    for (auto at = iter; !at.is_end(); ++at) {
+      if (at.get_char() == '\n') {
+        auto after = at;
+        after.forward_char();
+        next = after.get_offset();
+        break;
+      }
+    }
+    block.end = next < 0 ? count : next;
+    blocks.push_back(block);
+    if (next < 0)
+      break;
+    offset = next;
+  }
+  if (blocks.empty())
+    return;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const int next_top = i + 1 < blocks.size() ? blocks[i + 1].top : bottom;
+    const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
+    blocks[i].text_h = std::max(1, next_top - blocks[i].top - displayed);
+  }
+
+  const ViewGeometry sheet = geometry();
+  const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
+  const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
+  int y = 0;
+  int page_end = per;
+  std::vector<int> want(blocks.size(), 0);
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const int text_h = blocks[i].text_h;
+    const int box = blocks[i].natural + text_h;
+    while (y >= page_end)
+      page_end += per;
+    // A paragraph that does not fit in the room left on this sheet starts
+    // the next one. One taller than a sheet stays put and crosses the edge.
+    if (y > 0 && y + box > page_end && text_h <= per) {
+      want[i] = std::max(0, page_end - y) + chrome;
+      y = page_end + text_h;
+      page_end += per;
+    } else {
+      y += box;
+    }
+  }
+  // The empty last paragraph has no character a tag can sit on. Leaving it
+  // unseamed keeps the gap off a range GTK would ignore, which would reapply
+  // on every layout.
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (blocks[i].start == blocks[i].end)
+      want[i] = 0;
+  }
+
+  bool changed = false;
+  seaming_ = true;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (want[i] == blocks[i].seam)
+      continue;
+    auto from = buffer_->get_iter_at_offset(blocks[i].start);
+    auto to = buffer_->get_iter_at_offset(blocks[i].end);
+    std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
+    for (const auto& tag : from.get_tags()) {
+      if (is_page_seam(tag_name(tag)))
+        drop.push_back(tag);
+    }
+    for (const auto& tag : drop)
+      buffer_->remove_tag(tag, from, to);
+    if (want[i] > 0)
+      buffer_->apply_tag(page_seam_tag(want[i]), from, to);
+    changed = true;
+  }
+  if (changed) {
+    std::vector<int> used = want;
+    std::vector<Glib::RefPtr<Gtk::TextTag>> idle;
+    auto table = buffer_->get_tag_table();
+    table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+      const int pixels = page_seam_pixels(tag_name(tag));
+      if (pixels > 0 && std::find(used.begin(), used.end(), pixels) == used.end())
+        idle.push_back(tag);
+    });
+    for (const auto& tag : idle)
+      table->remove(tag);
+    raise_seams();
+  }
+  seaming_ = false;
+  if (changed) {
+    grow_page_ = true;
+    queue_page_size();
+  }
+}
+
+void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  if (!buffer_ || view_ != ViewMode::Page)
+    return;
+  const ViewGeometry sheet = geometry();
+  if (sheet.gap <= 0)
+    return;
+  Gdk::Rectangle visible;
+  text_.get_visible_rect(visible);
+  double clip_x1 = 0;
+  double clip_y1 = 0;
+  double clip_x2 = 0;
+  double clip_y2 = 0;
+  cr->get_clip_extents(clip_x1, clip_y1, clip_x2, clip_y2);
+  const int view_top = std::max(visible.get_y(), static_cast<int>(std::floor(clip_y1)));
+  const int view_bottom =
+      std::min(visible.get_y() + visible.get_height(), static_cast<int>(std::ceil(clip_y2)));
+  const int width = text_.get_allocated_width();
+  auto iter = buffer_->begin();
+  while (true) {
+    const int seam = seam_at(iter);
+    if (seam > 0) {
+      int top = 0;
+      int height = 0;
+      text_.get_line_yrange(iter, top, height);
+      // [pad][bottom margin][gray][top margin]. The gray is the pasteboard.
+      const int gray_y = top + seam - sheet.gap - sheet.margin_y;
+      int window_x = 0;
+      int window_y = 0;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, gray_y, window_x, window_y);
+      if (window_y + sheet.gap >= view_top && window_y <= view_bottom) {
+        cr->set_source_rgb(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
+        cr->rectangle(0, window_y, width, sheet.gap);
+        cr->fill();
+        cr->set_source_rgb(92.0 / 255.0, 92.0 / 255.0, 92.0 / 255.0);
+        cr->set_line_width(1);
+        cr->move_to(0, window_y + 0.5);
+        cr->line_to(width, window_y + 0.5);
+        cr->move_to(0, window_y + sheet.gap - 0.5);
+        cr->line_to(width, window_y + sheet.gap - 0.5);
+        cr->stroke();
+      }
+    }
+    bool more = false;
+    while (!iter.is_end()) {
+      if (iter.get_char() == '\n') {
+        iter.forward_char();
+        more = !iter.is_end();
+        break;
+      }
+      iter.forward_char();
+    }
+    if (!more)
+      break;
+  }
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,
@@ -3878,6 +4182,9 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   // first-line indent, in the font of the paragraph's first character.
   if (!buffer_)
     return false;
+  // The gray between sheets. Painted after the text, so the text view's
+  // white does not cover it. Nothing is typed in that band.
+  draw_page_seams(cr);
   if (!any_list())
     return false;
   const std::vector<ListLine>& lines = list_lines();

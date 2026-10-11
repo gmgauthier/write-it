@@ -16,6 +16,7 @@
 #include <glibmm/miscutils.h>
 #include <gtkmm.h>
 
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -48,6 +49,20 @@ struct MainWindowProbe {
     auto layout =
         w.list_label_layout(doc.paragraphs[static_cast<size_t>(paragraph)], 0, 1, width, gap);
     return layout->get_font_description().get_weight();
+  }
+  static int find(MainWindow& w, const std::string& text)
+  {
+    const auto body = w.buffer_->get_text(false);
+    const auto at = body.find(text);
+    return at == Glib::ustring::npos ? -1 : static_cast<int>(at);
+  }
+  static void apply_style(MainWindow& w, const std::string& name)
+  {
+    w.apply_named_style(name);
+  }
+  static Document doc(MainWindow& w)
+  {
+    return w.capture();
   }
 };
 
@@ -134,7 +149,7 @@ Measured measure_style_dialog(writeit::MainWindow& window)
 
 }  // namespace
 
-constexpr int kChecks = 9;
+constexpr int kChecks = 16;
 
 int main(int argc, char* argv[])
 {
@@ -197,6 +212,55 @@ int main(int argc, char* argv[])
     MainWindowProbe::load(window, listed);
     settle();
     CHECK(MainWindowProbe::label_weight(window, 0) == Pango::WEIGHT_BOLD);
+
+    // A style chosen in the paragraph after a table styles that paragraph.
+    // Counting newlines there used to style the table's cells instead.
+    writeit::Document after = writeit::blank_document("Sans", 11);
+    after.paragraphs = {para("Before the table")};
+    CHECK(writeit::insert_table(after.paragraphs, 1, 2, 2, writeit::page_text_twips(after.page)));
+    after.paragraphs.push_back(para("Initial Impressions"));
+    after.paragraphs.push_back(para("The observation."));
+    MainWindowProbe::load(window, after);
+    settle();
+    const int heading = MainWindowProbe::find(window, "Initial Impressions");
+    const int observation = MainWindowProbe::find(window, "The observation.");
+    CHECK(heading >= 0 && observation > heading);
+    MainWindowProbe::select(window, heading,
+                            heading + static_cast<int>(std::strlen("Initial Impressions")));
+    MainWindowProbe::apply_style(window, "Heading 2");
+    settle();
+    writeit::Document styled = MainWindowProbe::doc(window);
+    int heading_hits = 0;
+    int cell_hits = 0;
+    for (const writeit::Paragraph& paragraph : styled.paragraphs) {
+      if (paragraph.style != "Heading 2")
+        continue;
+      if (paragraph.cell.table != 0)
+        ++cell_hits;
+      else
+        ++heading_hits;
+    }
+    CHECK(heading_hits == 1);
+    CHECK(cell_hits == 0);
+    CHECK(styled.paragraphs.back().style == "Normal");
+    MainWindowProbe::select(window, observation, observation + 4);
+    MainWindowProbe::apply_style(window, "Heading 2");
+    settle();
+    styled = MainWindowProbe::doc(window);
+    cell_hits = 0;
+    bool observation_heading = false;
+    for (const writeit::Paragraph& paragraph : styled.paragraphs) {
+      if (paragraph.style != "Heading 2")
+        continue;
+      if (paragraph.cell.table != 0)
+        ++cell_hits;
+      for (const writeit::Run& run : paragraph.runs) {
+        if (run.text.find("observation") != std::string::npos)
+          observation_heading = true;
+      }
+    }
+    CHECK(cell_hits == 0);
+    CHECK(observation_heading);
     window.hide();
     settle();
   }

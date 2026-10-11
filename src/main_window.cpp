@@ -1049,18 +1049,23 @@ void MainWindow::queue_page_status()
 }
 
 // "Page n of m". The count follows the page setup. A page break is kept; it
-// does not change the count. See page_count() in view.hpp.
+// does not change the count. See page_count() in view.hpp. The gray between
+// sheets is not part of the count: seam_extra_through() takes it back out.
 void MainWindow::update_page_status()
 {
   if (!buffer_)
     return;
+  update_page_seams();
   int end_y = 0;
   int end_h = 0;
   text_.get_line_yrange(buffer_->end(), end_y, end_h);
+  const auto caret_iter = buffer_->get_iter_at_mark(buffer_->get_insert());
   Gdk::Rectangle caret;
-  text_.get_iter_location(buffer_->get_iter_at_mark(buffer_->get_insert()), caret);
+  text_.get_iter_location(caret_iter, caret);
   const int per = page_text_height(page_setup_, zoom_factor());
-  const Glib::ustring label = page_label(page_count(end_y + end_h, caret.get_y(), per));
+  const int content_end = end_y + end_h - seam_extra_through(buffer_->get_char_count());
+  const int content_caret = caret.get_y() - seam_extra_through(caret_iter.get_offset());
+  const Glib::ustring label = page_label(page_count(content_end, content_caret, per));
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
 }
@@ -1189,17 +1194,24 @@ bool MainWindow::on_context(GdkEventButton* event)
 
 int MainWindow::print_page_count() const
 {
-  // One sheet of the page view. A taller page is more than one sheet.
-  const int sheet =
-      std::max(1, view_geometry(ViewMode::Page, zoom_factor(), page_setup_).page_height);
-  const int height = std::max(sheet, page_height());
-  return std::max(1, (height + sheet - 1) / sheet);
+  // The same count as the status bar. The widget is taller than that by the
+  // gray gaps between sheets, and those gaps are not pages.
+  if (!buffer_)
+    return 1;
+  int end_y = 0;
+  int end_h = 0;
+  text_.get_line_yrange(buffer_->end(), end_y, end_h);
+  const int content = std::max(0, end_y + end_h - seam_extra_through(buffer_->get_char_count()));
+  const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
+  return std::max(1, (content + per - 1) / per);
 }
 
 void MainWindow::draw_print_page(const Glib::RefPtr<Gtk::PrintContext>& context, int page_nr)
 {
   const ViewGeometry sheet = view_geometry(ViewMode::Page, zoom_factor(), page_setup_);
-  const int band = std::max(1, sheet.page_height);
+  // One sheet, then the gray gap the screen leaves between sheets. The clip
+  // below is one sheet tall, so the gap is not drawn on the paper.
+  const int band = std::max(1, sheet.page_height + sheet.gap);
   const int src_w =
       page_.get_allocated_width() > 1 ? page_.get_allocated_width() : std::max(1, sheet.page_width);
   const Cairo::RefPtr<Cairo::Context> cr = context->get_cairo_context();

@@ -310,6 +310,15 @@ write_it_page_sheet_tests = executable(
 )
 test('page-sheet', write_it_page_sheet_tests, timeout: 120, is_parallel: false)
 
+# The real window under a display: a long page is separate sheets with the
+# gray pasteboard between them, and Draft has no such gap.
+write_it_page_seam_tests = executable(
+  'write-it-page-seam-tests',
+  'tests/test_page_seams.cpp',
+  dependencies: [writeit_dep, dependency('zlib')],
+)
+test('page-seam', write_it_page_seam_tests, timeout: 60, is_parallel: false)
+
 # The real window under a display: where list labels land beside centred,
 # right-aligned and left-aligned text, with a non-standard hang.
 write_it_list_labels_tests = executable(

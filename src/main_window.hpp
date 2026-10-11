@@ -147,6 +147,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool page_caret(int count, bool extend);
   void sync_zoom_checks();
   void queue_page_status();
+  // Gray pasteboard between the sheets of a long page. Screen-only: Draft
+  // drops it, and the file never stores it.
+  void update_page_seams();
+  void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
+  int natural_line_above(const Gtk::TextIter& iter) const;
+  // Seam pixels above `offset` that are not part of the laid-out text. A
+  // heading's own space, which a seam replaces on screen, is put back.
+  int seam_extra_through(int offset) const;
+  Glib::RefPtr<Gtk::TextTag> page_seam_tag(int pixels);
+  void raise_seams();
   void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -317,6 +327,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_named_style(const std::string& name);
   void apply_next_style();
   void on_style_dialog();
+  // The document paragraph at `offset`, table cells included. The same index
+  // document_index_at() and capture() use.
   int paragraph_index(int offset) const;
   // One undo step from `before` to `after`. The selection stays, unless
   // `caret` is given: then the caret is that offset (a page break or a
@@ -381,7 +393,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Tags the paragraph that starts at `start` with `format`, or holds the
   // format aside for the empty last paragraph.
   void tag_paragraph(int start, const ParaFormat& format);
-  // The caret's paragraph, counted in '\n' as capture() counts them.
+  // The caret's document paragraph, cells included, as capture() counts them.
   size_t caret_paragraph() const;
   // Restart Numbering (true) or Continue Previous List (false) at the
   // caret's item, as one undo step. False when it changes nothing.
@@ -629,6 +641,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection caret_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // update_page_seams() is applying its tags. Their signals are not edits.
+  bool seaming_ = false;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace writeit {
 namespace {
@@ -137,5 +138,25 @@ int twips_to_px(int twips, double zoom)
 
 static_assert(default_page().paper_width == kScreenPageTwips, "default paper is the screen page");
 static_assert(default_page().paper_height == kA4Twips, "default paper is A4");
+
+bool is_page_seam(const std::string& name)
+{
+  const std::string prefix = std::string("page-seam") + '\x1f';
+  return name.compare(0, prefix.size(), prefix) == 0;
+}
+
+int page_seam_pixels(const std::string& name)
+{
+  const std::string prefix = std::string("page-seam") + '\x1f';
+  if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0)
+    return 0;
+  int pixels = 0;
+  for (size_t i = prefix.size(); i < name.size(); ++i) {
+    if (name[i] < '0' || name[i] > '9')
+      return 0;
+    pixels = pixels * 10 + (name[i] - '0');
+  }
+  return pixels;
+}
 
 }  // namespace writeit

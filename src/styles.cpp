@@ -142,11 +142,9 @@ std::vector<Style> MainWindow::sheet() const
 
 int MainWindow::paragraph_index(int offset) const
 {
-  if (!buffer_)
-    return 0;
-  const std::string before =
-      buffer_->get_text(buffer_->begin(), buffer_->get_iter_at_offset(offset), true).raw();
-  return static_cast<int>(std::count(before.begin(), before.end(), '\n'));
+  // The document paragraph, cells included. A newline count treats a table
+  // as one break and styles a cell when the caret is in the text after it.
+  return static_cast<int>(document_index_at(offset));
 }
 
 void MainWindow::fill_style_combo()
