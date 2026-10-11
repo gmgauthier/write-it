@@ -320,7 +320,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 - Spelling… (F7) is a dialog against a local aspell dictionary. Squiggles and grammar stay out of 1.0. Options… gains the dictionary name.
 - Print… opens the system print dialog. Page is the view that prints.
 - New from Template… picks an RTF starter shipped with the program.
-- Markdown import and export gain lists and GitHub pipe tables.
+- Markdown import and export gain lists and GitHub pipe tables. A body cell whose text is only hyphens, with an optional colon at either end, stays a cell. The delimiter row is only the line under the header.
 
 **Done when** the M4 line in the table is true. A headless test covers the Markdown list and pipe-table slice, and the spelling check against a fixed word list with no network.
 
