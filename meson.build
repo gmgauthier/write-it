@@ -558,3 +558,11 @@ write_it_dirty_state_tests = executable(
   dependencies: [writeit_dep],
 )
 test('dirty-state', write_it_dirty_state_tests, timeout: 60, is_parallel: false)
+
+# The typing-speed gate. Not a suite test: a release build, run by hand.
+# tests/README.md says how.
+write_it_bench_key = executable(
+  'write-it-bench-key',
+  'tests/bench_key.cpp',
+  dependencies: [writeit_dep],
+)

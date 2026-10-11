@@ -14,7 +14,7 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Confidence: medium
 - Where: `src/editor.cpp` `MainWindow::on_user_end`; `DEVELOPMENT.md` M2 typing-speed gate
 - Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
-- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. That figure was not remeasured on v1.0.0. The script the plan names, `bench.sh`, is not in the tree.
+- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. That figure was not remeasured on v1.0.0. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`.
 
 ## Test defects
 
