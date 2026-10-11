@@ -178,6 +178,7 @@ MainWindow::~MainWindow()
   restore_idle_.disconnect();
   cell_typing_idle_.disconnect();
   page_status_idle_.disconnect();
+  table_sync_.disconnect();
   frame_fit_idle_.disconnect();
   list_shifts_idle_.disconnect();
   list_tabs_idle_.disconnect();

@@ -52,6 +52,43 @@ struct MainWindowProbe {
     const int at = offset < 0 ? 0 : offset > count ? count : offset;
     buffer->place_cursor(buffer->get_iter_at_offset(at));
   }
+
+  // The line that holds a table is as tall as the sheet, and the paragraph
+  // after that line starts below the sheet.
+  static bool table_line_holds_sheet(MainWindow& window)
+  {
+    auto buffer = window.buffer_;
+    if (!buffer)
+      return false;
+    for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+      auto anchor = iter.get_child_anchor();
+      if (!anchor)
+        continue;
+      const std::vector<Gtk::Widget*> widgets = anchor->get_widgets();
+      if (widgets.empty() || widgets.front() == nullptr)
+        return false;
+      int top = 0;
+      int height = 0;
+      window.text_.get_line_yrange(iter, top, height);
+      const int sheet = widgets.front()->get_allocated_height();
+      if (sheet <= 1)
+        return false;
+      const int gap = sheet > height ? sheet - height : height - sheet;
+      if (gap > 1)
+        return false;
+      auto next = iter;
+      next.forward_char();
+      if (!next.is_end())
+        next.forward_char();
+      if (next.is_end())
+        return true;
+      int next_top = 0;
+      int next_height = 0;
+      window.text_.get_line_yrange(next, next_top, next_height);
+      return next_top + 1 >= top + sheet;
+    }
+    return false;
+  }
 };
 
 }  // namespace writeit
@@ -219,7 +256,7 @@ void drag_view(Gtk::TextView& view, double x, double y, double dx, guint time)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 54;
+constexpr int kChecks = 55;
 
 int main(int argc, char* argv[])
 {
@@ -372,6 +409,7 @@ int main(int argc, char* argv[])
     CHECK(writeit::rtf_import(sample_rtf, sample));
     writeit::MainWindowProbe::load(window, sample);
     settle();
+    CHECK(writeit::MainWindowProbe::table_line_holds_sheet(window));
     writeit::Document shown = writeit::MainWindowProbe::doc(window);
     if (!(shown == sample)) {
       std::cerr << "table grid capture " << shown.paragraphs.size() << " paragraphs, sample "

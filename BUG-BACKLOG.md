@@ -38,6 +38,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ## Closed
 
+### Text after a table is laid out inside the table
+
+- Fixed in 1.0.11.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::sync_table_lines`
+- Trigger: Open a document that has a table, from a fresh launch.
+- Outcome: The line that holds the table is as tall as the table. The page seam and the text after the table start below it.
+
 ### The font face does not change inside a table cell
 
 - Fixed in 1.0.10.

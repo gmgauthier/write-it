@@ -8,6 +8,11 @@
 
 #include <gtkmm/gesturedrag.h>
 
+extern "C" {
+typedef struct _GtkTextLayout GtkTextLayout;
+void gtk_text_child_anchor_queue_resize(GtkTextChildAnchor* anchor, GtkTextLayout* layout);
+}
+
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -605,6 +610,9 @@ class TableSheet : public Gtk::Grid {
       }
     }
     relayout();
+    // The body's line for this sheet does not follow a later size. Measure
+    // it again once the sheet has been given its height.
+    signal_size_allocate().connect([this](Gtk::Allocation&) { window_.queue_table_sync(); });
   }
 
   bool contains_focus() const
@@ -1140,6 +1148,55 @@ void MainWindow::relayout_tables()
     if (TableSheet* sheet = sheet_from(iter.get_child_anchor()))
       sheet->relayout();
   }
+}
+
+void MainWindow::queue_table_sync()
+{
+  if (table_sync_.connected())
+    return;
+  table_sync_ = Glib::signal_idle().connect([this] {
+    // Drop it before measuring. A resize in that measure allocates the
+    // sheet again, and that has to be able to ask for another pass.
+    table_sync_.disconnect();
+    sync_table_lines();
+    return false;
+  });
+}
+
+void MainWindow::sync_table_lines()
+{
+  if (!buffer_)
+    return;
+  bool changed = false;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    auto anchor = iter.get_child_anchor();
+    if (!anchor)
+      continue;
+    const std::vector<Gtk::Widget*> widgets = anchor->get_widgets();
+    if (widgets.empty() || widgets.front() == nullptr)
+      continue;
+    Gtk::Widget* widget = widgets.front();
+    auto* layout = static_cast<GtkTextLayout*>(
+        g_object_get_data(G_OBJECT(widget->gobj()), "gtk-text-child-anchor-layout"));
+    if (layout == nullptr)
+      continue;
+    int top = 0;
+    int height = 0;
+    text_.get_line_yrange(iter, top, height);
+    const int want = widget->get_allocated_height();
+    const int gap = want > height ? want - height : height - want;
+    if (want <= 1 || gap <= 1)
+      continue;
+    gtk_text_child_anchor_queue_resize(anchor->gobj(), layout);
+    changed = true;
+  }
+  if (!changed)
+    return;
+  // The text moved down by the table's real height. The page and the gray
+  // between sheets were placed for the short line.
+  grow_page_ = true;
+  queue_page_size();
+  queue_page_status();
 }
 
 void MainWindow::extend_table(TableSheet& sheet)
