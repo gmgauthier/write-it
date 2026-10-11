@@ -1482,12 +1482,63 @@ void markdown()
   CHECK(stuck.paragraphs[1].runs[0].text == "a");
   CHECK(stuck.paragraphs[2].runs[0].text == "B");
   CHECK(stuck.paragraphs[3].runs[0].text == "b");
+
+  // A body cell of hyphens is a cell. The delimiter is only the line under
+  // the header. Later rows stay in the same table.
+  const std::string hyphen = "| Name |\n| --- |\n| --- |\n| later |";
+  const writeit::Document hyphens = writeit::markdown_import(hyphen + "\n", "Sans", 11);
+  CHECK(hyphens.paragraphs.size() == 3);
+  CHECK(hyphens.paragraphs[0].cell.rows == 3);
+  CHECK(hyphens.paragraphs[0].cell.columns == 1);
+  CHECK(hyphens.paragraphs[0].cell.table == hyphens.paragraphs[1].cell.table);
+  CHECK(hyphens.paragraphs[1].cell.table == hyphens.paragraphs[2].cell.table);
+  CHECK(hyphens.paragraphs[0].runs[0].text == "Name");
+  CHECK(hyphens.paragraphs[1].runs[0].text == "---");
+  CHECK(hyphens.paragraphs[2].runs[0].text == "later");
+  CHECK(writeit::markdown_export(hyphens) == hyphen);
+  CHECK(writeit::markdown_import(writeit::markdown_export(hyphens), "Sans", 11) == hyphens);
+
+  const writeit::Document colons =
+      writeit::markdown_import("| H |\n| --- |\n| :--- |\n| ---: |\n| :---: |\n", "Sans", 11);
+  CHECK(colons.paragraphs.size() == 4);
+  CHECK(colons.paragraphs[0].cell.rows == 4);
+  CHECK(colons.paragraphs[1].runs[0].text == ":---");
+  CHECK(colons.paragraphs[2].runs[0].text == "---:");
+  CHECK(colons.paragraphs[3].runs[0].text == ":---:");
+  CHECK(colons.paragraphs[0].cell.table == colons.paragraphs[3].cell.table);
+
+  const writeit::Document twice =
+      writeit::markdown_import("| Name |\n| --- |\n| --- |\n| --- |\n| later |\n", "Sans", 11);
+  CHECK(twice.paragraphs.size() == 4);
+  CHECK(twice.paragraphs[0].cell.rows == 4);
+  CHECK(twice.paragraphs[1].runs[0].text == "---");
+  CHECK(twice.paragraphs[2].runs[0].text == "---");
+  CHECK(twice.paragraphs[3].runs[0].text == "later");
+  CHECK(twice.paragraphs[0].cell.table == twice.paragraphs[3].cell.table);
+
+  const writeit::Document wide = writeit::markdown_import(
+      "| A | B |\n| --- | --- |\n| --- | --- |\n| c | d |\n", "Sans", 11);
+  CHECK(wide.paragraphs.size() == 6);
+  CHECK(wide.paragraphs[0].cell.rows == 3);
+  CHECK(wide.paragraphs[2].runs[0].text == "---");
+  CHECK(wide.paragraphs[3].runs[0].text == "---");
+  CHECK(wide.paragraphs[4].runs[0].text == "c");
+  CHECK(wide.paragraphs[5].runs[0].text == "d");
+  CHECK(wide.paragraphs[0].cell.table == wide.paragraphs[5].cell.table);
+
+  const std::string head = "| --- |\n| --- |\n| body |";
+  const writeit::Document headed_hyphen = writeit::markdown_import(head + "\n", "Sans", 11);
+  CHECK(headed_hyphen.paragraphs.size() == 2);
+  CHECK(headed_hyphen.paragraphs[0].cell.rows == 2);
+  CHECK(headed_hyphen.paragraphs[0].runs[0].text == "---");
+  CHECK(headed_hyphen.paragraphs[1].runs[0].text == "body");
+  CHECK(writeit::markdown_export(headed_hyphen) == head);
 }
 
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 496;
+constexpr int kChecks = 530;
 
 int main()
 {

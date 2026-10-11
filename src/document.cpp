@@ -1430,7 +1430,12 @@ bool append_table(Document& doc, const std::vector<std::string>& lines, size_t& 
   // The delimiter is the next line; table_at already checked it.
   index += 2;
   while (index < lines.size() && grid.size() < static_cast<size_t>(kMaxTableRows)) {
-    if (lines[index].empty() || starts_block(lines, index) || delimiter_row(lines[index]))
+    if (lines[index].empty())
+      break;
+    // The delimiter was the line after the header. A later row of hyphens
+    // is a cell. A new table starts at a header that is not itself hyphens,
+    // with a delimiter on the next line.
+    if (!delimiter_row(lines[index]) && starts_block(lines, index))
       break;
     if (bordered && !starts_with_pipe(lines[index]))
       break;

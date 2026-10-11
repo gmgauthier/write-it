@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### A markdown body row of hyphens is dropped on import
-
-- Severity: data-loss
-- Confidence: high
-- Where: `src/document.cpp` `escape_cell`, `delimiter_cell`, `table_markdown`, `append_table`
-- Trigger: A table cell whose text is three or more hyphens, optionally with a colon at either end (`---`, `:---`, `---:`). Export, then open that Markdown.
-- Outcome: Export writes the cell as ordinary text. `escape_cell` escapes `\` and `|` only, so the line is `| --- |`. Import treats a row whose every cell looks like that as the delimiter and stops the table. A one-column cell of `---` is such a row by itself. That row is no longer a cell. Later rows are read as the next block, a paragraph or another table.
-
 ### Two tables with nothing between them become one
 
 - Severity: data-loss
@@ -101,6 +93,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
 
 ## Closed
+
+### A markdown body row of hyphens is dropped on import
+
+- Fixed in 1.0.2.
+- Severity: data-loss
+- Confidence: high
+- Where: `src/document.cpp` `append_table`
+- Trigger: A table cell whose text is three or more hyphens, optionally with a colon at either end (`---`, `:---`, `---:`). Export, then open that Markdown.
+- Outcome: The delimiter is only the line under the header. A later row of hyphens stays a row of cells, and the rows after it stay in the same table. A header that is not itself hyphens, with a delimiter on the next line, still starts another table.
 
 ### Undo of a deleted picture drops its bytes
 
