@@ -660,6 +660,9 @@ class Reader {
       state_.align = normal.align;
       state_.marks = ListMarks{};
       state_.intbl = false;
+      // \pard drops the character format carried from the paragraph before.
+      // A control word after it can set a format for this paragraph.
+      char_seen_ = false;
       return;
     }
     if (word == "s") {
@@ -1530,7 +1533,8 @@ class Reader {
       return;
     if (paragraph_.runs.empty() && char_seen_)
       paragraph_.mark = char_run();
-    char_seen_ = false;
+    // \par does not reset character formatting, so the next paragraph still
+    // has it. \pard is what clears the carried format.
     paragraph_.indents = clamp_indents(state_.indents);
     paragraph_.align = state_.align;
     paragraph_.style = style_name(state_.style);
@@ -1677,12 +1681,11 @@ class Reader {
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
       return;
     const bool live = from_par || !closed_;
-    // An empty paragraph that gives a character format of its own, as Word
-    // and Write-It write one (\pard\f0\fs40\par), keeps it: an empty 20 pt
-    // line stays 20 pt. One that gives none (\pard\par) has none.
+    // An empty paragraph keeps the character format in force. \par does not
+    // reset it, so \fs40 Big\par\par stays 20 pt, and so does the next empty
+    // paragraph. \pard clears that carried format: \pard\par has none.
     if (paragraph_.runs.empty() && char_seen_ && live)
       paragraph_.mark = char_run();
-    char_seen_ = false;
     paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
     paragraph_.align = live ? state_.align : final_align_;
     paragraph_.style = style_name(live ? state_.style : final_style_);
