@@ -127,6 +127,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_page_size();
   // apply_page_size() once the current layout is done.
   void queue_page_size();
+  // After the window manager reports a frame, shrink so that frame stays
+  // inside the work area. One idle at a time.
+  void schedule_frame_fit();
+  void fit_frame_to_work_area();
   void set_zoom(int zoom);
   // The text view sits on the page inside the pasteboard's scroller, so
   // GTK's own scroll-to-caret has nothing to scroll. These scroll the
@@ -686,6 +690,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The idle that unhighlights the size list's first item; gone with the
   // window.
   sigc::connection size_popup_idle_;
+  // The idle that fits the frame into the work area; gone with the window.
+  sigc::connection frame_fit_idle_;
   // The buffer has stopped tracking PRIMARY for the size box.
   bool primary_lent_ = false;
   double styled_zoom_ = -1;

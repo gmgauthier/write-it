@@ -45,6 +45,14 @@ struct Settings {
 // work area. A side of the area that is 0 (unknown) leaves that side alone.
 void clamp_window(int& width, int& height, int area_width, int area_height);
 
+// Shrink the client so it plus the window-manager frame stays inside the
+// work area. The frame is the decoration outside the client. A zero frame
+// is one the window manager has not reported, and is not guessed. A zero
+// area side is unknown and left alone. The window never grows, and a shrink
+// leaves at least one pixel.
+void fit_window_frame(int& width, int& height, int area_width, int area_height, int frame_width,
+                      int frame_height);
+
 // What the window remembers of itself as it changes: the last size it had
 // while not maximised, and whether it is maximised. A maximised window
 // comes back maximised, and un-maximises to the size it had before.

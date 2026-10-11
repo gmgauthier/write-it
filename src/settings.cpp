@@ -192,6 +192,26 @@ void clamp_window(int& width, int& height, int area_width, int area_height)
     height = std::min(height, area_height);
 }
 
+void fit_window_frame(int& width, int& height, int area_width, int area_height, int frame_width,
+                      int frame_height)
+{
+  if (frame_width < 0)
+    frame_width = 0;
+  if (frame_height < 0)
+    frame_height = 0;
+  // A side with no reported frame stays as clamp_window left it.
+  if (area_width > 0 && frame_width > 0 && width + frame_width > area_width) {
+    width = area_width - frame_width;
+    if (width < 1)
+      width = 1;
+  }
+  if (area_height > 0 && frame_height > 0 && height + frame_height > area_height) {
+    height = area_height - frame_height;
+    if (height < 1)
+      height = 1;
+  }
+}
+
 WindowMemory::WindowMemory(const Settings& settings)
     : width(settings.window_width),
       height(settings.window_height),

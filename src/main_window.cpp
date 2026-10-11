@@ -6,6 +6,7 @@
 #include "config.hpp"
 #include "font_sizes.hpp"
 
+#include <gdk/gdk.h>
 #include <glibmm/miscutils.h>
 
 #include <algorithm>
@@ -175,6 +176,7 @@ MainWindow::~MainWindow()
   page_idle_.disconnect();
   caret_idle_.disconnect();
   page_status_idle_.disconnect();
+  frame_fit_idle_.disconnect();
   list_shifts_idle_.disconnect();
   list_tabs_idle_.disconnect();
   clipboard_owner_.disconnect();
@@ -210,6 +212,15 @@ MainWindow::MainWindow()
   window_memory_.update(width, height, settings_.window_maximized);
   if (settings_.window_maximized)
     maximize();
+  // The frame is outside that client size. Hear when the window manager
+  // names it, and fit once it has. A missing frame is not guessed.
+  add_events(Gdk::PROPERTY_CHANGE_MASK);
+  signal_map().connect([this] { schedule_frame_fit(); });
+  signal_property_notify_event().connect([this](GdkEventProperty* event) {
+    if (event && event->atom == gdk_atom_intern_static_string("_NET_FRAME_EXTENTS"))
+      schedule_frame_fit();
+    return false;
+  });
   signal_size_allocate().connect([this](Gtk::Allocation&) {
     int w = 0;
     int h = 0;
@@ -219,8 +230,12 @@ MainWindow::MainWindow()
   signal_window_state_event().connect(
       [this](GdkEventWindowState* event) {
         // Only the state: the size that comes with it may still be the old one.
-        if (event->changed_mask & GDK_WINDOW_STATE_MAXIMIZED)
-          window_memory_.update(0, 0, (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) != 0);
+        if (event->changed_mask & GDK_WINDOW_STATE_MAXIMIZED) {
+          const bool maximized = (event->new_window_state & GDK_WINDOW_STATE_MAXIMIZED) != 0;
+          window_memory_.update(0, 0, maximized);
+          if (!maximized)
+            schedule_frame_fit();
+        }
         return false;
       },
       false);
@@ -245,6 +260,48 @@ MainWindow::MainWindow()
   apply_chrome();
   apply_page_size();
   text_.grab_focus();
+}
+
+void MainWindow::schedule_frame_fit()
+{
+  if (frame_fit_idle_.connected())
+    return;
+  frame_fit_idle_ = Glib::signal_idle().connect([this] {
+    fit_frame_to_work_area();
+    return false;
+  });
+}
+
+void MainWindow::fit_frame_to_work_area()
+{
+  if (is_maximized())
+    return;
+  auto gdk_window = get_window();
+  if (!gdk_window)
+    return;
+  auto display = gdk_window->get_display();
+  if (!display)
+    return;
+  auto monitor = display->get_monitor_at_window(gdk_window);
+  if (!monitor)
+    return;
+  int width = 0;
+  int height = 0;
+  get_size(width, height);
+  if (width <= 0 || height <= 0)
+    return;
+  Gdk::Rectangle extents;
+  gdk_window->get_frame_extents(extents);
+  const int frame_width = extents.get_width() - width;
+  const int frame_height = extents.get_height() - height;
+  Gdk::Rectangle area;
+  monitor->get_workarea(area);
+  int fitted_width = width;
+  int fitted_height = height;
+  fit_window_frame(fitted_width, fitted_height, area.get_width(), area.get_height(), frame_width,
+                   frame_height);
+  if (fitted_width != width || fitted_height != height)
+    resize(fitted_width, fitted_height);
 }
 
 bool MainWindow::on_delete_event(GdkEventAny* event)

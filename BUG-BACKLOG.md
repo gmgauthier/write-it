@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### The first window can be taller than the work area
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/settings.cpp` `clamp_window`; `src/main_window.cpp` `MainWindow::MainWindow`
-- Trigger: First launch, or a saved size, on a short screen. The plan’s case is 1024×576.
-- Outcome: The client width and height are clamped to the monitor work area, then passed to `set_default_size`. The frame is not subtracted. On a decorated window manager the title bar sits in the work area and the bottom of the window, status bar included, can sit outside it. The plan measured about 58 px on a 1024×576 screen. This review did not remeasure that screen. This machine’s displays are 2560×1440, where 960×700 fits.
-
 ### Typing in a long document misses the 50 ms gate
 
 - Severity: incorrect
@@ -61,6 +53,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
 
 ## Closed
+
+### The first window can be taller than the work area
+
+- Fixed in 1.0.6.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/settings.cpp` `fit_window_frame`; `src/main_window.cpp` `MainWindow::fit_frame_to_work_area`
+- Trigger: First launch, or a saved size, on a short screen. The plan’s case is 1024×576.
+- Outcome: The client is still clamped to the work area first. Once the window manager reports a frame, the client shrinks so the frame stays inside that area. A frame that has not been reported is not guessed. A 960×700 window on a large screen is left as it is.
 
 ### Indents from a file can lay the paragraph off the page
 
