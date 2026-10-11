@@ -1,3 +1,9 @@
+write-it (1.0.5-1) unstable; urgency=medium
+
+  * Indents from a file leave a quarter inch of the text area.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sun, 11 Oct 2026 11:57:40 +0100
+
 write-it (1.0.4-1) unstable; urgency=medium
 
   * An empty paragraph keeps the character format in force across \par.

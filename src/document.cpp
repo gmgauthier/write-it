@@ -456,11 +456,26 @@ bool indents_fit(const Indents& indents)
   return indents.left + indents.first >= 0;
 }
 
-Indents clamp_indents(Indents indents)
+Indents clamp_indents(Indents indents, int text_width)
 {
   indents.left = std::max(0, std::min(kMaxIndent, indents.left));
   indents.right = std::max(0, std::min(kMaxIndent, indents.right));
   indents.first = std::max(-indents.left, std::min(kMaxIndent, indents.first));
+  if (text_width < 0)
+    return indents;
+  // The same quarter inch the Paragraph dialog keeps. A side that is too
+  // wide on its own gives way first, then the right indent, then a first
+  // line. A hanging indent stays within the left one.
+  const int room = std::max(0, text_width - kMinTextTwips);
+  if (indents.left > room)
+    indents.left = room;
+  if (indents.left + indents.right > room)
+    indents.right = std::max(0, room - indents.left);
+  if (indents.first < -indents.left)
+    indents.first = -indents.left;
+  const int used = indents.left + indents.right;
+  if (indents.first > 0 && used + indents.first > room)
+    indents.first = std::max(0, room - used);
   return indents;
 }
 

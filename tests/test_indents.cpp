@@ -143,10 +143,10 @@ void rtf_round_trip()
   writeit::adopt_heading_styles(mixed, "Sans", 11);
   CHECK(import(writeit::rtf_export(mixed)) == mixed);
 
-  // The ceiling round-trips.
+  // The most that still leaves a quarter inch of the text area round-trips.
+  // 22" on both sides does not: the reader keeps that paragraph on the page.
   writeit::Document widest;
-  widest.paragraphs.push_back(
-      para("Wide", writeit::kMaxIndent, writeit::kMaxIndent, -writeit::kMaxIndent));
+  widest.paragraphs.push_back(para("Wide", 9694, 0, -9694));
   CHECK(import(writeit::rtf_export(widest)) == widest);
 }
 
@@ -202,12 +202,37 @@ void rtf_read()
     CHECK(doc.paragraphs.size() == 4);
     CHECK(doc.paragraphs[0].indents == writeit::Indents{});
     CHECK(doc.paragraphs[1].indents == (writeit::Indents{360, 0, -360}));
-    CHECK(doc.paragraphs[2].indents ==
-          (writeit::Indents{writeit::kMaxIndent, writeit::kMaxIndent, writeit::kMaxIndent}));
+    // Each edge is capped at 22", then the pair must leave a quarter inch of
+    // the default text area (10054 - 360). Left, too wide on its own, is
+    // reduced first, and the right and first line give up the rest.
+    CHECK(doc.paragraphs[2].indents == (writeit::Indents{9694, 0, 0}));
     // A digit run too long for an int is still just "too big".
-    CHECK(doc.paragraphs[3].indents == (writeit::Indents{writeit::kMaxIndent, 0, 0}));
+    CHECK(doc.paragraphs[3].indents == (writeit::Indents{9694, 0, 0}));
     CHECK(doc.paragraphs[3].runs.size() == 1);
     CHECK(doc.paragraphs[3].runs[0].text == "d");
+  }
+  // The pair named in the spec, and a narrow sheet, which has less room.
+  {
+    const writeit::Document doc =
+        import(std::string(kHead) + "\\pard\\li31680\\ri31680 both\\par}");
+    const int room = writeit::page_text_twips(writeit::default_page()) - writeit::kMinTextTwips;
+    CHECK(room == 9694);
+    CHECK(doc.paragraphs.size() == 1);
+    CHECK(doc.paragraphs[0].indents == (writeit::Indents{room, 0, 0}));
+    CHECK(doc.paragraphs[0].runs.size() == 1 && doc.paragraphs[0].runs[0].text == "both");
+    CHECK(writeit::clamp_indents(writeit::Indents{99999, 99999, 99999},
+                                 writeit::page_text_twips(writeit::default_page())) ==
+          (writeit::Indents{room, 0, 0}));
+  }
+  {
+    const writeit::Document doc = import(std::string(kHead) +
+                                         "\\paperw2880\\margl360\\margr360"
+                                         "\\pard\\li5000 narrow\\par}");
+    const int room = writeit::page_text_twips(doc.page) - writeit::kMinTextTwips;
+    CHECK(doc.page.paper_width == 2880);
+    CHECK(room == 1800);
+    CHECK(doc.paragraphs[0].indents.left == room);
+    CHECK(doc.paragraphs[0].indents.right == 0);
   }
   // A bare control word with no number is ignored rather than read as zero
   // or as a stray value.
@@ -264,8 +289,8 @@ writeit::Indents indents(int left, int right, int first)
 
 void dialog_validation()
 {
-  using writeit::Units;
   using writeit::indents_fit;
+  using writeit::Units;
   // Boundary: hanging exactly to the margin is fine, one twip past is not.
   CHECK(indents_fit(indents(720, 0, -720)));
   CHECK(!indents_fit(indents(720, 0, -721)));
@@ -300,8 +325,8 @@ void dialog_validation()
 void field_ranges()
 {
   using writeit::check_measure;
-  using writeit::MeasureCheck;
   using writeit::measure_message;
+  using writeit::MeasureCheck;
   using writeit::Units;
   const Units in = Units::Inches;
   const Units cm = Units::Centimetres;
@@ -403,12 +428,13 @@ void room_at_every_zoom()
     int to;
     int most;
   };
-  for (const Case& unit : {Case{Units::Inches, 640, 700, 673}, Case{Units::Centimetres, 1660, 1775, 1709}}) {
+  for (const Case& unit :
+       {Case{Units::Inches, 640, 700, 673}, Case{Units::Centimetres, 1660, 1775, 1709}}) {
     for (int total = unit.from; total <= unit.to; ++total) {
       for (int left : {total / 2, total}) {
         const int right = total - left;
-        const auto c = writeit::check_paragraph(
-            fields(writeit::Indents{}, unit.units, text(left).c_str(), text(right).c_str(), "0", 0));
+        const auto c = writeit::check_paragraph(fields(
+            writeit::Indents{}, unit.units, text(left).c_str(), text(right).c_str(), "0", 0));
         CHECK((c.field == ParaField::None) == (total <= unit.most));
         if (c.field != ParaField::None)
           continue;
@@ -460,8 +486,8 @@ void paragraph_ok()
 
   // OK on an unchanged dialog applies what the paragraph had, twip for twip.
   {
-    const auto c = check_paragraph(fields(Indents{1410, 567, -360}, in, "0.98\"", "0.39\"",
-                                          "0.25\"", 2));
+    const auto c =
+        check_paragraph(fields(Indents{1410, 567, -360}, in, "0.98\"", "0.39\"", "0.25\"", 2));
     CHECK(c.field == ParaField::None && c.message.empty());
     CHECK(c.indents == (Indents{1410, 567, -360}));
   }
@@ -573,13 +599,11 @@ void paragraph_ok()
   // ...but By is at fault only when it (or Special) changed. Bug Basher:
   // Left edited to 4.5" under a 1" first line selected By.
   {
-    const auto c =
-        check_paragraph(fields(Indents{0, 2880, 1440}, in, "4.5", "2\"", "1\"", 1));
+    const auto c = check_paragraph(fields(Indents{0, 2880, 1440}, in, "4.5", "2\"", "1\"", 1));
     CHECK(c.field == ParaField::Left && c.message == first_in);
   }
   {
-    const auto c =
-        check_paragraph(fields(Indents{2880, 0, 1440}, in, "2\"", "4.5", "1\"", 1));
+    const auto c = check_paragraph(fields(Indents{2880, 0, 1440}, in, "2\"", "4.5", "1\"", 1));
     CHECK(c.field == ParaField::Right && c.message == first_in);
   }
   // ...and when Left and Right alone leave too little, they are the fault.
@@ -635,7 +659,7 @@ void paragraph_ok()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 11185;
+constexpr int kChecks = 11196;
 
 int main()
 {

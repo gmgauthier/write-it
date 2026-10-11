@@ -1794,6 +1794,25 @@ class Reader {
     if (page_.landscape && page_.paper_width < page_.paper_height)
       std::swap(page_.paper_width, page_.paper_height);
     doc.page = clamp_page(page_);
+    // Indents from the file have to leave a quarter inch of this page's
+    // text area. The dialog already refuses a pair that does not.
+    const int text = page_text_twips(doc.page);
+    auto fit = [text](Paragraph& paragraph) {
+      paragraph.indents = clamp_indents(paragraph.indents, text);
+      if (paragraph.list.has_own)
+        paragraph.list.own = clamp_indents(paragraph.list.own, text);
+    };
+    for (Paragraph& paragraph : doc.paragraphs)
+      fit(paragraph);
+    for (Paragraph& paragraph : doc.header)
+      fit(paragraph);
+    for (Paragraph& paragraph : doc.footer)
+      fit(paragraph);
+    for (std::vector<Paragraph>& note : doc.notes)
+      for (Paragraph& paragraph : note)
+        fit(paragraph);
+    for (Style& style : doc.styles)
+      style.indents = clamp_indents(style.indents, text);
   }
 
   // One \list from the list table: the kind of each of its nine levels.
