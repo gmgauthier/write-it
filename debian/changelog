@@ -1,3 +1,9 @@
+write-it (1.0.8-1) unstable; urgency=medium
+
+  * Spelling splits on an em dash and folds accented letters.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sun, 11 Oct 2026 12:22:56 +0100
+
 write-it (1.0.7-1) unstable; urgency=medium
 
   * Spelling checks the header, the footer, and the notes.

@@ -315,7 +315,7 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ### M4 — Spell, print, templates
 
-- Spelling… (F7) is a dialog against a local aspell dictionary. It checks the body, including table cells, then the header, the footer, and each note. Squiggles and grammar stay out of 1.0. Options… gains the dictionary name.
+- Spelling… (F7) is a dialog against a local aspell dictionary. It checks the body, including table cells, then the header, the footer, and each note. A word is a run of Unicode letters. An em dash, or any other non-letter, ends it. An apostrophe or an ASCII hyphen stays in the word when a letter follows. Ignore All matches the same letters in any case, so Éclair and éclair are one word. Squiggles and grammar stay out of 1.0. Options… gains the dictionary name.
 - Print… opens the system print dialog. Page is the view that prints.
 - New from Template… picks an RTF starter shipped with the program.
 - Markdown import and export gain lists and GitHub pipe tables. A body cell whose text is only hyphens, with an optional colon at either end, stays a cell. The delimiter row is only the line under the header.

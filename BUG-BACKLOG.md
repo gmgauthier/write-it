@@ -16,14 +16,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
 - Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. That figure was not remeasured on v1.0.0. The script the plan names, `bench.sh`, is not in the tree.
 
-### Spelling treats every non-ASCII byte as a letter
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/spelling.cpp` `letter_byte`, `fold_word`
-- Trigger: A word broken by an em dash or other non-ASCII punctuation, such as `hello—world`. Or Ignore All on `Café`, then the same word as `café`.
-- Outcome: Any byte at or above `0x80` counts as a letter, so the em dash stays inside one token and aspell sees `hello—world`. An apostrophe or ASCII hyphen still joins only when a letter follows. `fold_word` lowercases bytes under 128 only, so Ignore All and the suggestion cache do not treat `Café` and `café` as the same word. A single accented word is still sent to aspell as UTF-8.
-
 ## Test defects
 
 These fail because of the display they run on. The package build of v1.0.0 did not report them as failures. They were not re-run for this review.
@@ -42,9 +34,18 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Confidence: medium
 - Where: `tests/test_window_memory.cpp`, `tests/test_status_bar.cpp`
 - Trigger: Run either suite on a screen whose work area is shorter or narrower than the first-launch window.
-- Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window (`clamp_window`) and those checks fail. The product clamp is the separate item above.
+- Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Spelling treats every non-ASCII byte as a letter
+
+- Fixed in 1.0.8.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/spelling.cpp` `code_at`, `fold_word`
+- Trigger: A word broken by an em dash, such as `hello—world`. Or Ignore All on `Éclair`, then `éclair`.
+- Outcome: A word is a run of Unicode letters, so an em dash splits `hello` and `world`. An apostrophe or an ASCII hyphen still joins when a letter follows. `fold_word` folds every letter, so `Éclair` and `éclair` match. `Café` already matched `café`, because that é was already lowercase.
 
 ### Spelling skips the header, the footer, and the notes
 
