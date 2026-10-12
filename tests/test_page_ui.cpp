@@ -53,6 +53,53 @@ struct MainWindowProbe {
     buffer->place_cursor(buffer->get_iter_at_offset(at));
   }
 
+  static void focus_table_cell(MainWindow& window, int which, int row, int column)
+  {
+    Gtk::TextView* view = window.nth_cell_view(which, row, column);
+    if (!view || !view->get_buffer())
+      return;
+    view->grab_focus();
+    auto buffer = view->get_buffer();
+    buffer->place_cursor(buffer->get_char_count() > 0 ? buffer->end() : buffer->begin());
+  }
+
+  // The Table menu focuses the body without a click in it. The edited cell
+  // stays recorded; only a click or a key in the body drops it.
+  static void focus_body_quietly(MainWindow& window)
+  {
+    window.text_.grab_focus();
+  }
+
+  static int cursor(MainWindow& window)
+  {
+    return window.cursor_offset();
+  }
+
+  static bool cell_focused(MainWindow& window, int which, int row, int column)
+  {
+    Gtk::TextView* view = window.nth_cell_view(which, row, column);
+    return view && view->has_focus();
+  }
+
+  static double scroll_value(MainWindow& window)
+  {
+    auto v = window.paste_.get_vadjustment();
+    return v ? v->get_value() : 0.0;
+  }
+
+  // The user has scrolled to a later page. The wheel does this too: stop
+  // following the body insert, which is still on the first line.
+  static void scroll_to_end(MainWindow& window)
+  {
+    auto v = window.paste_.get_vadjustment();
+    if (!v)
+      return;
+    const double page = v->get_page_size();
+    const double room = std::max(v->get_lower(), v->get_upper() - std::max(0.0, page));
+    v->set_value(room);
+    window.follow_caret_ = false;
+  }
+
   // The line that holds a table is as tall as the sheet, and the paragraph
   // after that line starts below the sheet.
   static bool table_line_holds_sheet(MainWindow& window)
@@ -349,10 +396,37 @@ void drag_view(Gtk::TextView& view, double x, double y, double dx, guint time)
   settle();
 }
 
+std::string cell_text(const writeit::Document& doc, int row, int column)
+{
+  std::string out;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table == 0 || paragraph.cell.row != row || paragraph.cell.column != column)
+      continue;
+    for (const writeit::Run& run : paragraph.runs)
+      out += run.text;
+  }
+  return out;
+}
+
+// Body offset of the first table. A table is one anchor character.
+int table_anchor(const writeit::Document& doc)
+{
+  int offset = 0;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0)
+      return offset;
+    int chars = 0;
+    for (const writeit::Run& run : paragraph.runs)
+      chars += static_cast<int>(Glib::ustring(run.text).length());
+    offset += chars + 1;
+  }
+  return offset;
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 68;
+constexpr int kChecks = 92;
 
 int main(int argc, char* argv[])
 {
@@ -483,6 +557,130 @@ int main(int argc, char* argv[])
       CHECK(writeit::MainWindowProbe::doc(window).paragraphs[0].cell.rows == rows_before);
     } else {
       for (int i = 0; i < 27; ++i)
+        CHECK(false);
+    }
+
+    // The Table menu leaves the cell. Insert and delete still use that cell,
+    // not the first row or the first column.
+    if (insert_row && insert_column && delete_row && delete_column) {
+      writeit::Document grid;
+      writeit::insert_table(grid.paragraphs, 0, 2, 2, writeit::page_text_twips(grid.page));
+      const char* names[] = {"A", "B", "C", "D"};
+      for (int i = 0; i < 4; ++i) {
+        writeit::Run run;
+        run.text = names[i];
+        grid.paragraphs[static_cast<size_t>(i)].runs.push_back(run);
+      }
+      writeit::MainWindowProbe::load(window, grid);
+      settle();
+      auto arm = [&] {
+        writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+        writeit::MainWindowProbe::focus_body_quietly(window);
+        settle();
+      };
+      arm();
+      activate(insert_row);
+      writeit::Document inserted_row = writeit::MainWindowProbe::doc(window);
+      CHECK(inserted_row.paragraphs[0].cell.rows == 3);
+      CHECK(cell_text(inserted_row, 0, 0) == "A" && cell_text(inserted_row, 0, 1) == "B" &&
+            cell_text(inserted_row, 1, 0) == "C" && cell_text(inserted_row, 1, 1) == "D");
+      CHECK(cell_text(inserted_row, 2, 0).empty() && cell_text(inserted_row, 2, 1).empty());
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document row_back = writeit::MainWindowProbe::doc(window);
+      CHECK(row_back.paragraphs[0].cell.rows == 2 && cell_text(row_back, 1, 1) == "D");
+
+      arm();
+      activate(insert_column);
+      writeit::Document inserted_column = writeit::MainWindowProbe::doc(window);
+      CHECK(inserted_column.paragraphs[0].cell.columns == 3);
+      CHECK(cell_text(inserted_column, 0, 0) == "A" && cell_text(inserted_column, 0, 1) == "B" &&
+            cell_text(inserted_column, 0, 2).empty());
+      CHECK(cell_text(inserted_column, 1, 0) == "C" && cell_text(inserted_column, 1, 1) == "D" &&
+            cell_text(inserted_column, 1, 2).empty());
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document column_back = writeit::MainWindowProbe::doc(window);
+      CHECK(column_back.paragraphs[0].cell.columns == 2 && cell_text(column_back, 1, 1) == "D");
+
+      arm();
+      activate(delete_row);
+      writeit::Document deleted_row = writeit::MainWindowProbe::doc(window);
+      CHECK(deleted_row.paragraphs[0].cell.rows == 1);
+      CHECK(cell_text(deleted_row, 0, 0) == "A" && cell_text(deleted_row, 0, 1) == "B");
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document delete_row_back = writeit::MainWindowProbe::doc(window);
+      CHECK(delete_row_back.paragraphs[0].cell.rows == 2 && cell_text(delete_row_back, 1, 1) == "D");
+
+      arm();
+      activate(delete_column);
+      writeit::Document deleted_column = writeit::MainWindowProbe::doc(window);
+      CHECK(deleted_column.paragraphs[0].cell.columns == 1);
+      CHECK(cell_text(deleted_column, 0, 0) == "A" && cell_text(deleted_column, 1, 0) == "C");
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document delete_column_back = writeit::MainWindowProbe::doc(window);
+      CHECK(delete_column_back.paragraphs[0].cell.columns == 2 &&
+            cell_text(delete_column_back, 0, 1) == "B" &&
+            cell_text(delete_column_back, 1, 1) == "D");
+    } else {
+      for (int i = 0; i < 14; ++i)
+        CHECK(false);
+    }
+
+    // A table on a later page. The body insert is still the first line.
+    // Insert and delete must leave the caret and the view on that table.
+    if (insert_row && delete_row) {
+      writeit::Document later;
+      for (int i = 0; i < 120; ++i) {
+        writeit::Paragraph paragraph;
+        writeit::Run run;
+        run.text = "line " + std::to_string(i);
+        paragraph.runs.push_back(run);
+        later.paragraphs.push_back(paragraph);
+      }
+      const size_t at = later.paragraphs.size();
+      writeit::insert_table(later.paragraphs, at, 2, 2, writeit::page_text_twips(later.page));
+      const char* names[] = {"A", "B", "C", "D"};
+      for (int i = 0; i < 4; ++i) {
+        writeit::Run run;
+        run.text = names[i];
+        later.paragraphs[at + static_cast<size_t>(i)].runs.push_back(run);
+      }
+      const int anchor = table_anchor(later);
+      writeit::MainWindowProbe::load(window, later);
+      settle();
+      // Focusing the body scrolls the pasteboard to the top of the page.
+      // The menu does not. Put the view back on the table before the command.
+      auto arm = [&] {
+        writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+        writeit::MainWindowProbe::focus_body_quietly(window);
+        writeit::MainWindowProbe::scroll_to_end(window);
+        settle();
+      };
+      arm();
+      CHECK(writeit::MainWindowProbe::scroll_value(window) > 400.0);
+      activate(insert_row);
+      settle();
+      writeit::Document inserted = writeit::MainWindowProbe::doc(window);
+      CHECK(inserted.paragraphs[at].cell.rows == 3);
+      CHECK(cell_text(inserted, 1, 1) == "D");
+      CHECK(writeit::MainWindowProbe::cursor(window) == anchor);
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 1));
+      CHECK(writeit::MainWindowProbe::scroll_value(window) > 400.0);
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      CHECK(writeit::MainWindowProbe::cursor(window) == anchor);
+      arm();
+      activate(delete_row);
+      settle();
+      writeit::Document deleted = writeit::MainWindowProbe::doc(window);
+      CHECK(deleted.paragraphs[at].cell.rows == 1);
+      CHECK(writeit::MainWindowProbe::cursor(window) == anchor);
+      CHECK(writeit::MainWindowProbe::scroll_value(window) > 400.0);
+    } else {
+      for (int i = 0; i < 10; ++i)
         CHECK(false);
     }
 

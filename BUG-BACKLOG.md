@@ -2,11 +2,45 @@
 
 Reviewed 2026-10-11 against the v1.0.0 sources (`cc05f40`). The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Font colour, highlight, strikethrough, superscript, sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX import are later majors. They are not listed here.
 
+Reviewed again on 2026-10-12 against the v1.0.12 sources (`aef5e4c`). This pass did not re-run the suite. It read the sources against the specification. The typing-speed item stays open: `tests/README.md` records a 1.0.8 release build that met the gate, and this pass did not remeasure 1.0.12. `DEVELOPMENT.md` still says the gate is not met.
+
 `meson test` runs the file and document suites (`document`, `rtf-unicode`, `rtf-unicode-fuzz`, `import-clean`, `page`, `lists`, `styles`, `indents`, `alignment`, `spelling`, `open`, `filename`, `settings`, `units`, `font-sizes`, `view`, `page-count`), the window suites (`page-ui`, `justify-ui`, `status-bar`, `page-width`, `page-sheet`, `list-labels`, `list-tabs`, `list-draw`, `caret-scroll`, `window-width`, `window-memory`, `style-direct`, `style-ui`, `style-size-ui`, `font-size-ui`, `paragraph-dialog`, `capture`, `capture-count`, `paste-format`, `clipboard-paste`, `dirty-state`, `fast-typing`, `toolbar-overflow`, `print`, `template`, `undo`, `undo-fuzz`, `heading-paragraphs`, `open-identity`, `window-lifetime`), `smoke-open`, `desktop-file`, and the `guard-*` checks. The three `guard-*-fails` targets are expected to fail. The package build of this tag reported 50 passed, 3 expected failures, and 0 failures. This review did not re-run the suite. It read the 1.0 sources against the specification.
 
 Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file.
 
 ## Open
+
+### Insert → Picture in a cell lands in the first cell
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::on_picture`, `chars_before`; `src/editor.cpp` `MainWindow::cursor_offset`
+- Trigger: Put the caret in a table cell, not at the start of the top-left cell, and choose Insert → Picture….
+- Outcome: The file dialog still has the keyboard when the caret is read, so the focused cell is not used. The body caret stays on the table anchor, and that anchor is the table’s first paragraph at offset 0. The picture is inserted at the start of the top-left cell. The caret is then placed one character past the anchor, so the keyboard leaves the table. Insert → Footnote already reads the cell caret. Picture does not.
+
+### Insert → Page Break in a cell marks the wrong paragraph and jumps to the top-left cell
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::on_page_break`, `MainWindow::focus_table_caret`
+- Trigger: Put the caret in a table cell and choose Insert → Page Break. The specification puts `\page` on the paragraph after the caret, or on the caret’s own paragraph when the caret is at its start.
+- Outcome: The offset inside the paragraph comes from the body caret, which stays on the table anchor, so it counts as the start of a paragraph. The paragraph is the focused cell when that cell has the keyboard, and the table’s first paragraph when it does not. The break is written there. The caret is then placed on the anchor, and the keyboard moves to the top-left cell.
+
+### Edit → Paste and the paste button insert into the body while a cell is edited
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` the Paste menu item and the paste button
+- Trigger: Put the caret in a table cell and paste with Edit → Paste or the toolbar paste button. Ctrl+V in the cell is the cell’s own binding and is left alone.
+- Outcome: Those commands paste into the body buffer. The body caret is the table anchor, so the text lands at the table, and the cell is unchanged. Cut, Copy, and Delete on the Edit menu follow the body selection, so a selection that exists only inside the cell leaves them insensitive.
+
+### A footnote number slips off its note once the note takes more than one line
+
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::refresh_stories`; `src/main_window.cpp` `notes_view_`
+- Trigger: Insert two footnotes. In the first, type enough that the line wraps, or press Enter once so the note has two paragraphs. A blank line still splits notes, as specified.
+- Outcome: The numbers are one line each, with one blank line between them. The note text wraps, and a note’s own paragraphs are further lines. The next number stays beside the first note’s following line, not beside the next note.
 
 ### Typing in a long document misses the 50 ms gate
 
@@ -37,6 +71,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Table → Insert Row, Insert Column, Delete Row, and Delete Column change the first row or column
+
+- Fixed in 1.0.13.
+- Severity: data-loss
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::change_table_at_caret`
+- Trigger: Put the caret in a cell that is not in the first row, or not in the first column, and choose one of those four. The specification adds or removes the caret’s row or column. Opening the Table menu leaves the cell; the cell that was edited stays in `cell_edit_`, which Table → Table Width… already uses.
+- Outcome: Insert Row adds a row after the caret’s row. Insert Column adds a column after the caret’s column. Delete Row removes the caret’s row. Delete Column removes the caret’s column. The keyboard returns to that cell when it is still there. A table that is not at the start of the document keeps the caret and the view; they do not jump to the first line.
 
 ### A picture is a gray rectangle
 
