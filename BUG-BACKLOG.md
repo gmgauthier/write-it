@@ -38,6 +38,24 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ## Closed
 
+### A picture is a gray rectangle
+
+- Fixed in 1.0.12.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `pixbuf_from_bytes`; `src/styles.cpp` `MainWindow::retag_paragraphs`
+- Trigger: Insert → Picture… of a PNG or a JPEG, including into a document that was just opened, or open a file that already has one.
+- Outcome: The picture is drawn from its full bytes, including when the document has no table and no earlier picture. A picture wider than 480 px is scaled down, and the file keeps the original bytes. The 48×24 gray rectangle is only the stand-in when those bytes are not a picture.
+
+### Insert → Footnote drops a full-size digit and types into an off-screen note
+
+- Fixed in 1.0.12.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::format_tag_on`, `MainWindow::place_notes`; `src/page_ui.cpp` `MainWindow::on_footnote`
+- Trigger: Insert → Footnote in the body, or in a table cell, including a document that is already more than one page.
+- Outcome: The marker is a raised number, in the cell when the caret is in a cell. The notes sit at the foot of the sheet that holds the first marker, with the note numbers beside the text, and the keyboard moves there. Draft hides the notes. The file still writes the marker inside `\super`.
+
 ### Text after a table is laid out inside the table
 
 - Fixed in 1.0.11.

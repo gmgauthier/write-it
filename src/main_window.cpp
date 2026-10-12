@@ -677,11 +677,39 @@ void MainWindow::build_page()
   };
   prepare_story(header_view_);
   prepare_story(notes_view_);
+  notes_view_.set_no_show_all(false);
   prepare_story(footer_view_);
+  note_label_.set_margin_right(6);
+  note_label_.set_valign(Gtk::ALIGN_START);
+  note_box_.pack_start(note_label_, Gtk::PACK_SHRINK);
+  note_box_.pack_start(notes_view_, Gtk::PACK_EXPAND_WIDGET);
+  note_box_.set_halign(Gtk::ALIGN_START);
+  note_box_.set_valign(Gtk::ALIGN_START);
+  note_box_.set_no_show_all(true);
+  note_box_.hide();
   // The body is the only text view until a header, footer, or footnote is
-  // shown. Tests that take the first text view find this one.
+  // shown. Tests that take the first text view find this one. The overlay's
+  // main child is the page column, so that search still reaches the body
+  // before a note.
   page_box_.pack_start(text_, Gtk::PACK_EXPAND_WIDGET);
-  page_.add(page_box_);
+  page_overlay_.add(page_box_);
+  page_overlay_.add_overlay(note_box_);
+  // gtkmm's signal proxy does not deliver this out-rectangle. The C signal
+  // does: the note's place is that allocation, not a margin.
+  g_signal_connect(page_overlay_.gobj(), "get-child-position",
+                   G_CALLBACK(+[](GtkOverlay*, GtkWidget* widget, GdkRectangle* allocation,
+                                  gpointer data) -> gboolean {
+                     auto* window = static_cast<MainWindow*>(data);
+                     if (widget != GTK_WIDGET(window->note_box_.gobj()) || allocation == nullptr)
+                       return FALSE;
+                     allocation->x = window->note_x_;
+                     allocation->y = window->note_y_;
+                     allocation->width = std::max(1, window->note_w_);
+                     allocation->height = std::max(1, window->note_h_);
+                     return TRUE;
+                   }),
+                   this);
+  page_.add(page_overlay_);
   header_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&header_); });
   footer_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&footer_); });
   notes_view_.get_buffer()->signal_end_user_action().connect([this] { on_notes_end(); });
@@ -689,6 +717,18 @@ void MainWindow::build_page()
   footer_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   notes_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   text_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
+  text_.signal_button_press_event().connect(
+      [this](GdkEventButton*) {
+        reveal_note_ = 0;
+        return false;
+      },
+      false);
+  text_.signal_key_press_event().connect(
+      [this](GdkEventKey*) {
+        reveal_note_ = 0;
+        return false;
+      },
+      false);
   page_.signal_size_allocate().connect([this](Gtk::Allocation&) { ruler_.queue_draw(); });
 
   board_.get_style_context()->add_class("pasteboard");
@@ -888,6 +928,11 @@ void MainWindow::release_view()
 
 void MainWindow::scroll_to_caret()
 {
+  if (reveal_note_ > 0) {
+    if (!hold_scroll_)
+      reveal_note_view();
+    return;
+  }
   if (hold_scroll_ || !follow_caret_ || !buffer_ || !text_.get_realized())
     return;
   Gdk::Rectangle rect;
@@ -1064,7 +1109,7 @@ int MainWindow::page_height() const
   int nat_h = 0;
   text_.get_preferred_height_for_width(std::max(1, width - (g.chrome ? 2 : 0)), min_h, nat_h);
   int extra = 0;
-  for (const Gtk::TextView* story : {&header_view_, &notes_view_, &footer_view_}) {
+  for (const Gtk::TextView* story : {&header_view_, &footer_view_}) {
     if (!story->get_visible() || story->get_parent() == nullptr)
       continue;
     int story_min = 0;

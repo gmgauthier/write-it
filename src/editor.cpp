@@ -1989,6 +1989,12 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag_on(const Glib::RefPtr<Gtk::Tex
     tag->property_weight() = key.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL;
     tag->property_style() = key.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL;
     tag->property_underline() = key.underline ? Pango::UNDERLINE_SINGLE : Pango::UNDERLINE_NONE;
+    // A footnote marker is a raised number, the same mark the file writes
+    // with \super. The reader does not keep superscript on its own.
+    if (key.note != 0) {
+      tag->property_scale() = 0.65;
+      tag->property_rise() = static_cast<int>(key.size * zoom_factor() * 0.45 * Pango::SCALE);
+    }
     table->add(tag);
     if (buffer == buffer_)
       raise_headings();
@@ -4255,6 +4261,103 @@ void MainWindow::raise_seams()
     tag->set_priority(table->get_size() - 1);
 }
 
+void MainWindow::place_notes()
+{
+  if (notes_.empty() || view_ != ViewMode::Page || !buffer_) {
+    note_box_.hide();
+    return;
+  }
+  const ViewGeometry sheet = geometry();
+  const int width =
+      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  int asked_w = 0;
+  int asked_h = 0;
+  note_box_.get_size_request(asked_w, asked_h);
+  if (asked_w != width)
+    note_box_.set_size_request(width, -1);
+  const int note_h = note_block_px();
+  int buffer_y = -1;
+  int marker_y = -1;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    Run run;
+    bool marked = false;
+    for (const auto& tag : iter.get_tags()) {
+      if (parse_fmt(tag_name(tag), run) && run.note != 0) {
+        marked = true;
+        break;
+      }
+    }
+    if (!marked)
+      continue;
+    int top = 0;
+    int height = 0;
+    text_.get_line_yrange(iter, top, height);
+    marker_y = top;
+    break;
+  }
+  if (marker_y >= 0) {
+    auto iter = buffer_->begin();
+    while (!iter.is_end()) {
+      const int seam = seam_at(iter);
+      if (seam > 0) {
+        int top = 0;
+        int height = 0;
+        text_.get_line_yrange(iter, top, height);
+        if (top > marker_y) {
+          const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
+          buffer_y = top + seam - chrome - note_h;
+          break;
+        }
+      }
+      bool more = false;
+      while (!iter.is_end()) {
+        if (iter.get_char() == '\n') {
+          iter.forward_char();
+          more = !iter.is_end();
+          break;
+        }
+        iter.forward_char();
+      }
+      if (!more)
+        break;
+    }
+  }
+  const int left = sheet.margin_left;
+  int top_px = 0;
+  if (buffer_y >= 0) {
+    int wx = 0;
+    int wy = 0;
+    text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, buffer_y, wx, wy);
+    int ox = 0;
+    int oy = 0;
+    if (text_.translate_coordinates(page_overlay_, wx, wy, ox, oy))
+      top_px = oy;
+  } else {
+    int ox = 0;
+    int oy = 0;
+    const int foot = std::max(0, text_.get_allocated_height() - sheet.margin_bottom - note_h);
+    if (text_.translate_coordinates(page_overlay_, 0, foot, ox, oy))
+      top_px = oy;
+  }
+  if (top_px < 0)
+    top_px = 0;
+  // GtkOverlay puts a child's margin outside a window it has already sized to
+  // the child. A margin taller than the note collapses that window, so the
+  // position is the overlay's get-child-position allocation instead.
+  const bool moved = note_x_ != left || note_y_ != top_px || note_w_ != width || note_h_ != note_h;
+  note_x_ = left;
+  note_y_ = top_px;
+  note_w_ = width;
+  note_h_ = std::max(1, note_h);
+  // no_show_all keeps the window's show_all off an empty note. show_all on
+  // this box itself then returns without showing it, so show the pieces.
+  note_label_.show();
+  notes_view_.show();
+  note_box_.show();
+  if (moved)
+    page_overlay_.queue_resize();
+}
+
 void MainWindow::update_page_seams()
 {
   if (seaming_ || !buffer_)
@@ -4332,22 +4435,72 @@ void MainWindow::update_page_seams()
   const ViewGeometry sheet = geometry();
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
   const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
-  int y = 0;
-  int page_end = per;
-  std::vector<int> want(blocks.size(), 0);
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    const int text_h = blocks[i].text_h;
-    const int box = blocks[i].natural + text_h;
-    while (y >= page_end)
-      page_end += per;
-    // A paragraph that does not fit in the room left on this sheet starts
-    // the next one. One taller than a sheet stays put and crosses the edge.
-    if (y > 0 && y + box > page_end && text_h <= per) {
-      want[i] = std::max(0, page_end - y) + chrome;
-      y = page_end + text_h;
-      page_end += per;
-    } else {
-      y += box;
+  const int reserve_px = note_block_px();
+  auto has_note = [&](int start, int end) {
+    const int from = std::max(0, start);
+    const int to = std::max(from, std::min(end, count));
+    for (int at = from; at < to; ++at) {
+      Run run;
+      for (const auto& tag : buffer_->get_iter_at_offset(at).get_tags()) {
+        if (parse_fmt(tag_name(tag), run) && run.note != 0)
+          return true;
+      }
+    }
+    return false;
+  };
+  // Pages break as they always have when nothing is reserved. A sheet that
+  // holds the first footnote gives that band back to the note at its foot.
+  auto place = [&](int reserve_page, std::vector<int>& page_of) {
+    page_of.assign(blocks.size(), 0);
+    std::vector<int> placed(blocks.size(), 0);
+    int y = 0;
+    int page = 0;
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const int text_h = blocks[i].text_h;
+      const int box = blocks[i].natural + text_h;
+      while (y >= (page + 1) * per)
+        ++page;
+      page_of[i] = page;
+      const int cut = page == reserve_page ? reserve_px : 0;
+      const int limit = (page + 1) * per - cut;
+      const int room = std::max(1, per - cut);
+      const int page_edge = (page + 1) * per;
+      // A paragraph that does not fit in the room left on this sheet starts
+      // the next one. One taller than a sheet stays put and crosses the edge.
+      if (y > 0 && y + box > limit && text_h <= room) {
+        placed[i] = std::max(0, page_edge - y) + chrome;
+        y = page_edge + text_h;
+        ++page;
+      } else {
+        y += box;
+      }
+    }
+    return placed;
+  };
+  std::vector<int> page_of;
+  std::vector<int> want = place(-1, page_of);
+  if (reserve_px > 0) {
+    int home = -1;
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      if (!has_note(blocks[i].start, blocks[i].end))
+        continue;
+      home = page_of[i];
+      break;
+    }
+    if (home >= 0) {
+      std::vector<int> again;
+      const std::vector<int> reserved = place(home, again);
+      // Keep the break when the marker stays on that sheet. A block that the
+      // note itself pushes down is the next sheet, and the note stays put.
+      bool stayed = false;
+      for (size_t i = 0; i < blocks.size(); ++i) {
+        if (has_note(blocks[i].start, blocks[i].end) && again[i] == home) {
+          stayed = true;
+          break;
+        }
+      }
+      if (stayed)
+        want = reserved;
     }
   }
   // The empty last paragraph has no character a tag can sit on. Leaving it
@@ -4394,6 +4547,7 @@ void MainWindow::update_page_seams()
     grow_page_ = true;
     queue_page_size();
   }
+  place_notes();
 }
 
 void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)

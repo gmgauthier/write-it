@@ -89,6 +89,102 @@ struct MainWindowProbe {
     }
     return false;
   }
+
+  static bool marker_raised(MainWindow& window)
+  {
+    if (!window.buffer_)
+      return false;
+    for (auto iter = window.buffer_->begin(); !iter.is_end(); ++iter) {
+      for (const auto& tag : iter.get_tags()) {
+        if (tag->property_rise().get_value() > 0)
+          return true;
+      }
+    }
+    return false;
+  }
+
+  static bool notes_focused(MainWindow& window)
+  {
+    return window.notes_view_.has_focus();
+  }
+
+  static bool note_label_is(MainWindow& window, const char* text)
+  {
+    return window.note_label_.get_text() == text;
+  }
+
+  // The note column is on the first sheet: below the marker, and in the
+  // lower part of that sheet rather than under the line or past the page.
+  static bool note_on_first_sheet(MainWindow& window)
+  {
+    if (!window.note_box_.get_visible() || !window.buffer_)
+      return false;
+    const int note_h = window.note_box_.get_allocated_height();
+    const int sheet = window.page_.get_allocated_height();
+    if (note_h <= 1 || sheet <= 1)
+      return false;
+    int marker_y = -1;
+    for (auto iter = window.buffer_->begin(); !iter.is_end(); ++iter) {
+      bool raised = false;
+      for (const auto& tag : iter.get_tags()) {
+        if (tag->property_rise().get_value() > 0)
+          raised = true;
+      }
+      if (!raised)
+        continue;
+      Gdk::Rectangle loc;
+      window.text_.get_iter_location(iter, loc);
+      int wx = 0;
+      int wy = 0;
+      window.text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, loc.get_x(), loc.get_y(), wx,
+                                            wy);
+      int px = 0;
+      if (!window.text_.translate_coordinates(window.page_, wx, wy, px, marker_y))
+        return false;
+      break;
+    }
+    if (marker_y < 0)
+      return false;
+    // GtkOverlay keeps the child's allocation at 0,0 and moves a GdkWindow.
+    // The window origin is where the note is actually drawn.
+    auto note_win = window.note_box_.get_window();
+    auto page_win = window.page_.get_window();
+    if (!note_win || !page_win)
+      return false;
+    int note_root_x = 0;
+    int note_root_y = 0;
+    int page_root_x = 0;
+    int page_root_y = 0;
+    note_win->get_origin(note_root_x, note_root_y);
+    page_win->get_origin(page_root_x, page_root_y);
+    const int ny = note_root_y - page_root_y;
+    const int bottom = ny + std::max(note_h, note_win->get_height());
+    return ny > marker_y && ny > sheet * 3 / 5 && bottom <= sheet;
+  }
+
+  static bool first_pixbuf(MainWindow& window, int& width, int& height)
+  {
+    width = 0;
+    height = 0;
+    if (!window.buffer_)
+      return false;
+    for (auto iter = window.buffer_->begin(); !iter.is_end(); ++iter) {
+      auto pix = iter.get_pixbuf();
+      if (!pix)
+        continue;
+      width = pix->get_width();
+      height = pix->get_height();
+      return true;
+    }
+    return false;
+  }
+
+  // The same step Insert → Picture takes after the file is read. The menu
+  // itself opens a dialog, which this suite does not run.
+  static void commit(MainWindow& window, const Document& before, const Document& after, int caret)
+  {
+    window.commit_document(before, after, caret);
+  }
 };
 
 }  // namespace writeit
@@ -256,7 +352,7 @@ void drag_view(Gtk::TextView& view, double x, double y, double dx, guint time)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 55;
+constexpr int kChecks = 68;
 
 int main(int argc, char* argv[])
 {
@@ -360,6 +456,10 @@ int main(int argc, char* argv[])
           marker = true;
       }
       CHECK(noted.notes.size() == 1 && marker);
+      CHECK(writeit::MainWindowProbe::marker_raised(window));
+      CHECK(writeit::MainWindowProbe::notes_focused(window));
+      CHECK(writeit::MainWindowProbe::note_on_first_sheet(window));
+      CHECK(writeit::MainWindowProbe::note_label_is(window, "1"));
       writeit::MainWindowProbe::undo(window);
       settle();
       CHECK(writeit::MainWindowProbe::doc(window).notes.empty());
@@ -382,7 +482,7 @@ int main(int argc, char* argv[])
       settle();
       CHECK(writeit::MainWindowProbe::doc(window).paragraphs[0].cell.rows == rows_before);
     } else {
-      for (int i = 0; i < 23; ++i)
+      for (int i = 0; i < 27; ++i)
         CHECK(false);
     }
 
@@ -534,6 +634,127 @@ int main(int argc, char* argv[])
     CHECK(narrower);
     CHECK(pair_kept);
     CHECK(alloc_after > 0 && alloc_after < alloc_before);
+
+    Gtk::TextView* noted_cell = nullptr;
+    if (body) {
+      for (Gtk::Widget* child : body->get_children()) {
+        walk(*child, [&](Gtk::Widget& widget) {
+          auto* view = dynamic_cast<Gtk::TextView*>(&widget);
+          if (!view || view == body || noted_cell)
+            return;
+          if (view->get_buffer()->get_text().raw().compare(0, 15, "asdfasfdsafddsf") == 0)
+            noted_cell = view;
+        });
+      }
+    }
+    if (noted_cell)
+      click_view(*noted_cell, 4, 4, 6000);
+    activate(footnote);
+    bool cell_marker = false;
+    const writeit::Document cell_note = writeit::MainWindowProbe::doc(window);
+    for (const writeit::Paragraph& paragraph : cell_note.paragraphs) {
+      if (paragraph.cell.table == 0)
+        continue;
+      for (const writeit::Run& run : paragraph.runs) {
+        if (run.note == 1 && run.text == "1")
+          cell_marker = true;
+      }
+    }
+    CHECK(cell_note.notes.size() == 1 && cell_marker);
+    writeit::MainWindowProbe::undo(window);
+    settle();
+
+    // 1×1 red PNG. The header length is zero bytes, which the old string
+    // loader stopped on and replaced with the 48×24 stand-in.
+    const unsigned char png[] = {
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    writeit::Document picture_doc;
+    writeit::Paragraph paragraph;
+    writeit::Run run;
+    writeit::Image image;
+    image.type = "png";
+    image.data.assign(reinterpret_cast<const char*>(png), sizeof png);
+    run.image = std::move(image);
+    paragraph.runs.push_back(std::move(run));
+    picture_doc.paragraphs.push_back(std::move(paragraph));
+    writeit::MainWindowProbe::load(window, picture_doc);
+    settle();
+    int picture_w = 0;
+    int picture_h = 0;
+    CHECK(writeit::MainWindowProbe::first_pixbuf(window, picture_w, picture_h));
+    CHECK(picture_w == 1 && picture_h == 1);
+
+    // Insert into a document that has just been opened, and into one that
+    // has text but no table. Retagging sees no change in the text and used
+    // to leave the buffer without the picture.
+    const std::string png_bytes(reinterpret_cast<const char*>(png), sizeof png);
+    auto with_picture = [&](writeit::Document doc) {
+      if (doc.paragraphs.empty())
+        doc.paragraphs.emplace_back();
+      writeit::Run image_run;
+      writeit::Image stored;
+      stored.type = "png";
+      stored.data = png_bytes;
+      image_run.image = std::move(stored);
+      doc.paragraphs.back().runs.push_back(std::move(image_run));
+      return doc;
+    };
+    auto kept_bytes = [&](const writeit::Document& doc) {
+      for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+        for (const writeit::Run& run : paragraph.runs) {
+          if (run.image && run.image->data == png_bytes)
+            return true;
+        }
+      }
+      return false;
+    };
+
+    writeit::MainWindowProbe::load(window, writeit::blank_document("Sans", 11));
+    settle();
+    {
+      writeit::Document before = writeit::MainWindowProbe::doc(window);
+      writeit::Document after = with_picture(before);
+      writeit::MainWindowProbe::commit(window, before, after, 1);
+    }
+    settle();
+    int fresh_w = 0;
+    int fresh_h = 0;
+    CHECK(writeit::MainWindowProbe::first_pixbuf(window, fresh_w, fresh_h));
+    CHECK(fresh_w == 1 && fresh_h == 1);
+    CHECK(kept_bytes(writeit::MainWindowProbe::doc(window)));
+
+    writeit::Document hello = writeit::blank_document("Sans", 11);
+    writeit::Run hello_run;
+    hello_run.text = "Hello";
+    hello_run.font = "Sans";
+    hello_run.size = 11;
+    hello.paragraphs[0].runs.push_back(std::move(hello_run));
+    writeit::MainWindowProbe::load(window, hello);
+    settle();
+    const int hello_at = body ? body->get_buffer()->get_char_count() : 0;
+    {
+      writeit::Document before = writeit::MainWindowProbe::doc(window);
+      writeit::Document after = with_picture(before);
+      writeit::MainWindowProbe::commit(window, before, after, hello_at + 1);
+    }
+    settle();
+    int typed_w = 0;
+    int typed_h = 0;
+    CHECK(writeit::MainWindowProbe::first_pixbuf(window, typed_w, typed_h));
+    CHECK(typed_w == 1 && typed_h == 1);
+    const writeit::Document typed = writeit::MainWindowProbe::doc(window);
+    bool kept_hello = false;
+    if (!typed.paragraphs.empty()) {
+      for (const writeit::Run& run : typed.paragraphs[0].runs) {
+        if (run.text == "Hello")
+          kept_hello = true;
+      }
+    }
+    CHECK(kept_hello && kept_bytes(typed));
   }
   return suite_test::done("page-ui", kChecks);
 }

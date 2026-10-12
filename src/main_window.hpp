@@ -361,6 +361,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_document_page(PageSetup page);
   void install_stories(const Document& doc);
   void refresh_stories();
+  // The notes column, at the foot of the sheet that holds the first marker.
+  void place_notes();
+  // Scroll that column into the pasteboard.
+  void reveal_note_view();
+  // The height the body of one sheet gives up to the notes, or 0.
+  int note_block_px() const;
   void on_page_setup();
   // File → Print… and the toolbar button. The system dialog; the page view
   // is what it draws, including when the window is showing Draft.
@@ -459,7 +465,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // that would format the body are swallowed; the story is plain text.
   bool on_story_key(GdkEventKey* event);
   Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image);
-  // commit_document()'s retagging when the text is the same; false if not.
+  // commit_document()'s retagging when the text is the same and no picture
+  // has to be placed. False otherwise.
   bool retag_paragraphs(const Document& before, const Document& after);
   void toggle_list_kind(ListKind kind);
   // Tags the paragraph that starts at `start` with `format`, or holds the
@@ -593,9 +600,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ScrolledWindow paste_;
   Gtk::Box board_{Gtk::ORIENTATION_VERTICAL};
   Gtk::EventBox page_;
+  Gtk::Overlay page_overlay_;
   Gtk::Box page_box_{Gtk::ORIENTATION_VERTICAL};
   Gtk::TextView header_view_;
   PageText text_;
+  // The notes sit on top of the sheet, at its foot, rather than in the
+  // column under the whole body.
+  Gtk::Box note_box_{Gtk::ORIENTATION_HORIZONTAL};
+  Gtk::Label note_label_;
   Gtk::TextView notes_view_;
   Gtk::TextView footer_view_;
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
@@ -850,6 +862,14 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::string header_shown_;
   std::string footer_shown_;
   std::string notes_shown_;
+  // The footnote just inserted. The scroll follows its note until the user
+  // clicks or types in the body. 0 means the scroll follows the caret.
+  int reveal_note_ = 0;
+  // The notes' place on the page overlay, in pixels. See on_note_position().
+  int note_x_ = 0;
+  int note_y_ = 0;
+  int note_w_ = 40;
+  int note_h_ = 1;
   // Enter at the end of a paragraph: the new one takes the next style.
   bool next_style_pending_ = false;
   // apply_align() is under way: the alignment was chosen, so it is direct.
