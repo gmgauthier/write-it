@@ -401,6 +401,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void commit_table_widths(int table_id, const std::vector<int>& widths);
   void on_footnote();
   void on_picture();
+  // Inserts a picture that has already been read. A cell being edited gets it
+  // at that cell's caret. The file dialog has the keyboard by then, so the
+  // body caret is not where the picture goes.
+  void insert_picture(Image image);
   // A table is one child widget in the body, not a paragraph per cell.
   // The newline after that widget, when another paragraph follows, is only
   // a separator: capture() does not make a paragraph out of it.
