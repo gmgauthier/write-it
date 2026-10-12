@@ -18,14 +18,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Trigger: Put the caret in a table cell and choose Insert → Page Break. The specification puts `\page` on the paragraph after the caret, or on the caret’s own paragraph when the caret is at its start.
 - Outcome: The offset inside the paragraph comes from the body caret, which stays on the table anchor, so it counts as the start of a paragraph. The paragraph is the focused cell when that cell has the keyboard, and the table’s first paragraph when it does not. The break is written there. The caret is then placed on the anchor, and the keyboard moves to the top-left cell.
 
-### A footnote number slips off its note once the note takes more than one line
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/page_ui.cpp` `MainWindow::refresh_stories`; `src/main_window.cpp` `notes_view_`
-- Trigger: Insert two footnotes. In the first, type enough that the line wraps, or press Enter once so the note has two paragraphs. A blank line still splits notes, as specified.
-- Outcome: The numbers are one line each, with one blank line between them. The note text wraps, and a note’s own paragraphs are further lines. The next number stays beside the first note’s following line, not beside the next note.
-
 ### Typing in a long document misses the 50 ms gate
 
 - Severity: incorrect
@@ -55,6 +47,24 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### A footnote on a later page sits with the notes on the first page
+
+- Fixed in 1.0.16.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::place_notes`, `MainWindow::update_page_seams`; `src/page_ui.cpp` `MainWindow::on_note_view_end`, `MainWindow::align_note_numbers`
+- Trigger: Insert a footnote on a later sheet than an earlier one. The marker is on page 2 and the note is footnote 3.
+- Outcome: That note sits at the foot of the sheet that holds its marker. Earlier notes stay on their own sheet. The number beside the note is that footnote's number. A blank line still splits notes. Typing in the note keeps the page on the line being typed.
+
+### A footnote number slips off its note once the note takes more than one line
+
+- Fixed in 1.0.16.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::align_note_numbers`, `MainWindow::note_block_px`, `MainWindow::on_notes_end`; `src/styles.cpp` `MainWindow::commit_document`; `src/main_window.cpp` `MainWindow::scroll_to_caret`
+- Trigger: Insert two footnotes. In the first, type enough that the line wraps, or press Enter once so the note has two paragraphs. A blank line still splits notes, as specified. Type the note in a document that already holds a table or a picture.
+- Outcome: Each number sits beside the first line of its note. A note that wraps, or that has another paragraph, keeps the following number with the next note. A blank line still splits notes. Typing in the note keeps the page on the line being typed. A table or a picture already in the document stays where it is.
 
 ### Insert → Picture in a cell lands in the first cell
 

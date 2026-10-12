@@ -310,11 +310,22 @@ void MainWindow::apply_next_style()
 
 void MainWindow::commit_document(const Document& before, const Document& after, int caret)
 {
+  // Typing in a note, the header, or the footer commits on the key. Grabbing
+  // the body then would scroll to its caret and back, and the page would
+  // bounce under the line being typed.
+  Gtk::Widget* const focused = get_focus();
+  auto finish_focus = [&] {
+    if (focused == &header_view_ || focused == &footer_view_ || is_note_view(focused)) {
+      focused->grab_focus();
+      return;
+    }
+    text_.grab_focus();
+    focus_table_caret();
+  };
   if (cell_step_)
     on_cell_end();
   if (before == after) {
-    text_.grab_focus();
-    focus_table_caret();
+    finish_focus();
     return;
   }
   const int insert = caret >= 0 ? caret : buffer_->get_insert()->get_iter().get_offset();
@@ -329,6 +340,11 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   // A child widget is not in the buffer's own history. While a table is
   // involved, the rebuild is one custom step that mounts the grid again.
   const bool table = has_table(before) || has_table(after);
+  // Notes, the header, and the footer are not in the body. A document that
+  // holds a table or a picture used to rebuild the body for a note key. The
+  // rebuild clears the page, and the pasteboard jumps to the top and back.
+  const bool stories_only = before.paragraphs == after.paragraphs &&
+                            before.styles == after.styles && before.page == after.page;
   // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
   // so the rebuild's operations stand for the whole document this once.
   open_step();
@@ -358,8 +374,9 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
     // With the text the same (a style or a style's format changed), only the
     // paragraphs that changed are retagged, so the step records them and not
     // the whole document. Page setup and the stories are not in the buffer.
-    // A table always rebuilds: retagging would leave the anchor without a grid.
-    if (!table && retag_paragraphs(before, after))
+    // A table always rebuilds when the body changed: retagging would leave
+    // the anchor without a grid. A note key leaves the body as it is.
+    if (stories_only || (!table && retag_paragraphs(before, after)))
       install_stories(after);
     else
       replace_buffer(after, insert);
@@ -369,7 +386,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
     buffer_->select_range(buffer_->get_iter_at_offset(at), buffer_->get_iter_at_offset(to));
     restoring_ = false;
   }
-  if (table) {
+  if (table && !stories_only) {
     const Document undo_doc = before;
     const Document redo_doc = after;
     undo_.record_custom(
@@ -420,8 +437,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   sync_format_controls();
   ruler_.queue_draw();
   text_.queue_draw();
-  text_.grab_focus();
-  focus_table_caret();
+  finish_focus();
 }
 
 bool MainWindow::retag_paragraphs(const Document& before, const Document& after)

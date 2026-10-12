@@ -1364,6 +1364,10 @@ Document MainWindow::capture() const
 void MainWindow::replace_buffer(const Document& doc, int offset)
 {
   label_geometry_.clear();
+  // A loaded document measures its notes from scratch. A height held from
+  // the note being typed would pin the new page to the old band.
+  note_editing_ = false;
+  release_note_scroll(false);
   loading_ = true;
   cell_edit_ = CellEdit{};
   cell_typing_on_ = false;
@@ -4192,6 +4196,65 @@ int seam_at(const Gtk::TextIter& iter)
   return pixels;
 }
 
+int note_of(const Gtk::TextIter& iter)
+{
+  Run run;
+  for (const auto& tag : iter.get_tags()) {
+    if (parse_fmt(tag_name(tag), run) && run.note != 0)
+      return run.note;
+  }
+  return 0;
+}
+
+bool view_has_note(Gtk::TextView& view, const std::function<bool(int)>& want)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return false;
+  for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+    const int note = note_of(iter);
+    if (note != 0 && want(note))
+      return true;
+  }
+  return false;
+}
+
+bool widget_has_note(Gtk::Widget& widget, const std::function<bool(int)>& want)
+{
+  if (auto* view = dynamic_cast<Gtk::TextView*>(&widget))
+    return view_has_note(*view, want);
+  auto* container = dynamic_cast<Gtk::Container*>(&widget);
+  if (!container)
+    return false;
+  for (Gtk::Widget* child : container->get_children()) {
+    if (child && widget_has_note(*child, want))
+      return true;
+  }
+  return false;
+}
+
+void collect_widget_notes(Gtk::Widget& widget, const std::function<void(int)>& fn)
+{
+  if (auto* view = dynamic_cast<Gtk::TextView*>(&widget)) {
+    auto buffer = view->get_buffer();
+    if (!buffer)
+      return;
+    for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+      const int note = note_of(iter);
+      if (note != 0)
+        fn(note);
+    }
+    return;
+  }
+  auto* container = dynamic_cast<Gtk::Container*>(&widget);
+  if (!container)
+    return;
+  for (Gtk::Widget* child : container->get_children()) {
+    if (child)
+      collect_widget_notes(*child, fn);
+  }
+}
+
 }  // namespace
 
 int MainWindow::seam_extra_through(int offset) const
@@ -4296,12 +4359,27 @@ void MainWindow::raise_seams()
     tag->set_priority(table->get_size() - 1);
 }
 
+void MainWindow::hide_extra_notes()
+{
+  for (auto& band : note_bands_) {
+    if (band)
+      band->box.hide();
+  }
+}
+
 void MainWindow::place_notes()
 {
   if (notes_.empty() || view_ != ViewMode::Page || !buffer_) {
     note_box_.hide();
+    hide_extra_notes();
     return;
   }
+  // Every marker on one sheet keeps the single column this has always drawn.
+  if (note_groups_.size() > 1) {
+    place_split_notes();
+    return;
+  }
+  hide_extra_notes();
   const ViewGeometry sheet = geometry();
   const int width =
       std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
@@ -4386,11 +4464,199 @@ void MainWindow::place_notes()
   note_h_ = std::max(1, note_h);
   // no_show_all keeps the window's show_all off an empty note. show_all on
   // this box itself then returns without showing it, so show the pieces.
+  note_marks_.show();
   note_label_.show();
+  for (Gtk::Label* label : note_numbers_) {
+    if (label)
+      label->show();
+  }
   notes_view_.show();
   note_box_.show();
   if (moved)
     page_overlay_.queue_resize();
+}
+
+void MainWindow::place_split_notes()
+{
+  const ViewGeometry sheet = geometry();
+  const int width =
+      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  const int left = sheet.margin_left;
+  const int count = static_cast<int>(note_groups_.size());
+  std::vector<int> height(static_cast<size_t>(count), 1);
+  std::vector<int> marker(static_cast<size_t>(count), -1);
+  int pages = 0;
+  for (int i = 0; i < count; ++i) {
+    const NoteGroup& group = note_groups_[static_cast<size_t>(i)];
+    height[static_cast<size_t>(i)] = std::max(1, measure_note_group(group));
+    pages = std::max(pages, group.page + 1);
+    auto want = [&](int note) {
+      return std::find(group.indexes.begin(), group.indexes.end(), note - 1) != group.indexes.end();
+    };
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      if (!want(note_of(iter)))
+        continue;
+      int top = 0;
+      int line_h = 0;
+      text_.get_line_yrange(iter, top, line_h);
+      marker[static_cast<size_t>(i)] = top;
+      break;
+    }
+    if (marker[static_cast<size_t>(i)] >= 0)
+      continue;
+    for (auto iter = buffer_->begin(); marker[static_cast<size_t>(i)] < 0 && !iter.is_end();
+         ++iter) {
+      auto anchor = iter.get_child_anchor();
+      if (!anchor)
+        continue;
+      bool hit = false;
+      for (Gtk::Widget* widget : anchor->get_widgets()) {
+        if (widget && widget_has_note(*widget, want))
+          hit = true;
+      }
+      if (!hit)
+        continue;
+      int top = 0;
+      int line_h = 0;
+      text_.get_line_yrange(iter, top, line_h);
+      marker[static_cast<size_t>(i)] = top;
+    }
+  }
+
+  std::vector<int> stack_top(static_cast<size_t>(std::max(pages, 1)), -1);
+  std::vector<int> used(static_cast<size_t>(std::max(pages, 1)), 0);
+  for (int i = 0; i < count; ++i) {
+    const int page = note_groups_[static_cast<size_t>(i)].page;
+    if (page < 0 || page >= pages)
+      continue;
+    used[static_cast<size_t>(page)] += height[static_cast<size_t>(i)];
+    int& top = stack_top[static_cast<size_t>(page)];
+    const int at = marker[static_cast<size_t>(i)];
+    if (at >= 0 && (top < 0 || at < top))
+      top = at;
+  }
+
+  auto overlay_top = [&](int marker_y, int note_h) {
+    int buffer_y = -1;
+    if (marker_y >= 0) {
+      auto iter = buffer_->begin();
+      while (!iter.is_end()) {
+        const int seam = seam_at(iter);
+        if (seam > 0) {
+          int top = 0;
+          int line_h = 0;
+          text_.get_line_yrange(iter, top, line_h);
+          if (top > marker_y) {
+            const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
+            buffer_y = top + seam - chrome - note_h;
+            break;
+          }
+        }
+        bool more = false;
+        while (!iter.is_end()) {
+          if (iter.get_char() == '\n') {
+            iter.forward_char();
+            more = !iter.is_end();
+            break;
+          }
+          iter.forward_char();
+        }
+        if (!more)
+          break;
+      }
+    }
+    int top_px = 0;
+    if (buffer_y >= 0) {
+      int wx = 0;
+      int wy = 0;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, buffer_y, wx, wy);
+      int ox = 0;
+      int oy = 0;
+      if (text_.translate_coordinates(page_overlay_, wx, wy, ox, oy))
+        top_px = oy;
+    } else {
+      int ox = 0;
+      int oy = 0;
+      const int foot = std::max(0, text_.get_allocated_height() - sheet.margin_bottom - note_h);
+      if (text_.translate_coordinates(page_overlay_, 0, foot, ox, oy))
+        top_px = oy;
+    }
+    return std::max(0, top_px);
+  };
+
+  std::vector<int> next_y(static_cast<size_t>(std::max(pages, 1)), 0);
+  for (int page = 0; page < pages; ++page) {
+    if (used[static_cast<size_t>(page)] <= 0)
+      continue;
+    next_y[static_cast<size_t>(page)] =
+        overlay_top(stack_top[static_cast<size_t>(page)], used[static_cast<size_t>(page)]);
+  }
+
+  bool moved = false;
+  for (int i = 0; i < count; ++i) {
+    const int page = std::max(0, note_groups_[static_cast<size_t>(i)].page);
+    const int y = page < pages ? next_y[static_cast<size_t>(page)] : 0;
+    if (page < pages)
+      next_y[static_cast<size_t>(page)] += height[static_cast<size_t>(i)];
+    const std::string text = note_group_text(note_groups_[static_cast<size_t>(i)]);
+    if (i == 0) {
+      show_note_text(notes_view_, text);
+      int asked_w = 0;
+      int asked_h = 0;
+      note_box_.get_size_request(asked_w, asked_h);
+      if (asked_w != width)
+        note_box_.set_size_request(width, -1);
+      if (note_x_ != left || note_y_ != y || note_w_ != width || note_h_ != height[0])
+        moved = true;
+      note_x_ = left;
+      note_y_ = y;
+      note_w_ = width;
+      note_h_ = height[0];
+      note_marks_.show();
+      note_label_.show();
+      for (Gtk::Label* label : note_numbers_) {
+        if (label)
+          label->show();
+      }
+      notes_view_.show();
+      note_box_.show();
+      continue;
+    }
+    NoteBand& band = ensure_note_band(static_cast<size_t>(i - 1));
+    show_note_text(band.view, text);
+    int asked_w = 0;
+    int asked_h = 0;
+    band.box.get_size_request(asked_w, asked_h);
+    if (asked_w != width)
+      band.box.set_size_request(width, -1);
+    const int band_h = height[static_cast<size_t>(i)];
+    if (band.x != left || band.y != y || band.w != width || band.h != band_h)
+      moved = true;
+    band.x = left;
+    band.y = y;
+    band.w = width;
+    band.h = band_h;
+    band.marks.show();
+    band.label.show();
+    for (Gtk::Label* label : band.numbers) {
+      if (label)
+        label->show();
+    }
+    band.view.show();
+    band.box.show();
+  }
+  for (size_t extra = static_cast<size_t>(std::max(0, count - 1)); extra < note_bands_.size();
+       ++extra) {
+    if (note_bands_[extra])
+      note_bands_[extra]->box.hide();
+  }
+  // Asking the numbers to align, or the overlay to resize, when the band did
+  // not move schedules another seam pass. That pass finds the same band and
+  // asks again, so the page never settles.
+  if (moved) {
+    queue_note_numbers();
+    page_overlay_.queue_resize();
+  }
 }
 
 void MainWindow::update_page_seams()
@@ -4484,8 +4750,9 @@ void MainWindow::update_page_seams()
     return false;
   };
   // Pages break as they always have when nothing is reserved. A sheet that
-  // holds the first footnote gives that band back to the note at its foot.
-  auto place = [&](int reserve_page, std::vector<int>& page_of) {
+  // holds a footnote gives that note's band back at its foot. One sheet
+  // still reserves the whole column for the first marker, as before.
+  auto place = [&](const std::vector<int>& reserve, std::vector<int>& page_of) {
     page_of.assign(blocks.size(), 0);
     std::vector<int> placed(blocks.size(), 0);
     int y = 0;
@@ -4496,7 +4763,9 @@ void MainWindow::update_page_seams()
       while (y >= (page + 1) * per)
         ++page;
       page_of[i] = page;
-      const int cut = page == reserve_page ? reserve_px : 0;
+      const int cut = page >= 0 && static_cast<size_t>(page) < reserve.size()
+                          ? reserve[static_cast<size_t>(page)]
+                          : 0;
       const int limit = (page + 1) * per - cut;
       const int room = std::max(1, per - cut);
       const int page_edge = (page + 1) * per;
@@ -4512,31 +4781,160 @@ void MainWindow::update_page_seams()
     }
     return placed;
   };
-  std::vector<int> page_of;
-  std::vector<int> want = place(-1, page_of);
-  if (reserve_px > 0) {
-    int home = -1;
-    for (size_t i = 0; i < blocks.size(); ++i) {
-      if (!has_note(blocks[i].start, blocks[i].end))
-        continue;
-      home = page_of[i];
-      break;
-    }
-    if (home >= 0) {
-      std::vector<int> again;
-      const std::vector<int> reserved = place(home, again);
-      // Keep the break when the marker stays on that sheet. A block that the
-      // note itself pushes down is the next sheet, and the note stays put.
-      bool stayed = false;
+  // page_of is the sheet the layout had reached. A seam on the block puts
+  // its text on the next sheet, which is the page the marker is drawn on.
+  auto visual_page = [](const std::vector<int>& pages, const std::vector<int>& placed,
+                        size_t block) {
+    int page = pages[block];
+    if (placed[block] > 0)
+      ++page;
+    return page;
+  };
+  auto sheets_for = [&](const std::vector<int>& pages, const std::vector<int>& placed) {
+    std::vector<int> sheet(notes_.size(), -1);
+    std::vector<char> marked(notes_.size(), 0);
+    auto page_at = [&](int offset) {
       for (size_t i = 0; i < blocks.size(); ++i) {
-        if (has_note(blocks[i].start, blocks[i].end) && again[i] == home) {
-          stayed = true;
-          break;
-        }
+        const bool inside = offset >= blocks[i].start &&
+                            (offset < blocks[i].end || blocks[i].start == blocks[i].end);
+        if (inside)
+          return visual_page(pages, placed, i);
       }
-      if (stayed)
-        want = reserved;
+      if (blocks.empty())
+        return 0;
+      return visual_page(pages, placed, blocks.size() - 1);
+    };
+    auto claim = [&](int note, int page) {
+      if (note <= 0 || note > static_cast<int>(sheet.size()))
+        return;
+      int& slot = sheet[static_cast<size_t>(note - 1)];
+      if (slot >= 0)
+        return;
+      slot = page;
+      marked[static_cast<size_t>(note - 1)] = 1;
+    };
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      const int note = note_of(iter);
+      if (note != 0)
+        claim(note, page_at(iter.get_offset()));
     }
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      auto anchor = iter.get_child_anchor();
+      if (!anchor)
+        continue;
+      const int page = page_at(iter.get_offset());
+      for (Gtk::Widget* widget : anchor->get_widgets()) {
+        if (!widget)
+          continue;
+        collect_widget_notes(*widget, [&](int note) { claim(note, page); });
+      }
+    }
+    int carry = -1;
+    for (int& page : sheet) {
+      if (page >= 0)
+        carry = page;
+      else if (carry >= 0)
+        page = carry;
+    }
+    for (int& page : sheet) {
+      if (page < 0)
+        page = 0;
+    }
+    return std::make_pair(sheet, marked);
+  };
+  auto groups_for = [&](const std::vector<int>& sheet) {
+    std::vector<NoteGroup> groups;
+    for (int i = 0; i < static_cast<int>(sheet.size()); ++i) {
+      if (groups.empty() || groups.back().page != sheet[static_cast<size_t>(i)]) {
+        NoteGroup group;
+        group.page = sheet[static_cast<size_t>(i)];
+        groups.push_back(std::move(group));
+      }
+      groups.back().indexes.push_back(i);
+    }
+    return groups;
+  };
+  std::vector<int> page_of;
+  std::vector<int> want = place({}, page_of);
+  const auto first = sheets_for(page_of, want);
+  const std::vector<NoteGroup> found = groups_for(first.first);
+  if (found.size() <= 1) {
+    note_groups_.clear();
+    if (reserve_px > 0) {
+      int home = -1;
+      for (size_t i = 0; i < blocks.size(); ++i) {
+        if (!has_note(blocks[i].start, blocks[i].end))
+          continue;
+        home = page_of[i];
+        break;
+      }
+      if (home >= 0) {
+        std::vector<int> reserve(static_cast<size_t>(home) + 1, 0);
+        reserve[static_cast<size_t>(home)] = reserve_px;
+        std::vector<int> again;
+        const std::vector<int> reserved = place(reserve, again);
+        // Keep the break when the marker stays on that sheet. A block that the
+        // note itself pushes down is the next sheet, and the note stays put.
+        bool stayed = false;
+        for (size_t i = 0; i < blocks.size(); ++i) {
+          if (has_note(blocks[i].start, blocks[i].end) && again[i] == home) {
+            stayed = true;
+            break;
+          }
+        }
+        if (stayed)
+          want = reserved;
+      }
+    }
+  } else {
+    int pages = 1;
+    for (int s : first.first)
+      pages = std::max(pages, s + 1);
+    std::vector<int> reserve(static_cast<size_t>(pages), 0);
+    for (const NoteGroup& group : found) {
+      if (group.page < 0 || group.page >= pages)
+        continue;
+      reserve[static_cast<size_t>(group.page)] += measure_note_group(group);
+    }
+    std::vector<int> again;
+    std::vector<int> reserved = place(reserve, again);
+    auto moved = sheets_for(again, reserved);
+    bool dropped = false;
+    std::vector<char> keep(found.size(), 1);
+    for (size_t g = 0; g < found.size(); ++g) {
+      bool any = false;
+      bool stayed = false;
+      for (int index : found[g].indexes) {
+        if (index < 0 || index >= static_cast<int>(first.second.size()) ||
+            !first.second[static_cast<size_t>(index)])
+          continue;
+        any = true;
+        if (index < static_cast<int>(moved.first.size()) &&
+            moved.first[static_cast<size_t>(index)] == found[g].page)
+          stayed = true;
+      }
+      if (any && !stayed) {
+        keep[g] = 0;
+        dropped = true;
+      }
+    }
+    if (dropped) {
+      std::fill(reserve.begin(), reserve.end(), 0);
+      for (size_t g = 0; g < found.size(); ++g) {
+        if (!keep[g])
+          continue;
+        const int page = found[g].page;
+        if (page < 0 || page >= pages)
+          continue;
+        reserve[static_cast<size_t>(page)] += measure_note_group(found[g]);
+      }
+      reserved = place(reserve, again);
+      moved = sheets_for(again, reserved);
+    }
+    want = reserved;
+    note_groups_ = groups_for(moved.first);
+    if (note_groups_.size() <= 1)
+      note_groups_.clear();
   }
   // The empty last paragraph has no character a tag can sit on. Leaving it
   // unseamed keeps the gap off a range GTK would ignore, which would reapply
