@@ -701,16 +701,30 @@ void MainWindow::build_editor()
   clicked(undo_tool_, [this] { undo(); });
   activate(redo_item_, [this] { redo(); });
   clicked(redo_tool_, [this] { redo(); });
-  activate(cut_item_, [this] { buffer_->cut_clipboard(Gtk::Clipboard::get()); });
+  activate(cut_item_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.cut_clipboard(Gtk::Clipboard::get()); });
+  });
   activate(context_cut_, [this] { buffer_->cut_clipboard(Gtk::Clipboard::get()); });
-  clicked(cut_tool_, [this] { buffer_->cut_clipboard(Gtk::Clipboard::get()); });
-  activate(copy_item_, [this] { buffer_->copy_clipboard(Gtk::Clipboard::get()); });
+  clicked(cut_tool_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.cut_clipboard(Gtk::Clipboard::get()); });
+  });
+  activate(copy_item_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.copy_clipboard(Gtk::Clipboard::get()); });
+  });
   activate(context_copy_, [this] { buffer_->copy_clipboard(Gtk::Clipboard::get()); });
-  clicked(copy_tool_, [this] { buffer_->copy_clipboard(Gtk::Clipboard::get()); });
-  activate(paste_item_, [this] { buffer_->paste_clipboard(Gtk::Clipboard::get()); });
+  clicked(copy_tool_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.copy_clipboard(Gtk::Clipboard::get()); });
+  });
+  activate(paste_item_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.paste_clipboard(Gtk::Clipboard::get()); });
+  });
   activate(context_paste_, [this] { buffer_->paste_clipboard(Gtk::Clipboard::get()); });
-  clicked(paste_tool_, [this] { buffer_->paste_clipboard(Gtk::Clipboard::get()); });
-  activate(delete_item_, [this] { buffer_->erase_selection(true, true); });
+  clicked(paste_tool_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.paste_clipboard(Gtk::Clipboard::get()); });
+  });
+  activate(delete_item_, [this] {
+    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.erase_selection(true, true); });
+  });
   activate(select_all_item_, [this] { buffer_->select_range(buffer_->begin(), buffer_->end()); });
   activate(find_item_, [this] { present_find(false); });
   activate(replace_item_, [this] { present_find(true); });
@@ -1476,6 +1490,20 @@ void MainWindow::update_title()
   set_title(title);
 }
 
+void MainWindow::edit_at_caret(const std::function<void(Gtk::TextBuffer&)>& edit)
+{
+  if (Gtk::TextView* view = editing_cell_view()) {
+    if (auto buffer = view->get_buffer())
+      edit(*buffer.get());
+    // The menu and the toolbar took the keyboard. Put it back in the cell.
+    // Grabbing the body would scroll the pasteboard to the body insert.
+    view->grab_focus();
+    return;
+  }
+  if (buffer_)
+    edit(*buffer_.get());
+}
+
 void MainWindow::update_actions()
 {
   ++actions_depth_;
@@ -1487,7 +1515,14 @@ void MainWindow::update_actions()
     return;
   }
   updating_actions_ = true;
-  const bool selection = buffer_ && buffer_->get_has_selection();
+  // Cut, Copy, and Delete follow the cell while one is being edited. The
+  // context menu is the body's, and a click there has already left the cell.
+  bool selection = buffer_ && buffer_->get_has_selection();
+  const bool body_selection = selection;
+  if (Gtk::TextView* cell = editing_cell_view()) {
+    auto cell_buffer = cell->get_buffer();
+    selection = cell_buffer && cell_buffer->get_has_selection();
+  }
   const bool any_text = buffer_ && buffer_->get_char_count() > 0;
   const bool can_undo = undo_.can_undo();
   const bool can_redo = undo_.can_redo();
@@ -1506,8 +1541,8 @@ void MainWindow::update_actions()
   sens(delete_item_, selection);
   sens(cut_tool_, selection);
   sens(copy_tool_, selection);
-  sens(context_cut_, selection);
-  sens(context_copy_, selection);
+  sens(context_cut_, body_selection);
+  sens(context_copy_, body_selection);
   sens(paste_item_, can_paste);
   sens(paste_tool_, can_paste);
   sens(context_paste_, can_paste);

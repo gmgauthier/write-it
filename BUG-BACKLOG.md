@@ -26,14 +26,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Trigger: Put the caret in a table cell and choose Insert → Page Break. The specification puts `\page` on the paragraph after the caret, or on the caret’s own paragraph when the caret is at its start.
 - Outcome: The offset inside the paragraph comes from the body caret, which stays on the table anchor, so it counts as the start of a paragraph. The paragraph is the focused cell when that cell has the keyboard, and the table’s first paragraph when it does not. The break is written there. The caret is then placed on the anchor, and the keyboard moves to the top-left cell.
 
-### Edit → Paste and the paste button insert into the body while a cell is edited
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/editor.cpp` the Paste menu item and the paste button
-- Trigger: Put the caret in a table cell and paste with Edit → Paste or the toolbar paste button. Ctrl+V in the cell is the cell’s own binding and is left alone.
-- Outcome: Those commands paste into the body buffer. The body caret is the table anchor, so the text lands at the table, and the cell is unchanged. Cut, Copy, and Delete on the Edit menu follow the body selection, so a selection that exists only inside the cell leaves them insensitive.
-
 ### A footnote number slips off its note once the note takes more than one line
 
 - Severity: incorrect
@@ -71,6 +63,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Edit → Paste and the paste button insert into the body while a cell is edited
+
+- Fixed in 1.0.14.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::edit_at_caret`, `MainWindow::update_actions`; `src/page_ui.cpp` `MainWindow::note_cell_marks`
+- Trigger: Put the caret in a table cell and paste with Edit → Paste or the toolbar paste button. Ctrl+V in the cell is the cell’s own binding and is left alone.
+- Outcome: Edit → Paste and the toolbar paste button insert into that cell. The body is unchanged. Cut, Copy, and Delete on the Edit menu and the toolbar follow a selection in the cell, including after the menu has taken the keyboard. The body’s context menu stays on the body.
 
 ### Table → Insert Row, Insert Column, Delete Row, and Delete Column change the first row or column
 

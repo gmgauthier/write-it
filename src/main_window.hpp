@@ -218,6 +218,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   // sets clipboard_text_ and Paste.
   void refresh_clipboard();
   void apply_paste();
+  // The cell being edited, including after a menu or the toolbar has taken
+  // the keyboard. Null when the caret is in the body.
+  Gtk::TextView* editing_cell_view() const;
+  // Cut, copy, paste, and delete from the Edit menu and the toolbar. A cell
+  // being edited is the buffer they change. The body's context menu does not
+  // use this.
+  void edit_at_caret(const std::function<void(Gtk::TextBuffer&)>& edit);
   int cursor_offset() const;
   void update_caret_font();
 
