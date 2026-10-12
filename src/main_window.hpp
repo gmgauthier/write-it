@@ -383,6 +383,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_insert_column();
   void on_delete_row();
   void on_delete_column();
+  // Insert and delete of a row or column. The Table menu takes the keyboard.
+  // The cell that was edited is the one these commands change. The body
+  // insert is moved onto that table so the rebuild does not follow an older
+  // caret back to the start of the document.
+  void change_table_at_caret(bool (*edit)(std::vector<Paragraph>&, size_t));
   void on_table_width();
   // Writes `widths` onto table `table_id` and rebuilds the sheet. The caller
   // must not use a TableSheet after this returns: the rebuild destroys it.

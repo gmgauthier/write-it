@@ -2666,56 +2666,74 @@ void MainWindow::on_insert_table()
   commit_document(before, after, chars_before(after.paragraphs, at));
 }
 
-void MainWindow::on_insert_row()
+void MainWindow::change_table_at_caret(bool (*edit)(std::vector<Paragraph>&, size_t))
 {
-  if (!buffer_)
+  if (!buffer_ || edit == nullptr)
     return;
+  CellEdit saved = cell_edit_;
+  bool restore_cell = false;
+  size_t index = static_cast<size_t>(-1);
+  if (TableSheet* sheet = editing_sheet()) {
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+    if (cell_place(*sheet, row, column, caret, bound)) {
+      const int line = sheet->line_at(row, column, std::min(caret, bound));
+      index = cell_paragraph_index(*sheet, row, column, line);
+      saved.on = true;
+      saved.table = sheet->table_id();
+      saved.row = row;
+      saved.column = column;
+      saved.caret = caret;
+      saved.bound = bound;
+      restore_cell = index != static_cast<size_t>(-1);
+    }
+  }
+  if (index == static_cast<size_t>(-1))
+    index = caret_paragraph();
   Document before = capture();
   Document after = before;
-  if (!insert_table_row(after.paragraphs, caret_paragraph())) {
-    text_.grab_focus();
+  if (index >= after.paragraphs.size() || !edit(after.paragraphs, index) ||
+      after.paragraphs == before.paragraphs) {
+    if (restore_cell)
+      restore_edit_focus();
+    else
+      text_.grab_focus();
     return;
   }
-  commit_document(before, after);
+  // A click in a cell leaves the body insert where it was, often the first
+  // line. The rebuild follows that insert, so the caret and the pasteboard
+  // jump to the start of the document. Park the insert on this table, and
+  // keep the pasteboard where the table already is.
+  const int count = buffer_->get_char_count();
+  const int anchor = std::max(0, std::min(chars_before(before.paragraphs, index), count));
+  hold_view();
+  buffer_->place_cursor(buffer_->get_iter_at_offset(anchor));
+  commit_document(before, after, anchor);
+  if (restore_cell)
+    restore_cell_edit(saved);
+  release_view();
+}
+
+void MainWindow::on_insert_row()
+{
+  change_table_at_caret(insert_table_row);
 }
 
 void MainWindow::on_insert_column()
 {
-  if (!buffer_)
-    return;
-  Document before = capture();
-  Document after = before;
-  if (!insert_table_column(after.paragraphs, caret_paragraph())) {
-    text_.grab_focus();
-    return;
-  }
-  commit_document(before, after);
+  change_table_at_caret(insert_table_column);
 }
 
 void MainWindow::on_delete_row()
 {
-  if (!buffer_)
-    return;
-  Document before = capture();
-  Document after = before;
-  if (!delete_table_row(after.paragraphs, caret_paragraph())) {
-    text_.grab_focus();
-    return;
-  }
-  commit_document(before, after);
+  change_table_at_caret(delete_table_row);
 }
 
 void MainWindow::on_delete_column()
 {
-  if (!buffer_)
-    return;
-  Document before = capture();
-  Document after = before;
-  if (!delete_table_column(after.paragraphs, caret_paragraph())) {
-    text_.grab_focus();
-    return;
-  }
-  commit_document(before, after);
+  change_table_at_caret(delete_table_column);
 }
 
 void MainWindow::commit_table_widths(int table_id, const std::vector<int>& widths)

@@ -1,3 +1,10 @@
+write-it (1.0.13-1) unstable; urgency=medium
+
+  * Insert Row, Insert Column, Delete Row, and Delete Column change the caret's row or column.
+  * Those commands leave the caret and the view on that table.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Mon, 12 Oct 2026 20:36:00 +0100
+
 write-it (1.0.12-1) unstable; urgency=medium
 
   * A picture is drawn from its bytes, including one inserted into a new document.
