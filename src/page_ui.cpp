@@ -3129,6 +3129,13 @@ void MainWindow::on_picture()
     text_.grab_focus();
     return;
   }
+  insert_picture(std::move(image));
+}
+
+void MainWindow::insert_picture(Image image)
+{
+  if (!buffer_)
+    return;
   if (auto pix = pixbuf_from_bytes(image.data)) {
     image.width = goal_twips(pix->get_width());
     image.height = goal_twips(pix->get_height());
@@ -3137,6 +3144,65 @@ void MainWindow::on_picture()
   Document after = before;
   if (after.paragraphs.empty())
     after.paragraphs.emplace_back();
+
+  // The same cell the footnote marker uses. Opening Insert, then the file
+  // dialog, leaves the cell; cell_edit_ is still that cell.
+  if (TableSheet* sheet = editing_sheet()) {
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+    Gtk::TextView* view = nullptr;
+    if (cell_place(*sheet, row, column, caret, bound))
+      view = sheet->view_at(row, column);
+    auto cell_buffer = view ? view->get_buffer() : Glib::RefPtr<Gtk::TextBuffer>{};
+    const int at = std::min(caret, bound);
+    const int line = sheet->line_at(row, column, at);
+    const size_t index =
+        cell_buffer ? cell_paragraph_index(*sheet, row, column, line) : static_cast<size_t>(-1);
+    if (cell_buffer && index < after.paragraphs.size() &&
+        after.paragraphs[index].cell.table == sheet->table_id() &&
+        after.paragraphs[index].cell.row == row && after.paragraphs[index].cell.column == column) {
+      int line_start = 0;
+      int seen = 0;
+      for (auto iter = cell_buffer->begin(); seen < line && !iter.is_end(); ++iter) {
+        if (iter.get_char() != '\n')
+          continue;
+        ++seen;
+        auto next = iter;
+        next.forward_char();
+        line_start = next.get_offset();
+      }
+      int into = at - line_start;
+      if (into < 0)
+        into = 0;
+      const int length = chars_of(after.paragraphs[index]);
+      if (into > length)
+        into = length;
+      Run run;
+      run.image = std::move(image);
+      insert_run(after.paragraphs[index], into, run);
+      // A picture is one character. The keyboard returns just after it.
+      CellEdit saved;
+      saved.on = true;
+      saved.table = sheet->table_id();
+      saved.row = row;
+      saved.column = column;
+      saved.caret = into + 1;
+      saved.bound = into + 1;
+      // The body insert is often still the first line. Park it on this table
+      // so the rebuild does not jump the pasteboard there.
+      const int count = buffer_->get_char_count();
+      const int anchor = std::max(0, std::min(chars_before(before.paragraphs, index), count));
+      hold_view();
+      buffer_->place_cursor(buffer_->get_iter_at_offset(anchor));
+      commit_document(before, after, anchor);
+      restore_cell_edit(saved);
+      release_view();
+      return;
+    }
+  }
+
   size_t index = caret_paragraph();
   if (index >= after.paragraphs.size())
     index = after.paragraphs.size() - 1;

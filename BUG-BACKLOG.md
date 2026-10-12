@@ -10,14 +10,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### Insert → Picture in a cell lands in the first cell
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/page_ui.cpp` `MainWindow::on_picture`, `chars_before`; `src/editor.cpp` `MainWindow::cursor_offset`
-- Trigger: Put the caret in a table cell, not at the start of the top-left cell, and choose Insert → Picture….
-- Outcome: The file dialog still has the keyboard when the caret is read, so the focused cell is not used. The body caret stays on the table anchor, and that anchor is the table’s first paragraph at offset 0. The picture is inserted at the start of the top-left cell. The caret is then placed one character past the anchor, so the keyboard leaves the table. Insert → Footnote already reads the cell caret. Picture does not.
-
 ### Insert → Page Break in a cell marks the wrong paragraph and jumps to the top-left cell
 
 - Severity: incorrect
@@ -63,6 +55,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Insert → Picture in a cell lands in the first cell
+
+- Fixed in 1.0.15.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::insert_picture`
+- Trigger: Put the caret in a table cell, not at the start of the top-left cell, and choose Insert → Picture….
+- Outcome: The picture is inserted at that cell’s caret. The keyboard returns to the cell, just after the picture. A table that is not at the start of the document keeps the caret and the view. Insert → Footnote’s cell caret is unchanged.
 
 ### Edit → Paste and the paste button insert into the body while a cell is edited
 

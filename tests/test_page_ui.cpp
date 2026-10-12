@@ -233,6 +233,35 @@ struct MainWindowProbe {
     window.commit_document(before, after, caret);
   }
 
+  // Insert → Picture after the file is read. The menu opens a dialog, which
+  // this suite does not run.
+  static void insert_picture(MainWindow& window, const std::string& bytes)
+  {
+    Image image;
+    image.type = "png";
+    image.data = bytes;
+    window.insert_picture(std::move(image));
+  }
+
+  static void place_cell_caret(MainWindow& window, int which, int row, int column, int offset)
+  {
+    Gtk::TextView* view = window.nth_cell_view(which, row, column);
+    if (!view || !view->get_buffer())
+      return;
+    auto buffer = view->get_buffer();
+    const int count = buffer->get_char_count();
+    const int at = offset < 0 ? 0 : offset > count ? count : offset;
+    buffer->place_cursor(buffer->get_iter_at_offset(at));
+  }
+
+  static int cell_caret(MainWindow& window, int which, int row, int column)
+  {
+    Gtk::TextView* view = window.nth_cell_view(which, row, column);
+    if (!view || !view->get_buffer())
+      return -1;
+    return view->get_buffer()->get_insert()->get_iter().get_offset();
+  }
+
   static void select_cell(MainWindow& window, int which, int row, int column)
   {
     Gtk::TextView* view = window.nth_cell_view(which, row, column);
@@ -444,6 +473,36 @@ std::string cell_text(const writeit::Document& doc, int row, int column)
   return out;
 }
 
+// Text of one cell, with "\x01" where `bytes` is the picture.
+std::string cell_marks(const writeit::Document& doc, int row, int column, const std::string& bytes)
+{
+  std::string out;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table == 0 || paragraph.cell.row != row || paragraph.cell.column != column)
+      continue;
+    for (const writeit::Run& run : paragraph.runs) {
+      if (run.image && run.image->data == bytes)
+        out.push_back('\x01');
+      else
+        out += run.text;
+    }
+  }
+  return out;
+}
+
+bool body_has_image(const writeit::Document& doc)
+{
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0)
+      continue;
+    for (const writeit::Run& run : paragraph.runs) {
+      if (run.image)
+        return true;
+    }
+  }
+  return false;
+}
+
 // Body paragraphs only, one line each. A paste at the table anchor shows up here.
 std::string body_text(const writeit::Document& doc)
 {
@@ -476,7 +535,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 120;
+constexpr int kChecks = 130;
 
 int main(int argc, char* argv[])
 {
@@ -1187,6 +1246,131 @@ int main(int argc, char* argv[])
       }
     }
     CHECK(kept_hello && kept_bytes(typed));
+
+    // Insert → Picture uses the cell caret. The file dialog has taken the
+    // keyboard, and the body caret is still the first line.
+    writeit::MainWindowProbe::load(window, hello);
+    settle();
+    writeit::MainWindowProbe::caret(window, 5);
+    writeit::MainWindowProbe::insert_picture(window, png_bytes);
+    settle();
+    int body_w = 0;
+    int body_h = 0;
+    CHECK(writeit::MainWindowProbe::first_pixbuf(window, body_w, body_h) && body_w == 1 &&
+          body_h == 1 && writeit::MainWindowProbe::cursor(window) == 6);
+    {
+      const writeit::Document placed = writeit::MainWindowProbe::doc(window);
+      bool hello_then_picture = false;
+      if (!placed.paragraphs.empty() && placed.paragraphs[0].runs.size() >= 2 &&
+          placed.paragraphs[0].runs[0].text == "Hello" && placed.paragraphs[0].runs[1].image &&
+          placed.paragraphs[0].runs[1].image->data == png_bytes)
+        hello_then_picture = true;
+      CHECK(hello_then_picture);
+    }
+
+    writeit::Document grid;
+    writeit::Paragraph before;
+    writeit::Run before_run;
+    before_run.text = "Before";
+    before.runs.push_back(before_run);
+    grid.paragraphs.push_back(before);
+    const size_t grid_at = grid.paragraphs.size();
+    writeit::insert_table(grid.paragraphs, grid_at, 2, 2, writeit::page_text_twips(grid.page));
+    const char* letters[] = {"A", "B", "C", "D"};
+    for (int i = 0; i < 4; ++i) {
+      writeit::Run cell_run;
+      cell_run.text = letters[i];
+      grid.paragraphs[grid_at + static_cast<size_t>(i)].runs.push_back(cell_run);
+    }
+    const int grid_anchor = table_anchor(grid);
+    writeit::MainWindowProbe::load(window, grid);
+    settle();
+    writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+    settle();
+    writeit::MainWindowProbe::focus_body_quietly(window);
+    settle();
+    writeit::MainWindowProbe::insert_picture(window, png_bytes);
+    settle();
+    {
+      const writeit::Document pictured = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_marks(pictured, 0, 0, png_bytes) == "A" &&
+            cell_marks(pictured, 0, 1, png_bytes) == "B" &&
+            cell_marks(pictured, 1, 0, png_bytes) == "C" &&
+            cell_marks(pictured, 1, 1, png_bytes) == "D\x01");
+      CHECK(body_text(pictured) == "Before\n" && !body_has_image(pictured));
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 1) &&
+            writeit::MainWindowProbe::cell_caret(window, 0, 1, 1) == 2 &&
+            writeit::MainWindowProbe::cursor(window) == grid_anchor);
+    }
+    writeit::MainWindowProbe::undo(window);
+    settle();
+    {
+      const writeit::Document undone = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_marks(undone, 1, 1, png_bytes) == "D" && body_text(undone) == "Before\n" &&
+            !body_has_image(undone));
+    }
+
+    grid.paragraphs[grid_at + 1].runs.clear();
+    writeit::Run wide;
+    wide.text = "WXYZ";
+    grid.paragraphs[grid_at + 1].runs.push_back(wide);
+    writeit::MainWindowProbe::load(window, grid);
+    settle();
+    writeit::MainWindowProbe::focus_table_cell(window, 0, 0, 1);
+    settle();
+    writeit::MainWindowProbe::place_cell_caret(window, 0, 0, 1, 2);
+    settle();
+    writeit::MainWindowProbe::focus_body_quietly(window);
+    settle();
+    writeit::MainWindowProbe::insert_picture(window, png_bytes);
+    settle();
+    {
+      const writeit::Document mid = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_marks(mid, 0, 0, png_bytes) == "A" &&
+            cell_marks(mid, 0, 1, png_bytes) == "WX\x01YZ" &&
+            cell_marks(mid, 1, 0, png_bytes) == "C" &&
+            cell_marks(mid, 1, 1, png_bytes) == "D");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 0, 1) &&
+            writeit::MainWindowProbe::cell_caret(window, 0, 0, 1) == 3 &&
+            body_text(mid) == "Before\n" && !body_has_image(mid) &&
+            writeit::MainWindowProbe::cursor(window) == grid_anchor);
+    }
+
+    writeit::Document later;
+    for (int i = 0; i < 120; ++i) {
+      writeit::Paragraph paragraph;
+      writeit::Run line;
+      line.text = "line " + std::to_string(i);
+      paragraph.runs.push_back(line);
+      later.paragraphs.push_back(paragraph);
+    }
+    const size_t later_at = later.paragraphs.size();
+    writeit::insert_table(later.paragraphs, later_at, 2, 2, writeit::page_text_twips(later.page));
+    for (int i = 0; i < 4; ++i) {
+      writeit::Run cell_run;
+      cell_run.text = letters[i];
+      later.paragraphs[later_at + static_cast<size_t>(i)].runs.push_back(cell_run);
+    }
+    const int later_anchor = table_anchor(later);
+    writeit::MainWindowProbe::load(window, later);
+    settle();
+    writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+    settle();
+    writeit::MainWindowProbe::focus_body_quietly(window);
+    writeit::MainWindowProbe::scroll_to_end(window);
+    settle();
+    CHECK(writeit::MainWindowProbe::scroll_value(window) > 400.0);
+    writeit::MainWindowProbe::insert_picture(window, png_bytes);
+    settle();
+    {
+      const writeit::Document pictured = writeit::MainWindowProbe::doc(window);
+      CHECK(!pictured.paragraphs.empty() && !pictured.paragraphs[0].runs.empty() &&
+            pictured.paragraphs[0].runs[0].text == "line 0" &&
+            cell_marks(pictured, 1, 1, png_bytes) == "D\x01" && !body_has_image(pictured) &&
+            writeit::MainWindowProbe::cursor(window) == later_anchor &&
+            writeit::MainWindowProbe::cell_focused(window, 0, 1, 1) &&
+            writeit::MainWindowProbe::scroll_value(window) > 400.0);
+    }
   }
   return suite_test::done("page-ui", kChecks);
 }
