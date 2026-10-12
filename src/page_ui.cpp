@@ -14,6 +14,7 @@ void gtk_text_child_anchor_queue_resize(GtkTextChildAnchor* anchor, GtkTextLayou
 }
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -198,6 +199,25 @@ Glib::RefPtr<Gdk::Pixbuf> placeholder_pixbuf()
     if (pix)
       pix->fill(0xccccccff);
     return pix;
+  } catch (const Glib::Error&) {
+    return {};
+  }
+}
+
+// The string form of add_data stops at the first zero byte. A PNG has zero
+// bytes in its header, so that call yields the gray stand-in above.
+Glib::RefPtr<Gdk::Pixbuf> pixbuf_from_bytes(const std::string& bytes)
+{
+  if (bytes.empty())
+    return {};
+  try {
+    auto* copy = static_cast<guint8*>(g_malloc(bytes.size()));
+    if (copy == nullptr)
+      return {};
+    std::memcpy(copy, bytes.data(), bytes.size());
+    auto stream = Gio::MemoryInputStream::create();
+    stream->add_data(copy, static_cast<gssize>(bytes.size()), &g_free);
+    return Gdk::Pixbuf::create_from_stream(stream);
   } catch (const Glib::Error&) {
     return {};
   }
@@ -2124,10 +2144,18 @@ void MainWindow::refresh_stories()
   fill(header_view_, story_text(header_), header_shown_);
   fill(footer_view_, story_text(footer_), footer_shown_);
   fill(notes_view_, notes_text(notes_), notes_shown_);
+  if (reveal_note_ > static_cast<int>(notes_.size()))
+    reveal_note_ = 0;
+  std::string numbers;
+  for (size_t i = 0; i < notes_.size(); ++i) {
+    if (i)
+      numbers += "\n\n";
+    numbers += std::to_string(i + 1);
+  }
+  note_label_.set_text(numbers);
 
   const bool page = view_ == ViewMode::Page;
   const bool show_frames = page && stories_on_;
-  const bool show_notes = page && !notes_.empty();
   auto attach = [this](Gtk::TextView& view, bool on) {
     if (!on) {
       if (view.get_parent() == &page_box_) {
@@ -2141,7 +2169,6 @@ void MainWindow::refresh_stories()
     view.show();
   };
   attach(header_view_, show_frames);
-  attach(notes_view_, show_notes);
   attach(footer_view_, show_frames);
   int pos = 0;
   auto order = [this, &pos](Gtk::Widget& widget) {
@@ -2150,10 +2177,49 @@ void MainWindow::refresh_stories()
   };
   order(header_view_);
   order(text_);
-  order(notes_view_);
   order(footer_view_);
+  place_notes();
   if (!loading_)
     apply_page_size();
+}
+
+int MainWindow::note_block_px() const
+{
+  if (notes_.empty() || view_ != ViewMode::Page)
+    return 0;
+  int min_h = 0;
+  int nat_h = 0;
+  note_box_.get_preferred_height(min_h, nat_h);
+  if (nat_h > 1)
+    return nat_h;
+  return std::max(1, static_cast<int>(std::ceil(18 * std::max(0.5, zoom_factor()))));
+}
+
+void MainWindow::reveal_note_view()
+{
+  if (!note_box_.get_visible() || note_box_.get_parent() == nullptr)
+    return;
+  int x = 0;
+  int y = 0;
+  if (!note_box_.translate_coordinates(board_, 0, 0, x, y))
+    return;
+  auto adj = paste_.get_vadjustment();
+  if (!adj)
+    return;
+  const double page = adj->get_page_size();
+  if (page <= 0)
+    return;
+  const double from = y;
+  const double size = std::max(1, note_box_.get_allocated_height());
+  const double pad = page >= size + 36 ? 18.0 : 0.0;
+  double want = adj->get_value();
+  if (from - pad < want)
+    want = from - pad;
+  else if (from + size + pad > want + page)
+    want = from + size + pad - page;
+  want = std::max(adj->get_lower(), std::min(want, adj->get_upper() - page));
+  if (want != adj->get_value())
+    adj->set_value(want);
 }
 
 bool MainWindow::on_story_key(GdkEventKey* event)
@@ -2910,23 +2976,86 @@ void MainWindow::on_footnote()
     after.paragraphs.emplace_back();
   const int number = static_cast<int>(after.notes.size()) + 1;
   after.notes.push_back(std::vector<Paragraph>{Paragraph{}});
-  size_t index = caret_paragraph();
-  if (index >= after.paragraphs.size())
-    index = after.paragraphs.size() - 1;
-  const int origin = chars_before(after.paragraphs, index);
-  int into = cursor_offset() - origin;
-  const int length = chars_of(after.paragraphs[index]);
-  if (into < 0)
-    into = 0;
-  if (into > length)
-    into = length;
-  Run marker = plain_run(typing_, std::to_string(number));
-  marker.note = number;
-  insert_run(after.paragraphs[index], into, marker);
-  const int caret = origin + into + static_cast<int>(Glib::ustring(marker.text).length());
-  commit_document(before, after, caret);
-  if (notes_view_.get_parent())
-    notes_view_.grab_focus();
+
+  bool in_cell = false;
+  int body_caret = -1;
+  if (TableSheet* sheet = editing_sheet()) {
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+    Gtk::TextView* view = nullptr;
+    if (cell_place(*sheet, row, column, caret, bound))
+      view = sheet->view_at(row, column);
+    auto cell_buffer = view ? view->get_buffer() : Glib::RefPtr<Gtk::TextBuffer>{};
+    const int at = std::min(caret, bound);
+    const int line = sheet->line_at(row, column, at);
+    const size_t index =
+        cell_buffer ? cell_paragraph_index(*sheet, row, column, line) : static_cast<size_t>(-1);
+    if (cell_buffer && index < after.paragraphs.size() &&
+        after.paragraphs[index].cell.table == sheet->table_id() &&
+        after.paragraphs[index].cell.row == row && after.paragraphs[index].cell.column == column) {
+      int line_start = 0;
+      int seen = 0;
+      for (auto iter = cell_buffer->begin(); seen < line && !iter.is_end(); ++iter) {
+        if (iter.get_char() != '\n')
+          continue;
+        ++seen;
+        auto next = iter;
+        next.forward_char();
+        line_start = next.get_offset();
+      }
+      int into = at - line_start;
+      if (into < 0)
+        into = 0;
+      const int length = chars_of(after.paragraphs[index]);
+      if (into > length)
+        into = length;
+      Run basis = typing_;
+      const int count = cell_buffer->get_char_count();
+      const int probe = std::max(0, std::min(at, count));
+      if (probe > 0) {
+        auto prev = cell_buffer->get_iter_at_offset(probe - 1);
+        if (prev.get_char() != '\n')
+          basis = format_of(prev);
+      } else if (probe < count) {
+        auto here = cell_buffer->get_iter_at_offset(probe);
+        if (here.get_char() != '\n')
+          basis = format_of(here);
+      }
+      Run marker = plain_run(basis, std::to_string(number));
+      marker.note = number;
+      insert_run(after.paragraphs[index], into, marker);
+      in_cell = true;
+    }
+  }
+  if (!in_cell) {
+    size_t index = caret_paragraph();
+    if (index >= after.paragraphs.size())
+      index = after.paragraphs.size() - 1;
+    const int origin = chars_before(after.paragraphs, index);
+    int into = cursor_offset() - origin;
+    const int length = chars_of(after.paragraphs[index]);
+    if (into < 0)
+      into = 0;
+    if (into > length)
+      into = length;
+    Run marker = plain_run(typing_, std::to_string(number));
+    marker.note = number;
+    insert_run(after.paragraphs[index], into, marker);
+    body_caret = origin + into + static_cast<int>(Glib::ustring(marker.text).length());
+  }
+
+  // Before the rebuild. The caret idle would otherwise follow the digit.
+  reveal_note_ = number;
+  if (in_cell)
+    commit_document(before, after);
+  else
+    commit_document(before, after, body_caret);
+  place_notes();
+  if (auto notes = notes_view_.get_buffer())
+    notes->place_cursor(notes->end());
+  notes_view_.grab_focus();
 }
 
 void MainWindow::on_picture()
@@ -2962,14 +3091,9 @@ void MainWindow::on_picture()
     text_.grab_focus();
     return;
   }
-  try {
-    auto stream = Gio::MemoryInputStream::create();
-    stream->add_data(image.data);
-    if (auto pix = Gdk::Pixbuf::create_from_stream(stream)) {
-      image.width = goal_twips(pix->get_width());
-      image.height = goal_twips(pix->get_height());
-    }
-  } catch (const Glib::Error&) {
+  if (auto pix = pixbuf_from_bytes(image.data)) {
+    image.width = goal_twips(pix->get_width());
+    image.height = goal_twips(pix->get_height());
   }
   Document before = capture();
   Document after = before;
@@ -3001,13 +3125,9 @@ Glib::RefPtr<Gdk::Pixbuf> MainWindow::pixbuf_for(const Image& image)
   };
   if (image.data.empty())
     return placeholder_pixbuf();
-  try {
-    auto stream = Gio::MemoryInputStream::create();
-    stream->add_data(image.data);
-    return scaled(Gdk::Pixbuf::create_from_stream(stream));
-  } catch (const Glib::Error&) {
-    return placeholder_pixbuf();
-  }
+  if (auto pix = pixbuf_from_bytes(image.data))
+    return scaled(pix);
+  return placeholder_pixbuf();
 }
 
 }  // namespace writeit

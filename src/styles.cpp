@@ -428,6 +428,21 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
 {
   if (before.paragraphs.size() != after.paragraphs.size() || after.paragraphs.empty())
     return false;
+  // A picture is a pixbuf and contributes no characters. The length check
+  // below would succeed, and the loop skips a run with no text, so the
+  // picture never reaches the page. A document that already holds one fails
+  // that check and rebuilds; a new document, or one with only text, does not.
+  auto pictured = [](const Document& doc) {
+    for (const Paragraph& paragraph : doc.paragraphs) {
+      for (const Run& run : paragraph.runs) {
+        if (run.image)
+          return true;
+      }
+    }
+    return false;
+  };
+  if (pictured(before) || pictured(after))
+    return false;
   auto text = [](const Paragraph& p) {
     std::string out;
     for (const Run& run : p.runs)
