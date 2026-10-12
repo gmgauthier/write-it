@@ -1484,6 +1484,9 @@ void MainWindow::note_cell_marks(TableSheet& sheet, int row, int column)
     });
   }
   sync_format_controls();
+  // A selection here enables Cut, Copy, and Delete. The menu takes the
+  // keyboard afterwards, and leaving the cell does not ask again.
+  update_actions();
 }
 
 void MainWindow::tag_cell_insert(TableSheet& sheet, int row, int column, const Gtk::TextIter& end,
@@ -1558,6 +1561,23 @@ TableSheet* MainWindow::editing_sheet() const
   if (!cell_edit_.on)
     return nullptr;
   return sheet_by_id(cell_edit_.table);
+}
+
+Gtk::TextView* MainWindow::editing_cell_view() const
+{
+  TableSheet* sheet = editing_sheet();
+  if (!sheet)
+    return nullptr;
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound))
+    return nullptr;
+  Gtk::TextView* view = sheet->view_at(row, column);
+  if (!view || !view->get_buffer())
+    return nullptr;
+  return view;
 }
 
 TableSheet* MainWindow::sheet_by_id(int id) const

@@ -232,6 +232,25 @@ struct MainWindowProbe {
   {
     window.commit_document(before, after, caret);
   }
+
+  static void select_cell(MainWindow& window, int which, int row, int column)
+  {
+    Gtk::TextView* view = window.nth_cell_view(which, row, column);
+    if (!view || !view->get_buffer())
+      return;
+    auto buffer = view->get_buffer();
+    buffer->select_range(buffer->begin(), buffer->end());
+  }
+
+  static bool context_cut_on(MainWindow& window)
+  {
+    return window.context_cut_ && window.context_cut_->get_sensitive();
+  }
+
+  static bool context_copy_on(MainWindow& window)
+  {
+    return window.context_copy_ && window.context_copy_->get_sensitive();
+  }
 };
 
 }  // namespace writeit
@@ -303,6 +322,23 @@ void activate(Gtk::MenuItem* item)
   if (item)
     item->activate();
   settle();
+}
+
+Gtk::ToolButton* tool_named(Gtk::Window& window, const char* tip)
+{
+  Gtk::ToolButton* found = nullptr;
+  walk(window, [&](Gtk::Widget& widget) {
+    if (found)
+      return;
+    auto* button = dynamic_cast<Gtk::ToolButton*>(&widget);
+    if (!button)
+      return;
+    // A tool button keeps its tooltip on its inner button.
+    Gtk::Widget* child = button->get_child();
+    if (button->get_tooltip_text() == tip || (child && child->get_tooltip_text() == tip))
+      found = button;
+  });
+  return found;
 }
 
 // One left click in a cell's text window, through GTK's event path.
@@ -408,6 +444,20 @@ std::string cell_text(const writeit::Document& doc, int row, int column)
   return out;
 }
 
+// Body paragraphs only, one line each. A paste at the table anchor shows up here.
+std::string body_text(const writeit::Document& doc)
+{
+  std::string out;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0)
+      continue;
+    for (const writeit::Run& run : paragraph.runs)
+      out += run.text;
+    out.push_back('\n');
+  }
+  return out;
+}
+
 // Body offset of the first table. A table is one anchor character.
 int table_anchor(const writeit::Document& doc)
 {
@@ -426,7 +476,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 92;
+constexpr int kChecks = 120;
 
 int main(int argc, char* argv[])
 {
@@ -681,6 +731,190 @@ int main(int argc, char* argv[])
       CHECK(writeit::MainWindowProbe::scroll_value(window) > 400.0);
     } else {
       for (int i = 0; i < 10; ++i)
+        CHECK(false);
+    }
+
+    // Edit → Paste and the paste button edit the cell. The body caret is the
+    // table anchor, and opening the menu leaves the cell. Ctrl+V is the
+    // cell's own binding. The body's context menu stays on the body.
+    const auto edit = menu_items(window, "_Edit");
+    Gtk::MenuItem* cut = item_named(edit, "Cu_t");
+    Gtk::MenuItem* copy = item_named(edit, "_Copy");
+    Gtk::MenuItem* paste = item_named(edit, "_Paste");
+    Gtk::MenuItem* erase = item_named(edit, "_Delete");
+    Gtk::ToolButton* paste_tool = tool_named(window, "Paste");
+    Gtk::ToolButton* cut_tool = tool_named(window, "Cut");
+    Gtk::ToolButton* copy_tool = tool_named(window, "Copy");
+    if (cut && copy && paste && erase && paste_tool && cut_tool && copy_tool) {
+      writeit::Document doc;
+      writeit::Paragraph before;
+      writeit::Run run;
+      run.text = "Before";
+      before.runs.push_back(run);
+      doc.paragraphs.push_back(before);
+      const size_t at = doc.paragraphs.size();
+      writeit::insert_table(doc.paragraphs, at, 2, 2, writeit::page_text_twips(doc.page));
+      const char* names[] = {"A", "B", "C", "D"};
+      for (int i = 0; i < 4; ++i) {
+        writeit::Run cell_run;
+        cell_run.text = names[i];
+        doc.paragraphs[at + static_cast<size_t>(i)].runs.push_back(cell_run);
+      }
+      const int anchor = table_anchor(doc);
+      writeit::MainWindowProbe::load(window, doc);
+      settle();
+      writeit::MainWindowProbe::caret(window, anchor);
+
+      auto clipboard = Gtk::Clipboard::get();
+      auto wait_body = [&](const std::string& text) {
+        for (int i = 0; i < 50 && body_text(writeit::MainWindowProbe::doc(window)) != text; ++i)
+          settle();
+      };
+      auto wait_cell = [&](int row, int column, const std::string& text) {
+        for (int i = 0; i < 50 &&
+                        cell_text(writeit::MainWindowProbe::doc(window), row, column) != text;
+             ++i)
+          settle();
+      };
+      auto wait_on = [&](Gtk::Widget* widget) {
+        for (int i = 0; i < 50 && !(widget && widget->get_sensitive()); ++i)
+          settle();
+      };
+
+      // No cell is being edited. Paste still belongs to the body.
+      clipboard->set_text("NO");
+      wait_on(paste);
+      CHECK(paste->get_sensitive());
+      activate(paste);
+      wait_body("Before\nNO\n");
+      writeit::Document body_pasted = writeit::MainWindowProbe::doc(window);
+      CHECK(body_text(body_pasted) == "Before\nNO\n");
+      CHECK(cell_text(body_pasted, 0, 0) == "A" && cell_text(body_pasted, 0, 1) == "B" &&
+            cell_text(body_pasted, 1, 0) == "C" && cell_text(body_pasted, 1, 1) == "D");
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document cleared = writeit::MainWindowProbe::doc(window);
+      CHECK(body_text(cleared) == "Before\n" && cell_text(cleared, 1, 1) == "D");
+
+      clipboard->set_text("XY");
+      wait_on(paste);
+      writeit::MainWindowProbe::caret(window, anchor);
+      writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      settle();
+      activate(paste);
+      wait_cell(1, 1, "DXY");
+      writeit::Document menu_pasted = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_text(menu_pasted, 0, 0) == "A" && cell_text(menu_pasted, 0, 1) == "B" &&
+            cell_text(menu_pasted, 1, 0) == "C" && cell_text(menu_pasted, 1, 1) == "DXY");
+      CHECK(body_text(menu_pasted) == "Before\n");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 1));
+      CHECK(writeit::MainWindowProbe::cursor(window) == anchor);
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document menu_back = writeit::MainWindowProbe::doc(window);
+      CHECK(body_text(menu_back) == "Before\n" && cell_text(menu_back, 1, 1) == "D");
+
+      clipboard->set_text("Z");
+      wait_on(paste_tool);
+      writeit::MainWindowProbe::caret(window, anchor);
+      writeit::MainWindowProbe::focus_table_cell(window, 0, 0, 1);
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      settle();
+      g_signal_emit_by_name(paste_tool->gobj(), "clicked");
+      settle();
+      wait_cell(0, 1, "BZ");
+      writeit::Document tool_pasted = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_text(tool_pasted, 0, 0) == "A" && cell_text(tool_pasted, 0, 1) == "BZ" &&
+            cell_text(tool_pasted, 1, 0) == "C" && cell_text(tool_pasted, 1, 1) == "D");
+      CHECK(body_text(tool_pasted) == "Before\n");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 0, 1));
+
+      writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 0);
+      settle();
+      CHECK(!cut->get_sensitive() && !copy->get_sensitive() && !erase->get_sensitive() &&
+            !cut_tool->get_sensitive() && !copy_tool->get_sensitive());
+      writeit::MainWindowProbe::select_cell(window, 0, 1, 0);
+      settle();
+      CHECK(cut->get_sensitive() && copy->get_sensitive() && erase->get_sensitive() &&
+            cut_tool->get_sensitive() && copy_tool->get_sensitive() &&
+            !writeit::MainWindowProbe::context_cut_on(window) &&
+            !writeit::MainWindowProbe::context_copy_on(window));
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      settle();
+      CHECK(cut->get_sensitive() && copy->get_sensitive() && erase->get_sensitive());
+
+      activate(copy);
+      writeit::Document copied = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_text(copied, 1, 0) == "C" && body_text(copied) == "Before\n");
+      CHECK(clipboard->wait_for_text() == "C");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 0));
+
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      settle();
+      activate(erase);
+      wait_cell(1, 0, "");
+      writeit::Document deleted = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_text(deleted, 1, 0).empty() && cell_text(deleted, 0, 1) == "BZ" &&
+            body_text(deleted) == "Before\n");
+      CHECK(clipboard->wait_for_text() == "C");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 0));
+
+      writeit::MainWindowProbe::focus_table_cell(window, 0, 0, 0);
+      settle();
+      writeit::MainWindowProbe::select_cell(window, 0, 0, 0);
+      settle();
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      settle();
+      CHECK(cut->get_sensitive());
+      activate(cut);
+      wait_cell(0, 0, "");
+      writeit::Document cut_doc = writeit::MainWindowProbe::doc(window);
+      CHECK(cell_text(cut_doc, 0, 0).empty() && cell_text(cut_doc, 0, 1) == "BZ" &&
+            cell_text(cut_doc, 1, 1) == "D" && body_text(cut_doc) == "Before\n");
+      CHECK(clipboard->wait_for_text() == "A");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 0, 0));
+
+      // A table on a later page. Paste must not send the caret or the view
+      // back to the first line.
+      writeit::Document later;
+      for (int i = 0; i < 120; ++i) {
+        writeit::Paragraph paragraph;
+        writeit::Run line;
+        line.text = "line " + std::to_string(i);
+        paragraph.runs.push_back(line);
+        later.paragraphs.push_back(paragraph);
+      }
+      const size_t later_at = later.paragraphs.size();
+      writeit::insert_table(later.paragraphs, later_at, 2, 2,
+                            writeit::page_text_twips(later.page));
+      for (int i = 0; i < 4; ++i) {
+        writeit::Run cell_run;
+        cell_run.text = names[i];
+        later.paragraphs[later_at + static_cast<size_t>(i)].runs.push_back(cell_run);
+      }
+      const int later_anchor = table_anchor(later);
+      writeit::MainWindowProbe::load(window, later);
+      settle();
+      clipboard->set_text("XY");
+      wait_on(paste);
+      writeit::MainWindowProbe::caret(window, later_anchor);
+      writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      writeit::MainWindowProbe::scroll_to_end(window);
+      settle();
+      CHECK(writeit::MainWindowProbe::scroll_value(window) > 400.0);
+      activate(paste);
+      wait_cell(1, 1, "DXY");
+      writeit::Document later_pasted = writeit::MainWindowProbe::doc(window);
+      CHECK(!later_pasted.paragraphs.empty() && !later_pasted.paragraphs[0].runs.empty() &&
+            later_pasted.paragraphs[0].runs[0].text == "line 0" &&
+            cell_text(later_pasted, 1, 1) == "DXY" &&
+            writeit::MainWindowProbe::cursor(window) == later_anchor);
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 1) &&
+            writeit::MainWindowProbe::scroll_value(window) > 400.0);
+    } else {
+      for (int i = 0; i < 28; ++i)
         CHECK(false);
     }
 
