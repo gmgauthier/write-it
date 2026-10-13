@@ -59,7 +59,8 @@ int page_sheet_height(double zoom);
 // top and bottom margins: 692 px of laid-out text at 100% on the default
 // A4 page. The count is how many of those the text fills, and the page is
 // the one the caret's line starts on. A page break is kept and written, and
-// the count includes the sheet it starts. Text and page both scale with the
+// the count includes the sheet it starts. A page break on a table cell does
+// not. Text and page both scale with the
 // zoom, so neither the zoom nor the view changes the count, short of rounding.
 // Page view draws that count as separate sheets, with this gap of the gray
 // pasteboard between them. The gap is screen-only. Draft draws neither it

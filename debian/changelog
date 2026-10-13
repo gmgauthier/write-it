@@ -1,3 +1,11 @@
+write-it (1.0.18-1) unstable; urgency=medium
+
+  * Insert → Page Break inside a table leaves the document and that cell alone.
+  * The status bar says it cannot break the page inside a table.
+  * A page break already stored on a cell does not start a sheet.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Tue, 13 Oct 2026 20:52:37 +0100
+
 write-it (1.0.17-1) unstable; urgency=medium
 
   * Insert → Page Break in ordinary text starts the next sheet.

@@ -172,6 +172,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   // seams are not drawn. The same rules as the Page view gaps, without notes.
   int sheet_y(int offset) const;
   bool has_page_break() const;
+  // A page break on ordinary text. One stored on a table cell does not start
+  // a sheet.
+  bool starts_sheet(int offset) const;
+  // The caret is in a table, including after a menu has taken the keyboard
+  // and the edited cell is still recorded.
+  bool caret_in_table() const;
   Glib::RefPtr<Gtk::TextTag> page_seam_tag(int pixels);
   void raise_seams();
   void update_page_status();
