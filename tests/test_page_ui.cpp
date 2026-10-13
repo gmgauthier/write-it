@@ -40,6 +40,40 @@ struct MainWindowProbe {
     return window.capture();
   }
 
+  static std::string page(MainWindow& window)
+  {
+    return window.page_label_.get_text();
+  }
+
+  static int seams(MainWindow& window)
+  {
+    int count = 0;
+    auto iter = window.buffer_->begin();
+    while (true) {
+      for (const auto& tag : iter.get_tags()) {
+        if (page_seam_pixels(tag->property_name().get_value()) > 0)
+          ++count;
+      }
+      bool more = false;
+      while (!iter.is_end()) {
+        if (iter.get_char() == '\n') {
+          iter.forward_char();
+          more = !iter.is_end();
+          break;
+        }
+        iter.forward_char();
+      }
+      if (!more)
+        break;
+    }
+    return count;
+  }
+
+  static void draft(MainWindow& window, bool on)
+  {
+    (on ? window.draft_item_ : window.page_item_)->set_active(true);
+  }
+
   static void undo(MainWindow& window)
   {
     window.undo();
@@ -832,7 +866,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 165;
+constexpr int kChecks = 177;
 
 int main(int argc, char* argv[])
 {
@@ -901,17 +935,42 @@ int main(int argc, char* argv[])
       CHECK(!broken.paragraphs[0].runs.empty() && broken.paragraphs[0].runs[0].text == "Hello");
       CHECK(!broken.paragraphs[0].page_break);
       CHECK(broken.paragraphs[1].page_break);
+      CHECK(broken.paragraphs[1].runs.empty());
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
+      CHECK(writeit::MainWindowProbe::seams(window) >= 1);
+      body->get_buffer()->begin_user_action();
+      body->get_buffer()->insert_at_cursor("A");
+      body->get_buffer()->end_user_action();
+      settle();
+      writeit::Document typed = writeit::MainWindowProbe::doc(window);
+      CHECK(typed.paragraphs.size() == 2 && typed.paragraphs[1].page_break &&
+            !typed.paragraphs[1].runs.empty() && typed.paragraphs[1].runs[0].text == "A");
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
+      writeit::MainWindowProbe::undo(window);
+      settle();
+      writeit::Document emptied = writeit::MainWindowProbe::doc(window);
+      CHECK(emptied.paragraphs.size() == 2 && emptied.paragraphs[1].page_break &&
+            emptied.paragraphs[1].runs.empty());
+      writeit::MainWindowProbe::draft(window, true);
+      settle();
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
+      CHECK(writeit::MainWindowProbe::seams(window) == 0);
+      writeit::MainWindowProbe::draft(window, false);
+      settle();
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
       writeit::MainWindowProbe::undo(window);
       settle();
       writeit::Document restored = writeit::MainWindowProbe::doc(window);
       CHECK(restored.paragraphs.size() == 1);
       CHECK(!restored.paragraphs[0].page_break);
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 1 of 1");
 
       writeit::MainWindowProbe::caret(window, 0);
       activate(page_break);
       writeit::Document leading = writeit::MainWindowProbe::doc(window);
       CHECK(leading.paragraphs.size() == 1 && leading.paragraphs[0].page_break);
       CHECK(!leading.paragraphs[0].runs.empty() && leading.paragraphs[0].runs[0].text == "Hello");
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
       writeit::MainWindowProbe::undo(window);
       settle();
 
@@ -922,6 +981,7 @@ int main(int argc, char* argv[])
       CHECK(!split.paragraphs[0].runs.empty() && split.paragraphs[0].runs[0].text == "He");
       CHECK(split.paragraphs[1].page_break);
       CHECK(!split.paragraphs[1].runs.empty() && split.paragraphs[1].runs[0].text == "llo");
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
       writeit::MainWindowProbe::undo(window);
       settle();
       writeit::Document joined = writeit::MainWindowProbe::doc(window);
@@ -962,7 +1022,7 @@ int main(int argc, char* argv[])
       settle();
       CHECK(writeit::MainWindowProbe::doc(window).paragraphs[0].cell.rows == rows_before);
     } else {
-      for (int i = 0; i < 27; ++i)
+      for (int i = 0; i < 39; ++i)
         CHECK(false);
     }
 

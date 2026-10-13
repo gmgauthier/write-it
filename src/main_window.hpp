@@ -165,7 +165,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Layout y mapped onto the sheets the gray gaps draw. A line that did not
   // fit the room left on a sheet starts the next one, so the gap is the page
   // boundary even while the line's own content y is still short of it.
+  // A page break starts a sheet the same way. Draft has no gaps; sheet_y()
+  // counts those sheets so the view does not change the count.
   int page_content_y(int layout_y, int offset) const;
+  // Sheet coordinate of `offset` when a page break is in the document and the
+  // seams are not drawn. The same rules as the Page view gaps, without notes.
+  int sheet_y(int offset) const;
+  bool has_page_break() const;
   Glib::RefPtr<Gtk::TextTag> page_seam_tag(int pixels);
   void raise_seams();
   void update_page_status();
@@ -333,6 +339,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   int paragraph_start(int offset) const;
   int paragraph_end(int offset) const;
   bool final_paragraph_empty() const;
+  // Removes a page-break pad from any paragraph that also has real text.
+  void drop_page_break_pads();
   // Gives each paragraph the user action touched one paragraph tag over all
   // of it; the rest are as the last action left them.
   void normalise_paragraphs();
@@ -835,6 +843,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection table_sync_;
   // update_page_seams() is applying its tags. Their signals are not edits.
   bool seaming_ = false;
+  // drop_page_break_pads() is erasing the layout pad. That is not a new edit.
+  bool dropping_pad_ = false;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;

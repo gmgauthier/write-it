@@ -6,21 +6,13 @@ Reviewed again on 2026-10-12 against the v1.0.12 sources (`aef5e4c`). This pass 
 
 Measured again on 2026-10-13 against 1.0.16 (`f53ad21`), release build, with `tests/bench_key.cpp`. Both gate lines were over 100 ms. The standing item in Open owns the periodic rerun.
 
-Checked the same day, under Xvfb, on a short document: Insert → Page Break in ordinary text writes `\page` and leaves the text on the same sheet. That item is first in Open.
+Checked the same day, under Xvfb, on a short document: Insert → Page Break in ordinary text wrote `\page` and left the text on the same sheet. That is fixed, and it is not in a numbered release yet. The cell page break is first in Open.
 
 `meson test` runs the file and document suites (`document`, `rtf-unicode`, `rtf-unicode-fuzz`, `import-clean`, `page`, `lists`, `styles`, `indents`, `alignment`, `spelling`, `open`, `filename`, `settings`, `units`, `font-sizes`, `view`, `page-count`), the window suites (`page-ui`, `justify-ui`, `status-bar`, `page-width`, `page-sheet`, `list-labels`, `list-tabs`, `list-draw`, `caret-scroll`, `window-width`, `window-memory`, `style-direct`, `style-ui`, `style-size-ui`, `font-size-ui`, `paragraph-dialog`, `capture`, `capture-count`, `paste-format`, `clipboard-paste`, `dirty-state`, `fast-typing`, `toolbar-overflow`, `print`, `template`, `undo`, `undo-fuzz`, `heading-paragraphs`, `open-identity`, `window-lifetime`), `smoke-open`, `desktop-file`, and the `guard-*` checks. The three `guard-*-fails` targets are expected to fail. The package build of this tag reported 50 passed, 3 expected failures, and 0 failures. This review did not re-run the suite. It read the 1.0 sources against the specification.
 
 Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file.
 
 ## Open
-
-### Insert → Page Break in ordinary text does not start a new sheet
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/page_ui.cpp` `MainWindow::on_page_break`; `src/editor.cpp` `MainWindow::style_para_tag`, `MainWindow::replace_buffer`, `MainWindow::update_page_seams`
-- Trigger: In a paragraph that is not in a table, choose Insert → Page Break. The caret may be at the end of the document, at the start of a paragraph, in the middle of a paragraph, or at the end of a paragraph that has another after it.
-- Outcome: The break is stored, and Save writes `\page`. The status stays “Page 1 of 1” on a short document, and the text stays on the same sheet. `DEVELOPMENT.md` says a page break is kept and written, and that it does not start a sheet or change the count. On screen, a break on a paragraph that has text is 18 px of space above that paragraph. A break at the end of the document, where the caret usually sits, appends an empty paragraph. That paragraph has no character, so the 18 px is not drawn: the command adds a blank line. Checked under Xvfb on 2026-10-13 against the 1.0.16 sources. “Hello” with the caret at the end became two paragraphs, the second empty and marked, still one sheet, and the first line had no space above it. The caret at the start, the caret in the middle, and the caret between “Hello” and “World” each marked the following text and put 18 px above it, still on one sheet.
 
 ### Insert → Page Break in a cell marks the wrong paragraph and jumps to the top-left cell
 
@@ -67,6 +59,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Insert → Page Break in ordinary text starts the next sheet
+
+- Fixed, not yet in a numbered release.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::on_page_break`; `src/editor.cpp` `MainWindow::replace_buffer`, `MainWindow::update_page_seams`, `MainWindow::capture`
+- Trigger: In a paragraph that is not in a table, choose Insert → Page Break. The caret may be at the end of the document, at the start of a paragraph, in the middle of a paragraph, or at the end of a paragraph that has another after it.
+- Outcome: The marked paragraph starts the next sheet. Save still writes `\page`. The status counts that sheet, in Page and in Draft. At the end of the document the appended paragraph is the new sheet. Typing on it keeps the break and does not store the layout pad. A page break in a table cell is still the open item above.
 
 ### A footnote on a later page sits with the notes on the first page
 

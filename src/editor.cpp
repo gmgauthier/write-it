@@ -27,6 +27,9 @@ namespace {
 
 constexpr int kFindNext = Gtk::RESPONSE_APPLY;
 constexpr int kFindReplace = Gtk::RESPONSE_YES;
+// Sits in an empty page-break paragraph so a seam tag has a character to
+// hold. capture() skips it. It is not part of the document or the file.
+constexpr gunichar kPageBreakPad = 0x200B;
 
 // Asked about the file a save would really replace, on top of the chooser.
 bool confirm_replace(Gtk::Window& parent, const std::string& path)
@@ -1305,6 +1308,9 @@ Document MainWindow::capture() const
         }
       }
     }
+    // The layout pad for an empty page-break paragraph. It is not text.
+    if (ch == kPageBreakPad)
+      continue;
     if (auto pix = iter.get_pixbuf()) {
       flush_run();
       Run image_run;
@@ -1445,6 +1451,14 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
         pending_mark_ = *paragraph.mark;
         pending_mark_.text.clear();
         pending_mark_set_ = true;
+      }
+      // Nothing else can hold the seam: a zero-length tag does not stick, and
+      // applying it again on every layout never settles. The pad is one
+      // character. capture() skips it, so the paragraph stays empty.
+      if (paragraph.page_break) {
+        Glib::ustring pad;
+        pad.push_back(kPageBreakPad);
+        buffer_->insert_with_tag(buffer_->end(), pad, para);
       }
     }
     ++i;
@@ -1715,7 +1729,7 @@ UndoHistory::Closed MainWindow::close_step(bool may_merge)
 
 void MainWindow::on_user_begin()
 {
-  if (loading_ || restoring_)
+  if (loading_ || restoring_ || dropping_pad_)
     return;
   in_user_ = true;
   touched_ = false;
@@ -1727,6 +1741,8 @@ void MainWindow::on_user_end()
   if (!in_user_)
     return;
   in_user_ = false;
+  // While the step is still open, so undo puts the pad back with the key.
+  drop_page_break_pads();
   finish_pending();
   normalise_paragraphs();
   if (pending_para_set_ && !final_paragraph_empty())
@@ -3037,8 +3053,9 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
 {
   if (format.cell.table != 0)
     tag->property_paragraph_background() = "#f4f4f4";
-  // A page break is a gap above the paragraph. GTK's pixels-above is that
-  // gap, not space on every wrapped line. A plain paragraph leaves it unset.
+  // Draft keeps this gap above a page break. Page view replaces it with the
+  // sheet seam. GTK's pixels-above is that gap, not space on every wrapped
+  // line. A plain paragraph leaves it unset.
   if (format.page_break)
     tag->property_pixels_above_lines() = 18;
   if (format.align == Align::Center)
@@ -3108,8 +3125,59 @@ int MainWindow::paragraph_end(int offset) const
 
 bool MainWindow::final_paragraph_empty() const
 {
+  // A trailing page-break pad is not text. "Hello\n" plus the pad is still an
+  // empty last paragraph; a real character before the pad is not.
   const int count = buffer_->get_char_count();
-  return count == 0 || buffer_->get_iter_at_offset(count - 1).get_char() == '\n';
+  if (count == 0)
+    return true;
+  auto iter = buffer_->get_iter_at_offset(count);
+  while (iter.backward_char()) {
+    const gunichar ch = iter.get_char();
+    if (ch == kPageBreakPad)
+      continue;
+    return ch == '\n';
+  }
+  return true;
+}
+
+void MainWindow::drop_page_break_pads()
+{
+  // A pad beside a real character makes Backspace eat the pad first, and the
+  // buffer then disagrees with capture(), which skips the pad. Once the
+  // paragraph has text, the seam sits on that text.
+  if (!buffer_ || dropping_pad_ || loading_ || restoring_)
+    return;
+  const int count = buffer_->get_char_count();
+  std::vector<int> pads;
+  for (int start = 0; start <= count;) {
+    const int end = paragraph_end(start);
+    bool real = false;
+    std::vector<int> here;
+    for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < end;
+         ++iter) {
+      const gunichar ch = iter.get_char();
+      if (ch == kPageBreakPad)
+        here.push_back(iter.get_offset());
+      else if (ch != '\n')
+        real = true;
+    }
+    if (real)
+      pads.insert(pads.end(), here.begin(), here.end());
+    if (end <= start || end >= count)
+      break;
+    start = end;
+  }
+  if (pads.empty())
+    return;
+  std::sort(pads.begin(), pads.end(), [](int a, int b) { return a > b; });
+  dropping_pad_ = true;
+  for (int at : pads) {
+    auto from = buffer_->get_iter_at_offset(at);
+    auto to = from;
+    to.forward_char();
+    buffer_->erase(from, to);
+  }
+  dropping_pad_ = false;
 }
 
 ParaFormat MainWindow::para_at(int offset) const
@@ -4284,6 +4352,115 @@ int MainWindow::seam_extra_through(int offset) const
   return extra;
 }
 
+bool MainWindow::has_page_break() const
+{
+  if (!buffer_)
+    return false;
+  const int count = buffer_->get_char_count();
+  for (int start = 0; start <= count;) {
+    if (para_at(start).page_break)
+      return true;
+    const int end = paragraph_end(start);
+    if (end <= start)
+      break;
+    start = end;
+  }
+  return false;
+}
+
+int MainWindow::sheet_y(int offset) const
+{
+  // The same sheet decisions as update_page_seams(), without footnote room.
+  // Draft draws no seams, so the status bar counts from this instead of from
+  // the gray gaps. A document with no page break stays on the laid-out height.
+  if (!buffer_)
+    return 0;
+  struct Block {
+    int start = 0;
+    int end = 0;
+    int top = 0;
+    int text_h = 0;
+    int natural = 0;
+    int seam = 0;
+    bool page_break = false;
+  };
+  std::vector<Block> blocks;
+  int bottom_y = 0;
+  int bottom_h = 0;
+  text_.get_line_yrange(buffer_->end(), bottom_y, bottom_h);
+  const int bottom = bottom_y + bottom_h;
+  const int count = buffer_->get_char_count();
+  int at = 0;
+  while (at <= count) {
+    auto iter = buffer_->get_iter_at_offset(at);
+    int top = 0;
+    int height = 0;
+    text_.get_line_yrange(iter, top, height);
+    Block block;
+    block.start = at;
+    block.top = top;
+    block.natural = natural_line_above(iter);
+    block.seam = seam_at(iter);
+    int next = -1;
+    for (auto iter_at = iter; !iter_at.is_end(); ++iter_at) {
+      if (iter_at.get_char() == '\n') {
+        auto after = iter_at;
+        after.forward_char();
+        next = after.get_offset();
+        break;
+      }
+    }
+    block.end = next < 0 ? count : next;
+    block.page_break = para_at(block.start).page_break;
+    blocks.push_back(block);
+    if (next < 0)
+      break;
+    at = next;
+  }
+  if (blocks.empty())
+    return 0;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const int next_top = i + 1 < blocks.size() ? blocks[i + 1].top : bottom;
+    const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
+    blocks[i].text_h = std::max(1, next_top - blocks[i].top - displayed);
+  }
+  const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
+  const int where = std::max(0, std::min(offset, count));
+  int y = 0;
+  int page = 0;
+  int result = 0;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const int text_h = blocks[i].text_h;
+    const int box = blocks[i].natural + text_h;
+    while (y >= (page + 1) * per)
+      ++page;
+    const int limit = (page + 1) * per;
+    const int page_edge = limit;
+    const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
+    const bool push = forced || (y > 0 && y + box > limit && text_h <= per);
+    const int visual = page + (push ? 1 : 0);
+    const bool last = i + 1 == blocks.size();
+    const bool inside = where >= blocks[i].start && (where < blocks[i].end || last);
+    if (inside) {
+      int within = 0;
+      if (where > blocks[i].start && where < blocks[i].end) {
+        Gdk::Rectangle loc;
+        text_.get_iter_location(buffer_->get_iter_at_offset(where), loc);
+        const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
+        within = std::max(0, loc.get_y() - blocks[i].top - displayed);
+      } else if (where >= blocks[i].end)
+        within = text_h;
+      result = visual * per + std::min(std::max(0, within), text_h);
+    }
+    if (push) {
+      y = page_edge + text_h;
+      ++page;
+    } else
+      y += box;
+  }
+  return result;
+}
+
 int MainWindow::page_content_y(int layout_y, int offset) const
 {
   if (!buffer_)
@@ -4291,8 +4468,10 @@ int MainWindow::page_content_y(int layout_y, int offset) const
   const int count = buffer_->get_char_count();
   const int at = std::max(0, std::min(offset, count));
   const int content = layout_y - seam_extra_through(at);
+  // Draft strips the seams. A page break still starts a sheet, and the count
+  // has to match Page view. Ordinary text keeps the laid-out height.
   if (view_ != ViewMode::Page)
-    return content;
+    return has_page_break() ? sheet_y(at) : content;
   // Each gray gap starts a sheet. The line's content y is short of that
   // sheet by whatever room the previous sheet did not fill, so a tall block
   // pushed onto the next page keeps the old page number until the caret has
@@ -4692,6 +4871,7 @@ void MainWindow::update_page_seams()
     int text_h = 0;
     int natural = 0;
     int seam = 0;
+    bool page_break = false;
   };
   std::vector<Block> blocks;
   int bottom_y = 0;
@@ -4720,6 +4900,7 @@ void MainWindow::update_page_seams()
       }
     }
     block.end = next < 0 ? count : next;
+    block.page_break = para_at(block.start).page_break;
     blocks.push_back(block);
     if (next < 0)
       break;
@@ -4771,7 +4952,11 @@ void MainWindow::update_page_seams()
       const int page_edge = (page + 1) * per;
       // A paragraph that does not fit in the room left on this sheet starts
       // the next one. One taller than a sheet stays put and crosses the edge.
-      if (y > 0 && y + box > limit && text_h <= room) {
+      // A page break starts a sheet even at the top of one, and even when the
+      // paragraph is taller than the sheet. An empty block has no character
+      // for the seam, so it is not forced here.
+      const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
+      if (forced || (y > 0 && y + box > limit && text_h <= room)) {
         placed[i] = std::max(0, page_edge - y) + chrome;
         y = page_edge + text_h;
         ++page;
@@ -4938,7 +5123,8 @@ void MainWindow::update_page_seams()
   }
   // The empty last paragraph has no character a tag can sit on. Leaving it
   // unseamed keeps the gap off a range GTK would ignore, which would reapply
-  // on every layout.
+  // on every layout. An empty page break carries a zero-width space so its
+  // seam has a character to sit on.
   for (size_t i = 0; i < blocks.size(); ++i) {
     if (blocks[i].start == blocks[i].end)
       want[i] = 0;
