@@ -770,6 +770,14 @@ void MainWindow::build_page()
   paste_.get_style_context()->add_class("pasteboard");
   paste_.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
   paste_.add(board_);
+  // The sheet is taller than the window. GTK scrolls a focused descendant
+  // into view by the top of its allocation. The page starts at its top
+  // margin, so focus returning from a toolbar list jumps to the first page.
+  // scroll_to_caret() is what moves this scroller.
+  if (auto* viewport = dynamic_cast<Gtk::Container*>(paste_.get_child())) {
+    viewport->set_focus_vadjustment({});
+    viewport->set_focus_hadjustment({});
+  }
   paste_.add_events(Gdk::BUTTON_PRESS_MASK);
   paste_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   paste_.signal_size_allocate().connect([this](Gtk::Allocation&) {
@@ -912,9 +920,26 @@ void MainWindow::hold_view()
   hold_scroll_ = true;
   restore_scroll_ = true;
   follow_caret_ = false;
+  if (scroll_lock_)
+    return;
+  scroll_lock_ = true;
+  auto pin = [this](const Glib::RefPtr<Gtk::Adjustment>& adj, double want) {
+    if (!scroll_lock_ || scroll_snapping_)
+      return;
+    const double page = adj->get_page_size();
+    const double room = std::max(adj->get_lower(), adj->get_upper() - std::max(0.0, page));
+    const double keep = std::max(adj->get_lower(), std::min(want, room));
+    if (adj->get_value() == keep)
+      return;
+    scroll_snapping_ = true;
+    adj->set_value(keep);
+    scroll_snapping_ = false;
+  };
+  scroll_lock_v_ = v->signal_value_changed().connect([this, v, pin] { pin(v, held_v_); });
+  scroll_lock_h_ = h->signal_value_changed().connect([this, h, pin] { pin(h, held_h_); });
 }
 
-void MainWindow::restore_held_view(bool finish)
+void MainWindow::restore_held_view(bool finish, bool reveal)
 {
   if (!hold_scroll_ && !restore_scroll_)
     return;
@@ -933,12 +958,23 @@ void MainWindow::restore_held_view(bool finish)
   clamp(h, held_h_);
   if (!finish)
     return;
+  // The short measures during the rebuild were ignored. The ones that repeat
+  // now are the sheet, and the caret's place still fits on it.
   restore_scroll_ = false;
+  apply_page_size();
+  clamp(v, held_v_);
+  clamp(h, held_h_);
   hold_scroll_ = false;
-  reveal_editing_caret();
+  scroll_lock_ = false;
+  scroll_lock_v_.disconnect();
+  scroll_lock_h_.disconnect();
+  // A heading grows the line. Revealing it would pin that line to the bottom
+  // of the window. The pasteboard stays where the style found it.
+  if (reveal)
+    reveal_editing_caret();
 }
 
-void MainWindow::release_view()
+void MainWindow::release_view(bool reveal)
 {
   restore_held_view(false);
   if (restore_idle_.connected())
@@ -946,8 +982,8 @@ void MainWindow::release_view()
   // After the page-size idle and the resize it queues, so the caret's
   // coordinates are the laid-out ones.
   restore_idle_ = Glib::signal_idle().connect(
-      [this] {
-        restore_held_view(true);
+      [this, reveal] {
+        restore_held_view(true, reveal);
         return false;
       },
       Glib::PRIORITY_LOW);
@@ -1121,10 +1157,16 @@ void MainWindow::apply_page_size()
     styled_view_ = view_;
     restyle_tags();
   }
-  const int height = page_height();
+  int height = page_height();
   int current_w = 0;
   int current_h = 0;
   page_.get_size_request(current_w, current_h);
+  // A rebuild while the hold is up measures short once: the tables and
+  // pictures do not have their height yet. The pasteboard would clamp up to
+  // keep that short sheet on screen, then the real height comes back. Keep
+  // the height the hold started with until the rebuild lets go.
+  if (restore_scroll_ && current_h > 0 && height < current_h)
+    height = current_h;
   if (current_w != width || current_h != height)
     page_.set_size_request(width, height);
   sizing_ = false;
