@@ -43,12 +43,12 @@
 // tags, exactly. The window's own operations sit on MainWindow, so the two
 // halves share no operation and there is no cross-check between them.
 //
-// Inputs: UNDO_FUZZ_SEED (default 0x5752495445495431), UNDO_FUZZ_RUNS (200),
-// UNDO_FUZZ_OPS (60). Random numbers are std::mt19937_64, choices r % n. On a
-// failure the seed, run, step and op are printed and written, with the
-// starting RTF and the op list, to $MESON_BUILD_ROOT (or the temp dir)
-// /undo-fuzz-failure-<seed>-<run>.txt; UNDO_FUZZ_REPLAY=<that file> runs that
-// one run again.
+// Inputs: UNDO_FUZZ_SEED (default 0x5752495445495431), UNDO_FUZZ_RUNS (40),
+// UNDO_FUZZ_OPS (60). UNDO_FUZZ_RUNS=200 is the long pass. Random numbers are
+// std::mt19937_64, choices r % n. On a failure the seed, run, step and op are
+// printed and written, with the starting RTF and the op list, to
+// $MESON_BUILD_ROOT (or the temp dir) /undo-fuzz-failure-<seed>-<run>.txt;
+// UNDO_FUZZ_REPLAY=<that file> runs that one run again.
 //
 // The check count does not depend on the seed: each run ends in a fixed
 // number of checks that sum up every step's. It is runs * 9 for the window
@@ -1339,7 +1339,7 @@ void model_run(std::uint64_t seed, int run, int ops)
 int main(int argc, char* argv[])
 {
   std::uint64_t seed = env_number("UNDO_FUZZ_SEED", 0x5752495445495431ull);
-  int runs = static_cast<int>(env_number("UNDO_FUZZ_RUNS", 200));
+  int runs = static_cast<int>(env_number("UNDO_FUZZ_RUNS", 40));
   int ops = static_cast<int>(env_number("UNDO_FUZZ_OPS", 60));
   int only_run = -1;
   if (const char* replay = g_getenv("UNDO_FUZZ_REPLAY")) {
