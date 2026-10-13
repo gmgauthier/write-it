@@ -4,6 +4,8 @@ Reviewed 2026-10-11 against the v1.0.0 sources (`cc05f40`). The specification is
 
 Reviewed again on 2026-10-12 against the v1.0.12 sources (`aef5e4c`). This pass did not re-run the suite. It read the sources against the specification. The typing-speed item stays open: `tests/README.md` records a 1.0.8 release build that met the gate, and this pass did not remeasure 1.0.12. `DEVELOPMENT.md` still says the gate is not met.
 
+Measured again on 2026-10-13 against 1.0.16 (`f53ad21`), release build, with `tests/bench_key.cpp`. Both gate lines were over 100 ms. The standing item in Open owns the periodic rerun.
+
 `meson test` runs the file and document suites (`document`, `rtf-unicode`, `rtf-unicode-fuzz`, `import-clean`, `page`, `lists`, `styles`, `indents`, `alignment`, `spelling`, `open`, `filename`, `settings`, `units`, `font-sizes`, `view`, `page-count`), the window suites (`page-ui`, `justify-ui`, `status-bar`, `page-width`, `page-sheet`, `list-labels`, `list-tabs`, `list-draw`, `caret-scroll`, `window-width`, `window-memory`, `style-direct`, `style-ui`, `style-size-ui`, `font-size-ui`, `paragraph-dialog`, `capture`, `capture-count`, `paste-format`, `clipboard-paste`, `dirty-state`, `fast-typing`, `toolbar-overflow`, `print`, `template`, `undo`, `undo-fuzz`, `heading-paragraphs`, `open-identity`, `window-lifetime`), `smoke-open`, `desktop-file`, and the `guard-*` checks. The three `guard-*-fails` targets are expected to fail. The package build of this tag reported 50 passed, 3 expected failures, and 0 failures. This review did not re-run the suite. It read the 1.0 sources against the specification.
 
 Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file.
@@ -24,7 +26,15 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Confidence: medium
 - Where: `src/editor.cpp` `MainWindow::on_user_end`; `DEVELOPMENT.md` M2 typing-speed gate
 - Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
-- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. That figure was not remeasured on v1.0.0. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`.
+- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`. A 1.0.8 release build met 50 ms; those numbers are in `tests/README.md`. A 1.0.16 release build on 2026-10-13 did not: `plain1000` 128.7 ms and `list1000` 145.1 ms. The standing item below owns the periodic rerun.
+
+### Rerun the typing-speed bench, and optimize above 100 ms
+
+- Severity: incorrect
+- Confidence: high
+- Where: `tests/bench_key.cpp` (`write-it-bench-key`). How to build and run it is `tests/README.md`.
+- Trigger: Periodically, on a release build, run `xvfb-run -a ./build-release/write-it-bench-key`. Read the `plain1000` and `list1000` gate lines. Each line is the median of three runs of 50 keys at the end of paragraph 500, process CPU, refresh included. This item stays open. A run at or under 100 ms is recorded here and does not close it.
+- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-13, release build of 1.0.16 (`f53ad21`) on Plato: `plain1000` 128.7 ms, `list1000` 145.1 ms. The handlers were 39.4 ms and 42.0 ms. Both gate lines are over 100 ms, so the next pass optimizes. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
 
 ## Test defects
 
