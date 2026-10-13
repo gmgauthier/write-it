@@ -6,7 +6,7 @@ Reviewed again on 2026-10-12 against the v1.0.12 sources (`aef5e4c`). This pass 
 
 Measured again on 2026-10-13 against 1.0.16 (`f53ad21`), release build, with `tests/bench_key.cpp`. Both gate lines were over 100 ms. The standing item in Open owns the periodic rerun.
 
-Checked the same day, under Xvfb, on a short document: Insert → Page Break in ordinary text wrote `\page` and left the text on the same sheet. That is fixed, and it is not in a numbered release yet. The cell page break is first in Open.
+Checked the same day, under Xvfb, on a short document: Insert → Page Break in ordinary text wrote `\page` and left the text on the same sheet. That is fixed in 1.0.17. The cell page break is first in Open.
 
 `meson test` runs the file and document suites (`document`, `rtf-unicode`, `rtf-unicode-fuzz`, `import-clean`, `page`, `lists`, `styles`, `indents`, `alignment`, `spelling`, `open`, `filename`, `settings`, `units`, `font-sizes`, `view`, `page-count`), the window suites (`page-ui`, `justify-ui`, `status-bar`, `page-width`, `page-sheet`, `list-labels`, `list-tabs`, `list-draw`, `caret-scroll`, `window-width`, `window-memory`, `style-direct`, `style-ui`, `style-size-ui`, `font-size-ui`, `paragraph-dialog`, `capture`, `capture-count`, `paste-format`, `clipboard-paste`, `dirty-state`, `fast-typing`, `toolbar-overflow`, `print`, `template`, `undo`, `undo-fuzz`, `heading-paragraphs`, `open-identity`, `window-lifetime`), `smoke-open`, `desktop-file`, and the `guard-*` checks. The three `guard-*-fails` targets are expected to fail. The package build of this tag reported 50 passed, 3 expected failures, and 0 failures. This review did not re-run the suite. It read the 1.0 sources against the specification.
 
@@ -62,7 +62,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### Insert → Page Break in ordinary text starts the next sheet
 
-- Fixed, not yet in a numbered release.
+- Fixed in 1.0.17.
 - Severity: incorrect
 - Confidence: high
 - Where: `src/page_ui.cpp` `MainWindow::on_page_break`; `src/editor.cpp` `MainWindow::replace_buffer`, `MainWindow::update_page_seams`, `MainWindow::capture`
