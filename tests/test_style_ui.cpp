@@ -10,7 +10,10 @@
 // caret is in a table cell styles that cell, and typing there follows it.
 // A cell's highlight drops when the caret is placed in another cell or the
 // body. Choosing a heading leaves the pasteboard where the caret is, and a
-// heading in a cell has space above it.
+// heading in a cell has space above it. A heading on a document that holds
+// a table retags that line; the caret does not travel to the top of the
+// page and back. Opening a toolbar list and closing it leaves the pasteboard
+// where it was.
 // The font and the size apply in a cell, and the body paragraph keeps its own.
 
 #include "check.hpp"
@@ -22,6 +25,7 @@
 #include <gtkmm.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
@@ -42,6 +46,18 @@ struct MainWindowProbe {
   static Gtk::ComboBoxText& style_box(MainWindow& w)
   {
     return w.style_combo_;
+  }
+  static Gtk::ComboBoxText& font_box(MainWindow& w)
+  {
+    return w.font_combo_;
+  }
+  static Gtk::ComboBoxText& size_box(MainWindow& w)
+  {
+    return w.size_combo_;
+  }
+  static double text_vscroll(MainWindow& w)
+  {
+    return w.text_.get_vadjustment()->get_value();
   }
   static void style_dialog(MainWindow& w)
   {
@@ -161,6 +177,46 @@ struct MainWindowProbe {
   {
     return w.paste_.get_vadjustment()->get_value();
   }
+  static Glib::RefPtr<Gtk::Adjustment> vadj(MainWindow& w)
+  {
+    return w.paste_.get_vadjustment();
+  }
+  static Gtk::TextView& body(MainWindow& w)
+  {
+    return w.text_;
+  }
+  // The caret's y in the pasteboard's window. Negative when it cannot be
+  // mapped. A heading used to send this to the top and back while the
+  // scrollbar value stayed put.
+  static int caret_on_pasteboard(MainWindow& w)
+  {
+    if (!w.buffer_ || !w.text_.get_realized())
+      return -1;
+    Gdk::Rectangle rect;
+    w.text_.get_iter_location(w.buffer_->get_insert()->get_iter(), rect);
+    int wx = 0;
+    int wy = 0;
+    w.text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(), rect.get_y(), wx, wy);
+    int x = 0;
+    int y = 0;
+    if (!w.text_.translate_coordinates(w.paste_, wx, wy, x, y))
+      return -1;
+    return y;
+  }
+  // Leave the caret line in the middle of the window and stop following it.
+  static void center_caret(MainWindow& w)
+  {
+    int y = 0;
+    int height = 0;
+    if (!w.editing_caret_on_board(y, height))
+      return;
+    auto v = w.paste_.get_vadjustment();
+    const double page = v->get_page_size();
+    const double room = std::max(v->get_lower(), v->get_upper() - std::max(0.0, page));
+    const double want = static_cast<double>(y) + height / 2.0 - page / 2.0;
+    w.follow_caret_ = false;
+    v->set_value(std::max(v->get_lower(), std::min(want, room)));
+  }
   // Where the scrollbar would leave the caret: follow it no further.
   static void bold(MainWindow& w)
   {
@@ -217,6 +273,51 @@ void settle()
   }
   while (context->pending())
     context->iteration(false);
+}
+
+// A click on the list's button, which is what takes the keyboard. popup()
+// has no trigger event and does not.
+void open_list(Gtk::ComboBox& box)
+{
+  GtkWidget* button = nullptr;
+  gtk_container_forall(
+      GTK_CONTAINER(box.gobj()),
+      [](GtkWidget* child, gpointer data) {
+        auto** slot = static_cast<GtkWidget**>(data);
+        if (*slot == nullptr && GTK_IS_BUTTON(child))
+          *slot = child;
+      },
+      &button);
+  if (!button || !gtk_widget_get_realized(button)) {
+    box.popup();
+    return;
+  }
+  GdkWindow* window = gtk_widget_get_window(button);
+  if (!window) {
+    box.popup();
+    return;
+  }
+  int origin_x = 0;
+  int origin_y = 0;
+  gdk_window_get_origin(window, &origin_x, &origin_y);
+  GtkAllocation allocation;
+  gtk_widget_get_allocation(button, &allocation);
+  auto pointer = box.get_display()->get_default_seat()->get_pointer();
+  GdkEvent* event = gdk_event_new(GDK_BUTTON_PRESS);
+  event->button.window = GDK_WINDOW(g_object_ref(window));
+  event->button.send_event = TRUE;
+  event->button.time = GDK_CURRENT_TIME;
+  event->button.x = allocation.x + allocation.width / 2.0;
+  event->button.y = allocation.y + allocation.height / 2.0;
+  event->button.x_root = origin_x + event->button.x;
+  event->button.y_root = origin_y + event->button.y;
+  event->button.button = 1;
+  if (pointer) {
+    gdk_event_set_device(event, pointer->gobj());
+    gdk_event_set_source_device(event, pointer->gobj());
+  }
+  gtk_widget_event(button, event);
+  gdk_event_free(event);
 }
 
 writeit::Paragraph para(const std::string& text)
@@ -284,7 +385,7 @@ Measured measure_style_dialog(writeit::MainWindow& window)
 
 }  // namespace
 
-constexpr int kChecks = 83;
+constexpr int kChecks = 112;
 
 int main(int argc, char* argv[])
 {
@@ -707,6 +808,177 @@ int main(int argc, char* argv[])
     if (at_cell < 200)
       std::cerr << "cell heading scrolled to " << at_cell << ", was " << at_table << "\n";
     CHECK(at_cell > 200);
+
+    // A toolbar list must leave the page where it is. Opening one and closing
+    // it used to jump to the top of the first page when the caret was at the
+    // bottom. Choosing a heading from the list used to pin that line to the
+    // bottom of the window.
+    writeit::Document parked = writeit::blank_document("Sans", 11);
+    for (int i = 0; i < 80; ++i)
+      parked.paragraphs.push_back(para("Paragraph " + std::to_string(i) + " of the letter."));
+    MainWindowProbe::load(window, parked);
+    window.resize(800, 500);
+    settle();
+    const int mid = MainWindowProbe::find(window, "Paragraph 30 ");
+    CHECK(mid > 0);
+    MainWindowProbe::select(window, mid, mid);
+    settle();
+    MainWindowProbe::center_caret(window);
+    settle();
+    const double parked_at = MainWindowProbe::vscroll(window);
+    CHECK(parked_at > 80);
+    auto stayed_at = [](double got, double was, const char* what) {
+      if (std::abs(got - was) >= 12.0)
+        std::cerr << what << " moved the page from " << was << " to " << got << "\n";
+      return std::abs(got - was) < 12.0;
+    };
+    auto flash = [&](Gtk::ComboBox& box, const char* what, double was) {
+      open_list(box);
+      settle();
+      box.popdown();
+      settle();
+      const double got = MainWindowProbe::vscroll(window);
+      const double inner = MainWindowProbe::text_vscroll(window);
+      if (std::abs(inner) > 1.0)
+        std::cerr << what << " scrolled the text view to " << inner << "\n";
+      CHECK(stayed_at(got, was, what));
+      CHECK(std::abs(inner) <= 1.0);
+    };
+    flash(MainWindowProbe::style_box(window), "style list", parked_at);
+    flash(MainWindowProbe::font_box(window), "font list", parked_at);
+    flash(MainWindowProbe::size_box(window), "size list", parked_at);
+
+    open_list(MainWindowProbe::style_box(window));
+    settle();
+    MainWindowProbe::style_box(window).set_active_text("Heading 1");
+    settle();
+    MainWindowProbe::style_box(window).popdown();
+    settle();
+    const double headed_at = MainWindowProbe::vscroll(window);
+    CHECK(stayed_at(headed_at, parked_at, "heading from the list"));
+    CHECK(MainWindowProbe::doc(window).paragraphs[31].style == "Heading 1");
+
+    const int line = MainWindowProbe::find(window, "Paragraph 30 ");
+    MainWindowProbe::select(window, line, line + 10);
+    settle();
+    MainWindowProbe::center_caret(window);
+    settle();
+    const double selected_at = MainWindowProbe::vscroll(window);
+    open_list(MainWindowProbe::style_box(window));
+    settle();
+    MainWindowProbe::style_box(window).set_active_text("Heading 2");
+    settle();
+    MainWindowProbe::style_box(window).popdown();
+    settle();
+    CHECK(stayed_at(MainWindowProbe::vscroll(window), selected_at, "heading on a selection"));
+    CHECK(MainWindowProbe::doc(window).paragraphs[31].style == "Heading 2");
+
+    MainWindowProbe::place_end(window);
+    settle();
+    const double at_foot = MainWindowProbe::vscroll(window);
+    CHECK(at_foot > 200);
+    flash(MainWindowProbe::style_box(window), "style list at the foot", at_foot);
+    flash(MainWindowProbe::font_box(window), "font list at the foot", at_foot);
+    flash(MainWindowProbe::size_box(window), "size list at the foot", at_foot);
+
+    // A table and a picture used to force the heading through a buffer
+    // rebuild. One measure while that ran was short, and the lines jumped
+    // up and then back. The scrollbar value after settle() was already the
+    // right one. The caret on the pasteboard has to stay put while it paints.
+    writeit::Document mixed = writeit::blank_document("Sans", 11);
+    for (int t = 0; t < 6; ++t) {
+      for (int i = 0; i < 8; ++i)
+        mixed.paragraphs.push_back(para("Paragraph " + std::to_string(t) + "." +
+                                        std::to_string(i) + " of the letter."));
+      const bool placed = writeit::insert_table(mixed.paragraphs, mixed.paragraphs.size(), 8, 2,
+                                                writeit::page_text_twips(mixed.page));
+      if (t == 0)
+        CHECK(placed);
+      for (writeit::Paragraph& paragraph : mixed.paragraphs) {
+        if (paragraph.cell.table == 0)
+          continue;
+        if (!paragraph.runs.empty() && !paragraph.runs[0].text.empty())
+          continue;
+        writeit::Run run;
+        run.text = "A line of text in the table cell, long enough to wrap.";
+        paragraph.runs = {run};
+      }
+    }
+    {
+      auto pix = Gdk::Pixbuf::create(Gdk::COLORSPACE_RGB, false, 8, 200, 1600);
+      pix->fill(0x335577ff);
+      gchar* bytes = nullptr;
+      gsize bytes_n = 0;
+      pix->save_to_buffer(bytes, bytes_n, "png");
+      writeit::Paragraph picture;
+      writeit::Run run;
+      writeit::Image image;
+      image.type = "png";
+      image.data.assign(bytes, bytes + bytes_n);
+      g_free(bytes);
+      run.image = std::move(image);
+      picture.runs.push_back(std::move(run));
+      mixed.paragraphs.push_back(std::move(picture));
+    }
+    for (int i = 0; i < 40; ++i)
+      mixed.paragraphs.push_back(para("Paragraph " + std::to_string(i) + " below the picture."));
+    MainWindowProbe::load(window, mixed);
+    window.resize(800, 500);
+    settle();
+    MainWindowProbe::place_end(window);
+    settle();
+    const double foot = MainWindowProbe::vscroll(window);
+    CHECK(foot > 200);
+    auto adj = MainWindowProbe::vadj(window);
+    double low = foot;
+    auto watch = adj->signal_value_changed().connect([&] {
+      low = std::min(low, adj->get_value());
+    });
+    open_list(MainWindowProbe::style_box(window));
+    settle();
+    const int origin = MainWindowProbe::caret_on_pasteboard(window);
+    CHECK(origin > 40);
+    int jumped = origin;
+    int paints = 0;
+    auto paint = MainWindowProbe::body(window).signal_draw().connect(
+        [&](const Cairo::RefPtr<Cairo::Context>&) {
+          ++paints;
+          const int y = MainWindowProbe::caret_on_pasteboard(window);
+          if (y < jumped)
+            jumped = y;
+          return false;
+        });
+    MainWindowProbe::style_box(window).set_active_text("Heading 1");
+    settle();
+    MainWindowProbe::style_box(window).popdown();
+    settle();
+    watch.disconnect();
+    paint.disconnect();
+    if (jumped < origin - 64)
+      std::cerr << "heading rebuild moved the caret from " << origin << " to " << jumped << "\n";
+    CHECK(jumped >= origin - 64);
+    const int caret_y = MainWindowProbe::caret_on_pasteboard(window);
+    if (caret_y < origin - 64)
+      std::cerr << "heading rebuild left the caret at " << caret_y << ", was " << origin << "\n";
+    CHECK(caret_y >= origin - 64);
+    CHECK(paints > 0);
+    if (std::abs(low - foot) >= 12.0)
+      std::cerr << "heading rebuild dipped from " << foot << " to " << low << "\n";
+    CHECK(std::abs(low - foot) < 12.0);
+    const double landed = MainWindowProbe::vscroll(window);
+    if (std::abs(landed - foot) >= 12.0)
+      std::cerr << "heading rebuild left the page at " << landed << ", was " << foot << "\n";
+    CHECK(std::abs(landed - foot) < 12.0);
+    const writeit::Document rebuilt = MainWindowProbe::doc(window);
+    const writeit::Paragraph* last_body = nullptr;
+    for (auto it = rebuilt.paragraphs.rbegin(); it != rebuilt.paragraphs.rend(); ++it) {
+      if (it->cell.table == 0 && !(it->runs.size() == 1 && it->runs[0].image)) {
+        last_body = &*it;
+        break;
+      }
+    }
+    CHECK(last_body != nullptr && last_body->style == "Heading 1");
+    CHECK(!rebuilt.paragraphs.empty() && rebuilt.paragraphs.front().style != "Heading 1");
     window.hide();
     settle();
   }

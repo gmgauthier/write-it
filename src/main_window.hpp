@@ -141,9 +141,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void scroll_to_caret();
   // A style rebuild must not send the pasteboard to the first line. Hold the
   // scroll across the rebuild and put it back once the layout has settled.
+  // reveal is false for a style: the line may grow, and the page stays put.
   void hold_view();
-  void release_view();
-  void restore_held_view(bool finish);
+  void release_view(bool reveal = true);
+  void restore_held_view(bool finish, bool reveal = true);
   void reveal_editing_caret();
   bool editing_caret_on_board(int& y, int& height);
   // Page Down and Page Up, with or without Shift. For the same reason GTK
@@ -835,6 +836,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   // hold_view() is keeping the pasteboard where a style found it.
   bool hold_scroll_ = false;
   bool restore_scroll_ = false;
+  // While the hold is up, a rebuild must not move the pasteboard. The lock
+  // puts the value back before the next paint.
+  bool scroll_lock_ = false;
+  bool scroll_snapping_ = false;
+  sigc::connection scroll_lock_v_;
+  sigc::connection scroll_lock_h_;
   // release_other_selections() is collapsing a highlight. That mark move is
   // not the user placing the caret.
   bool releasing_ = false;

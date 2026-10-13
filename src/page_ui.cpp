@@ -22,22 +22,6 @@ void gtk_text_child_anchor_queue_resize(GtkTextChildAnchor* anchor, GtkTextLayou
 #include <vector>
 
 namespace writeit {
-namespace {
-
-constexpr int kPicturePx = 480;
-
-struct PaperPreset {
-  const char* name;
-  int width;
-  int height;
-};
-
-constexpr PaperPreset kPapers[] = {
-    {"A4", 11906, 16838},
-    {"Letter", 12240, 15840},
-    {"Legal", 12240, 20160},
-    {"Custom", 0, 0},
-};
 
 int chars_of(const Run& run)
 {
@@ -52,13 +36,6 @@ int chars_of(const Paragraph& paragraph)
   for (const Run& run : paragraph.runs)
     count += chars_of(run);
   return count;
-}
-
-TableSheet* sheet_from(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor)
-{
-  if (!anchor)
-    return nullptr;
-  return static_cast<TableSheet*>(g_object_get_data(G_OBJECT(anchor->gobj()), "writeit-table"));
 }
 
 // Buffer offset where paragraph `index` starts. A table is one anchor
@@ -88,6 +65,30 @@ int chars_before(const std::vector<Paragraph>& paragraphs, size_t index)
     ++i;
   }
   return offset;
+}
+
+namespace {
+
+constexpr int kPicturePx = 480;
+
+struct PaperPreset {
+  const char* name;
+  int width;
+  int height;
+};
+
+constexpr PaperPreset kPapers[] = {
+    {"A4", 11906, 16838},
+    {"Letter", 12240, 15840},
+    {"Legal", 12240, 20160},
+    {"Custom", 0, 0},
+};
+
+TableSheet* sheet_from(const Glib::RefPtr<Gtk::TextChildAnchor>& anchor)
+{
+  if (!anchor)
+    return nullptr;
+  return static_cast<TableSheet*>(g_object_get_data(G_OBJECT(anchor->gobj()), "writeit-table"));
 }
 
 bool blank_text(const std::string& text)
@@ -1993,7 +1994,7 @@ void MainWindow::apply_cell_style(TableSheet& sheet, const std::string& name)
   commit_document(before, after);
   typing_ = style_typing(applied);
   restore_cell_edit(saved);
-  release_view();
+  release_view(false);
 }
 
 void MainWindow::show_cell_style()

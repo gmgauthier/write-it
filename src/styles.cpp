@@ -252,7 +252,7 @@ void MainWindow::apply_named_style(const std::string& name)
   // instead of following that insert to the first line.
   hold_view();
   commit_document(before, after);
-  release_view();
+  release_view(false);
 }
 
 void MainWindow::apply_next_style()
@@ -353,6 +353,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   const std::vector<Paragraph> old_header = header_;
   const std::vector<Paragraph> old_footer = footer_;
   const std::vector<std::vector<Paragraph>> old_notes = notes_;
+  bool replaced = false;
   {
     struct Suspend {
       UndoHistory& undo;
@@ -369,24 +370,31 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
         if (on)
           undo.suspend(false);
       }
-    } suspend(undo_, table);
+    };
     restoring_ = true;
     // With the text the same (a style or a style's format changed), only the
     // paragraphs that changed are retagged, so the step records them and not
     // the whole document. Page setup and the stories are not in the buffer.
-    // A table always rebuilds when the body changed: retagging would leave
-    // the anchor without a grid. A note key leaves the body as it is.
-    if (stories_only || (!table && retag_paragraphs(before, after)))
+    // A table or a picture stays on the page: clearing the buffer to retag
+    // one line unmounts every grid, and the lines jump up and back. The
+    // anchor is only rebuilt when the characters really changed. A note key
+    // leaves the body as it is. Retag runs with the history recording, so
+    // undo puts the tags back without rebuilding. The rebuild's own history
+    // is suspended, and one custom step stands for it.
+    if (stories_only || retag_paragraphs(before, after))
       install_stories(after);
-    else
+    else {
+      Suspend suspend(undo_, table);
       replace_buffer(after, insert);
+      replaced = true;
+    }
     const int count = buffer_->get_char_count();
     const int at = std::max(0, std::min(insert, count));
     const int to = std::max(0, std::min(bound, count));
     buffer_->select_range(buffer_->get_iter_at_offset(at), buffer_->get_iter_at_offset(to));
     restoring_ = false;
   }
-  if (table && !stories_only) {
+  if (table && replaced) {
     const Document undo_doc = before;
     const Document redo_doc = after;
     undo_.record_custom(
@@ -444,47 +452,63 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
 {
   if (before.paragraphs.size() != after.paragraphs.size() || after.paragraphs.empty())
     return false;
-  // A picture is a pixbuf and contributes no characters. The length check
-  // below would succeed, and the loop skips a run with no text, so the
-  // picture never reaches the page. A document that already holds one fails
-  // that check and rebuilds; a new document, or one with only text, does not.
-  auto pictured = [](const Document& doc) {
-    for (const Paragraph& paragraph : doc.paragraphs) {
+  // The characters have to already be the buffer's. A table is one anchor
+  // and a picture is one character; neither is the text of its runs. A cell
+  // that changed has to be mounted again. Anything else is tags, and
+  // clearing the buffer to write them drops the grids and the pictures.
+  auto same_chars = [](const Paragraph& a, const Paragraph& b) {
+    std::string text_a;
+    std::string text_b;
+    std::vector<int> images_a;
+    std::vector<int> images_b;
+    auto collect = [](const Paragraph& paragraph, std::string& text, std::vector<int>& images) {
+      int chars = 0;
       for (const Run& run : paragraph.runs) {
-        if (run.image)
-          return true;
+        if (run.image) {
+          images.push_back(chars);
+          ++chars;
+          continue;
+        }
+        text += run.text;
+        chars += static_cast<int>(Glib::ustring(run.text).length());
       }
-    }
-    return false;
+    };
+    collect(a, text_a, images_a);
+    collect(b, text_b, images_b);
+    return text_a == text_b && images_a == images_b;
   };
-  if (pictured(before) || pictured(after))
-    return false;
-  auto text = [](const Paragraph& p) {
-    std::string out;
-    for (const Run& run : p.runs)
-      out += run.text;
-    return out;
-  };
-  std::vector<int> starts;
-  int at = 0;
   for (size_t i = 0; i < after.paragraphs.size(); ++i) {
-    const std::string mine = text(after.paragraphs[i]);
-    if (mine != text(before.paragraphs[i]))
+    const Paragraph& was = before.paragraphs[i];
+    const Paragraph& now = after.paragraphs[i];
+    if ((was.cell.table == 0) != (now.cell.table == 0) || was.cell.table != now.cell.table)
       return false;
-    starts.push_back(at);
-    at += static_cast<int>(Glib::ustring(mine).length()) + 1;
+    if (now.cell.table != 0) {
+      if (!(was == now))
+        return false;
+      continue;
+    }
+    if (!same_chars(was, now))
+      return false;
   }
-  const int count = buffer_->get_char_count();
-  if (at - 1 != count)
+  const int count = buffer_ ? buffer_->get_char_count() : 0;
+  const int spanned = chars_before(after.paragraphs, after.paragraphs.size());
+  // The last paragraph stores no newline. An empty page break stores a pad
+  // instead, which this offset does not count, so that document rebuilds.
+  const bool ends_on_table = after.paragraphs.back().cell.table != 0;
+  if (ends_on_table) {
+    if (spanned != count)
+      return false;
+  } else if (spanned - 1 != count) {
     return false;
+  }
   styles_ = after.styles;
   const size_t last = after.paragraphs.size() - 1;
   for (size_t i = 0; i <= last; ++i) {
     const Paragraph& paragraph = after.paragraphs[i];
-    if (paragraph == before.paragraphs[i])
+    if (paragraph.cell.table != 0 || paragraph == before.paragraphs[i])
       continue;
-    const int start = starts[i];
-    const int end = i < last ? starts[i + 1] : count;
+    const int start = chars_before(after.paragraphs, i);
+    const int end = i < last ? chars_before(after.paragraphs, i + 1) : count;
     // Everything but the screen-only list tags, which follow by themselves.
     std::vector<Glib::RefPtr<Gtk::TextTag>> old_tags;
     for (auto it = buffer_->get_iter_at_offset(start); it.get_offset() < end;) {
@@ -501,17 +525,20 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
     for (const auto& tag : old_tags)
       buffer_->remove_tag(tag, buffer_->get_iter_at_offset(start),
                           buffer_->get_iter_at_offset(end));
-    // Then as replace_buffer() builds a paragraph.
+    // Then as replace_buffer() builds a paragraph. A picture is one
+    // character and keeps no character format.
     const auto para = para_tag(para_format(paragraph));
     int run_at = start;
     bool any = false;
     for (const Run& run : paragraph.runs) {
-      if (run.text.empty())
+      const int n = chars_of(run);
+      if (n <= 0)
         continue;
-      const int run_end = run_at + static_cast<int>(Glib::ustring(run.text).length());
+      const int run_end = run_at + n;
       auto from = buffer_->get_iter_at_offset(run_at);
       auto to = buffer_->get_iter_at_offset(run_end);
-      buffer_->apply_tag(format_tag(run), from, to);
+      if (!run.image)
+        buffer_->apply_tag(format_tag(run), from, to);
       if (paragraph.heading >= 1 && paragraph.heading <= 6)
         buffer_->apply_tag(heading_tag(paragraph.heading), from, to);
       buffer_->apply_tag(para, from, to);

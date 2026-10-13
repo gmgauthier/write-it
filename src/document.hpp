@@ -402,6 +402,14 @@ void restyle_run(Run& run, const Style& from, const Style& to);
 // remembered indents move instead), the alignment and the outline level.
 // False when the sheet has no such style.
 bool apply_style(Document& doc, size_t first, size_t last, const std::string& name);
+// Characters of a run in the body buffer. A picture is one character.
+int chars_of(const Run& run);
+int chars_of(const Paragraph& paragraph);
+// Buffer offset where paragraph `index` starts. A table is one anchor
+// character; its cells share that offset. A newline after the anchor, when
+// another paragraph follows, is a separator. One past the last paragraph
+// counts a newline the last paragraph does not store.
+int chars_before(const std::vector<Paragraph>& paragraphs, size_t index);
 // Gives one paragraph the style `to`. An attribute whose direct bit is unset
 // takes the style's value and the bit stays unset, even when the old value
 // differed from the paragraph's previous style. A set bit is left alone.
