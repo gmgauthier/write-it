@@ -1207,7 +1207,8 @@ void MainWindow::queue_page_status()
 }
 
 // "Page n of m". The count follows the page setup. A page break is kept, and
-// the count includes the sheet it starts. See page_count() in view.hpp. The
+// the count includes the sheet it starts. A page break on a table cell does
+// not. See page_count() in view.hpp. The
 // gray between sheets is not part of the count: seam_extra_through() takes
 // it back out.
 void MainWindow::update_page_status()

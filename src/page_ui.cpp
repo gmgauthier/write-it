@@ -3181,10 +3181,31 @@ void MainWindow::on_columns()
   }
 }
 
+bool MainWindow::caret_in_table() const
+{
+  if (!buffer_)
+    return false;
+  // The Insert menu takes the keyboard. The cell that was edited stays
+  // recorded, and the body caret stays on the table's anchor.
+  if (editing_cell() || sheet_at_cursor())
+    return true;
+  return para_at(cursor_offset()).cell.table != 0;
+}
+
 void MainWindow::on_page_break()
 {
   if (!buffer_)
     return;
+  // A page break has no meaning inside a table. The command leaves the
+  // document and the caret where they are, and the status line says why.
+  if (caret_in_table()) {
+    message_.set_text("Cannot break the page inside a table.");
+    // The same cell, not the top-left one. focus_table_caret() would jump.
+    restore_edit_focus();
+    return;
+  }
+  if (message_.get_text() == "Cannot break the page inside a table.")
+    message_.set_text("");
   Document before = capture();
   if (before.paragraphs.empty())
     before.paragraphs.emplace_back();

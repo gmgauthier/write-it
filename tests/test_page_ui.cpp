@@ -45,6 +45,11 @@ struct MainWindowProbe {
     return window.page_label_.get_text();
   }
 
+  static std::string message(MainWindow& window)
+  {
+    return window.message_.get_text();
+  }
+
   static int seams(MainWindow& window)
   {
     int count = 0;
@@ -866,7 +871,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 191;
+constexpr int kChecks = 205;
 
 int main(int argc, char* argv[])
 {
@@ -1093,6 +1098,67 @@ int main(int argc, char* argv[])
       CHECK(writeit::MainWindowProbe::doc(window).paragraphs[0].cell.rows == rows_before);
     } else {
       for (int i = 0; i < 53; ++i)
+        CHECK(false);
+    }
+
+    // Insert → Page Break in a cell writes nothing and says so. A break
+    // already stored on a cell does not start a sheet. Ordinary text still
+    // does. The item stays available so the status line can say why.
+    if (page_break) {
+      writeit::Document grid;
+      writeit::insert_table(grid.paragraphs, 0, 2, 2, writeit::page_text_twips(grid.page));
+      const char* names[] = {"A", "B", "C", "D"};
+      for (int i = 0; i < 4; ++i) {
+        writeit::Run run;
+        run.text = names[i];
+        grid.paragraphs[static_cast<size_t>(i)].runs.push_back(run);
+      }
+      writeit::MainWindowProbe::load(window, grid);
+      settle();
+      writeit::MainWindowProbe::focus_table_cell(window, 0, 1, 1);
+      settle();
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 1));
+      writeit::MainWindowProbe::focus_body_quietly(window);
+      settle();
+      CHECK(page_break->get_sensitive());
+      activate(page_break);
+      settle();
+      writeit::Document refused = writeit::MainWindowProbe::doc(window);
+      bool any_break = false;
+      for (const writeit::Paragraph& paragraph : refused.paragraphs) {
+        if (paragraph.page_break)
+          any_break = true;
+      }
+      CHECK(!any_break);
+      CHECK(cell_text(refused, 1, 1) == "D");
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 1 of 1");
+      CHECK(writeit::MainWindowProbe::message(window) == "Cannot break the page inside a table.");
+      CHECK(writeit::MainWindowProbe::cell_focused(window, 0, 1, 1));
+      CHECK(!writeit::MainWindowProbe::cell_focused(window, 0, 0, 0));
+
+      grid.paragraphs[0].page_break = true;
+      writeit::MainWindowProbe::load(window, grid);
+      settle();
+      CHECK(writeit::MainWindowProbe::doc(window).paragraphs[0].page_break);
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 1 of 1");
+      CHECK(writeit::MainWindowProbe::seams(window) == 0);
+
+      writeit::Document letter;
+      writeit::Paragraph hello;
+      writeit::Run run;
+      run.text = "Hello";
+      hello.runs.push_back(run);
+      letter.paragraphs.push_back(hello);
+      writeit::MainWindowProbe::load(window, letter);
+      settle();
+      writeit::MainWindowProbe::caret(window, 0);
+      activate(page_break);
+      settle();
+      CHECK(writeit::MainWindowProbe::doc(window).paragraphs[0].page_break);
+      CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
+      CHECK(writeit::MainWindowProbe::message(window).empty());
+    } else {
+      for (int i = 0; i < 14; ++i)
         CHECK(false);
     }
 

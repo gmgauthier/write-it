@@ -3062,7 +3062,9 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
   // Draft keeps this gap above a page break. Page view replaces it with the
   // sheet seam. GTK's pixels-above is that gap, not space on every wrapped
   // line. A plain paragraph leaves it unset.
-  if (format.page_break)
+  // A page break on a cell paragraph is kept in the file and does not open a
+  // gap. The sheet break belongs to ordinary text.
+  if (format.page_break && format.cell.table == 0)
     tag->property_pixels_above_lines() = 18;
   if (format.align == Align::Center)
     tag->property_justification() = Gtk::JUSTIFY_CENTER;
@@ -4380,13 +4382,19 @@ int MainWindow::seam_extra_through(int offset) const
   return extra;
 }
 
+bool MainWindow::starts_sheet(int offset) const
+{
+  const ParaFormat format = para_at(offset);
+  return format.page_break && format.cell.table == 0;
+}
+
 bool MainWindow::has_page_break() const
 {
   if (!buffer_)
     return false;
   const int count = buffer_->get_char_count();
   for (int start = 0; start <= count;) {
-    if (para_at(start).page_break)
+    if (starts_sheet(start))
       return true;
     const int end = paragraph_end(start);
     if (end <= start)
@@ -4439,7 +4447,7 @@ int MainWindow::sheet_y(int offset) const
       }
     }
     block.end = next < 0 ? count : next;
-    block.page_break = para_at(block.start).page_break;
+    block.page_break = starts_sheet(block.start);
     blocks.push_back(block);
     if (next < 0)
       break;
@@ -4928,7 +4936,7 @@ void MainWindow::update_page_seams()
       }
     }
     block.end = next < 0 ? count : next;
-    block.page_break = para_at(block.start).page_break;
+    block.page_break = starts_sheet(block.start);
     blocks.push_back(block);
     if (next < 0)
       break;
