@@ -67,7 +67,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Confidence: high
 - Where: `src/page_ui.cpp` `MainWindow::on_page_break`; `src/editor.cpp` `MainWindow::replace_buffer`, `MainWindow::update_page_seams`, `MainWindow::capture`
 - Trigger: In a paragraph that is not in a table, choose Insert → Page Break. The caret may be at the end of the document, at the start of a paragraph, in the middle of a paragraph, or at the end of a paragraph that has another after it.
-- Outcome: The marked paragraph starts the next sheet. Save still writes `\page`. The status counts that sheet, in Page and in Draft. At the end of the document the appended paragraph is the new sheet. Typing on it keeps the break and does not store the layout pad. A page break in a table cell is still the open item above.
+- Outcome: The marked paragraph starts the next sheet. Save still writes `\page`. The status counts that sheet, in Page and in Draft. At the end of the document the appended paragraph is the new sheet. Typing on it keeps the break and does not store the layout pad. Enter in that paragraph does not give the new line a break of its own. A page break in a table cell is still the open item above.
 
 ### A footnote on a later page sits with the notes on the first page
 

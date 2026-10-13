@@ -616,8 +616,13 @@ void MainWindow::build_editor()
       [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
         auto start = end;
         start.backward_chars(static_cast<int>(text.length()));
-        if (text.find('\n') != Glib::ustring::npos)
+        if (text.find('\n') != Glib::ustring::npos) {
           tabs_renumber_ = true;
+          // The first newline of this keystroke. A page break stays on the
+          // paragraph that had it; the line Enter adds does not take another.
+          if (in_user_ && inserted_newline_at_ < 0)
+            inserted_newline_at_ = start.get_offset();
+        }
         note_list_tabs(start, end);
       },
       true);
@@ -1731,6 +1736,7 @@ void MainWindow::on_user_begin()
 {
   if (loading_ || restoring_ || dropping_pad_)
     return;
+  inserted_newline_at_ = -1;
   in_user_ = true;
   touched_ = false;
   open_step();
@@ -3263,6 +3269,8 @@ void MainWindow::normalise_paragraphs()
   // Only the paragraphs the action touched can have come apart: the others
   // were whole after the last action, so typing costs a paragraph, not the
   // document.
+  const int newline_at = inserted_newline_at_;
+  inserted_newline_at_ = -1;
   if (!touched_)
     return;
   touched_ = false;
@@ -3276,6 +3284,18 @@ void MainWindow::normalise_paragraphs()
     carry = para_tag_at(buffer_->get_iter_at_offset(paragraph_start(begin - 1)));
   if (!carry)
     carry = para_tag(ParaFormat{});
+  // Enter splits one paragraph into two that share its tag. The page break
+  // stays on the paragraph that already started the sheet: the text, when
+  // the newline was inserted at its start, otherwise the paragraph that
+  // contains the newline. The other half does not start another sheet.
+  int keeper = -1;
+  if (newline_at >= 0) {
+    if (paragraph_start(newline_at) == newline_at)
+      keeper = newline_at + 1;
+    else
+      keeper = paragraph_start(newline_at);
+  }
+  const bool keeper_break = keeper >= 0 && para_at(keeper).page_break;
   normalising_ = true;
   while (begin < count && begin <= last) {
     Glib::RefPtr<Gtk::TextTag> chosen;
@@ -3305,6 +3325,14 @@ void MainWindow::normalise_paragraphs()
         chosen = carry;
       }
       uniform = false;
+    }
+    if (keeper_break && begin != keeper && chosen) {
+      ParaFormat format;
+      if (parse_para(tag_name(chosen), format) && format.page_break) {
+        format.page_break = false;
+        chosen = para_tag(format);
+        uniform = false;
+      }
     }
     if (!uniform) {
       for (const auto& tag : seen)

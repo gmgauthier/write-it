@@ -845,6 +845,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool seaming_ = false;
   // drop_page_break_pads() is erasing the layout pad. That is not a new edit.
   bool dropping_pad_ = false;
+  // Offset of the first newline inserted by the open user action, or -1.
+  int inserted_newline_at_ = -1;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;
