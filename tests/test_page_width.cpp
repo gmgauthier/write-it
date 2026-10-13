@@ -85,8 +85,9 @@ constexpr int kRight = 3;
 void settle()
 {
   auto context = Glib::MainContext::get_default();
-  // Layout runs in idles and in the frame clock; give both a few rounds.
-  for (int round = 0; round < 6; ++round) {
+  // Layout runs in idles and in the frame clock. Two rounds are enough for a
+  // zoom or a view change; this suite does that a few hundred times.
+  for (int round = 0; round < 2; ++round) {
     while (context->pending())
       context->iteration(false);
     g_usleep(20000);
