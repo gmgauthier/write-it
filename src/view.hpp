@@ -58,9 +58,9 @@ int page_sheet_height(double zoom);
 // The status bar's "Page n of m". A page holds the sheet's height less its
 // top and bottom margins: 692 px of laid-out text at 100% on the default
 // A4 page. The count is how many of those the text fills, and the page is
-// the one the caret's line starts on. A page break is kept and written; it
-// does not change the count. Text and page both scale with the zoom, so
-// neither the zoom nor the view changes the count, short of rounding.
+// the one the caret's line starts on. A page break is kept and written, and
+// the count includes the sheet it starts. Text and page both scale with the
+// zoom, so neither the zoom nor the view changes the count, short of rounding.
 // Page view draws that count as separate sheets, with this gap of the gray
 // pasteboard between them. The gap is screen-only. Draft draws neither it
 // nor the sheet.
