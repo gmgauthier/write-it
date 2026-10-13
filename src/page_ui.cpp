@@ -14,8 +14,8 @@ void gtk_text_child_anchor_queue_resize(GtkTextChildAnchor* anchor, GtkTextLayou
 }
 
 #include <algorithm>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -2143,6 +2143,129 @@ void MainWindow::install_stories(const Document& doc)
   refresh_stories();
 }
 
+void MainWindow::queue_note_numbers()
+{
+  if (note_numbers_idle_.connected())
+    return;
+  note_numbers_idle_ = Glib::signal_idle().connect([this] {
+    // Cleared first, so a resize during the align can ask for another pass.
+    note_numbers_idle_.disconnect();
+    align_note_numbers();
+    return false;
+  });
+}
+
+void MainWindow::align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::Label& first_label,
+                                 std::vector<Gtk::Label*>& labels, std::vector<int>& ys,
+                                 const std::vector<int>& numbers)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  // The same split notes_from_text uses. One newline is another paragraph of
+  // this note. Two newlines start the next note, so its number follows that
+  // line rather than the source line the number used to occupy.
+  const Glib::ustring text = buffer->get_text();
+  std::vector<int> starts;
+  if (!text.empty() || !notes_.empty()) {
+    starts.push_back(0);
+    for (int i = 0; i + 1 < static_cast<int>(text.size()); ++i) {
+      if (text[static_cast<size_t>(i)] != '\n' || text[static_cast<size_t>(i + 1)] != '\n')
+        continue;
+      if (starts.size() >= static_cast<size_t>(kMaxNotes))
+        break;
+      starts.push_back(i + 2);
+      ++i;
+    }
+  }
+
+  if (labels.empty())
+    labels.push_back(&first_label);
+  while (labels.size() < starts.size()) {
+    auto* label = Gtk::manage(new Gtk::Label());
+    label->set_halign(Gtk::ALIGN_START);
+    label->set_valign(Gtk::ALIGN_START);
+    marks.put(*label, 0, 0);
+    labels.push_back(label);
+  }
+  if (ys.size() < labels.size())
+    ys.resize(labels.size(), -1);
+
+  if (starts.empty()) {
+    first_label.set_text("");
+    for (Gtk::Label* label : labels) {
+      if (label)
+        label->hide();
+    }
+    return;
+  }
+
+  const int chars = buffer->get_char_count();
+  auto y_at = [&](int offset) {
+    offset = std::max(0, std::min(offset, chars));
+    Gdk::Rectangle loc;
+    view.get_iter_location(buffer->get_iter_at_offset(offset), loc);
+    int wx = 0;
+    int wy = 0;
+    view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, loc.get_x(), loc.get_y(), wx, wy);
+    return std::max(0, wy);
+  };
+
+  for (size_t i = 0; i < labels.size(); ++i) {
+    Gtk::Label* label = labels[i];
+    if (!label)
+      continue;
+    if (i >= starts.size()) {
+      label->hide();
+      if (label->get_parent() == &marks && ys[i] != 0) {
+        marks.move(*label, 0, 0);
+        ys[i] = 0;
+      }
+      continue;
+    }
+    int number = static_cast<int>(i) + 1;
+    if (!numbers.empty()) {
+      if (i < numbers.size())
+        number = numbers[i];
+      else
+        number = numbers.back() + static_cast<int>(i - numbers.size()) + 1;
+    }
+    const std::string shown = std::to_string(number);
+    if (label->get_text() != shown)
+      label->set_text(shown);
+    const int y = y_at(starts[i]);
+    if (label->get_parent() != &marks)
+      marks.put(*label, 0, y);
+    else if (ys[i] != y)
+      marks.move(*label, 0, y);
+    ys[i] = y;
+    label->show();
+  }
+  marks.show();
+}
+
+void MainWindow::align_note_numbers()
+{
+  if (note_groups_.size() <= 1) {
+    align_note_view(notes_view_, note_marks_, note_label_, note_numbers_, note_number_y_, {});
+    return;
+  }
+  for (size_t g = 0; g < note_groups_.size(); ++g) {
+    std::vector<int> numbers;
+    for (int index : note_groups_[g].indexes)
+      numbers.push_back(index + 1);
+    if (g == 0) {
+      align_note_view(notes_view_, note_marks_, note_label_, note_numbers_, note_number_y_,
+                      numbers);
+      continue;
+    }
+    if (g - 1 >= note_bands_.size() || !note_bands_[g - 1])
+      continue;
+    NoteBand& band = *note_bands_[g - 1];
+    align_note_view(band.view, band.marks, band.label, band.numbers, band.number_y, numbers);
+  }
+}
+
 void MainWindow::refresh_stories()
 {
   const bool has = story_present(header_) || story_present(footer_);
@@ -2153,8 +2276,13 @@ void MainWindow::refresh_stories()
     suppress_stories_ = false;
   }
   auto fill = [this](Gtk::TextView& view, const std::string& text, std::string& shown) {
-    if (text == shown && view.get_buffer()->get_text().raw() == text)
+    auto buffer = view.get_buffer();
+    // The keystroke is already in the view. Replacing the whole buffer
+    // collapses the note and grows it again, so the page jumps twice.
+    if (buffer && buffer->get_text().raw() == text) {
+      shown = text;
       return;
+    }
     const bool was = loading_;
     loading_ = true;
     view.get_buffer()->set_text(text);
@@ -2163,16 +2291,42 @@ void MainWindow::refresh_stories()
   };
   fill(header_view_, story_text(header_), header_shown_);
   fill(footer_view_, story_text(footer_), footer_shown_);
-  fill(notes_view_, notes_text(notes_), notes_shown_);
+  // A rebuild can arrive with groups from the document that was just
+  // replaced. Those indexes are not this one's notes. Show the whole column
+  // until the next seam pass splits it again.
+  if (note_groups_.size() > 1) {
+    std::vector<char> seen(notes_.size(), 0);
+    bool cover = true;
+    for (const NoteGroup& group : note_groups_) {
+      for (int index : group.indexes) {
+        if (index < 0 || index >= static_cast<int>(seen.size()) || seen[static_cast<size_t>(index)])
+          cover = false;
+        else
+          seen[static_cast<size_t>(index)] = 1;
+      }
+    }
+    if (cover) {
+      for (char bit : seen) {
+        if (!bit)
+          cover = false;
+      }
+    }
+    if (!cover)
+      note_groups_.clear();
+  }
+  if (note_groups_.size() <= 1) {
+    fill(notes_view_, notes_text(notes_), notes_shown_);
+  } else {
+    for (size_t i = 0; i < note_groups_.size(); ++i) {
+      Gtk::TextView& view = i == 0 ? notes_view_ : ensure_note_band(i - 1).view;
+      std::string extra;
+      fill(view, note_group_text(note_groups_[i]), i == 0 ? notes_shown_ : extra);
+    }
+  }
   if (reveal_note_ > static_cast<int>(notes_.size()))
     reveal_note_ = 0;
-  std::string numbers;
-  for (size_t i = 0; i < notes_.size(); ++i) {
-    if (i)
-      numbers += "\n\n";
-    numbers += std::to_string(i + 1);
-  }
-  note_label_.set_text(numbers);
+  align_note_numbers();
+  queue_note_numbers();
 
   const bool page = view_ == ViewMode::Page;
   const bool show_frames = page && stories_on_;
@@ -2210,18 +2364,289 @@ int MainWindow::note_block_px() const
   int min_h = 0;
   int nat_h = 0;
   note_box_.get_preferred_height(min_h, nat_h);
+  // Mid-key the text view's layout is invalid and this height is one line,
+  // or nothing. The band already on the page is the real one. A taller
+  // measurement is a new line, and that one is applied.
+  if (note_editing_ && note_h_ > 1 && nat_h < note_h_)
+    return note_h_;
   if (nat_h > 1)
     return nat_h;
   return std::max(1, static_cast<int>(std::ceil(18 * std::max(0.5, zoom_factor()))));
 }
 
+std::string MainWindow::note_group_text(const NoteGroup& group) const
+{
+  std::vector<std::vector<Paragraph>> slice;
+  for (int index : group.indexes) {
+    if (index < 0 || index >= static_cast<int>(notes_.size()))
+      continue;
+    slice.push_back(notes_[static_cast<size_t>(index)]);
+  }
+  return notes_text(slice);
+}
+
+void MainWindow::show_note_text(Gtk::TextView& view, const std::string& text)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer || buffer->get_text().raw() == text)
+    return;
+  // set_text ends a user action. That would commit the slice as a new edit
+  // while a seam pass is only showing it.
+  const bool was = loading_;
+  loading_ = true;
+  buffer->set_text(text);
+  if (&view == &notes_view_)
+    notes_shown_ = text;
+  loading_ = was;
+}
+
+namespace {
+
+int note_line_y(Gtk::TextView& view, const Glib::RefPtr<Gtk::TextBuffer>& buffer, int offset)
+{
+  const int chars = buffer->get_char_count();
+  offset = std::max(0, std::min(offset, chars));
+  Gdk::Rectangle loc;
+  view.get_iter_location(buffer->get_iter_at_offset(offset), loc);
+  int wx = 0;
+  int wy = 0;
+  view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, loc.get_x(), loc.get_y(), wx, wy);
+  return std::max(0, wy);
+}
+
+}  // namespace
+
+int MainWindow::measure_note_group(const NoteGroup& group)
+{
+  if (group.indexes.empty())
+    return 0;
+  auto buffer = notes_view_.get_buffer();
+  const std::string full = notes_text(notes_);
+  if (buffer && buffer->get_text().raw() == full) {
+    std::vector<int> starts;
+    starts.push_back(0);
+    for (int i = 0; i + 1 < static_cast<int>(full.size()); ++i) {
+      if (full[static_cast<size_t>(i)] != '\n' || full[static_cast<size_t>(i + 1)] != '\n')
+        continue;
+      starts.push_back(i + 2);
+      ++i;
+      if (starts.size() >= notes_.size())
+        break;
+    }
+    auto piece = [&](int index) {
+      if (index < 0 || index >= static_cast<int>(starts.size()))
+        return 0;
+      const int y0 = note_line_y(notes_view_, buffer, starts[static_cast<size_t>(index)]);
+      // The next note starts after a blank line. That line's top is the
+      // bottom of this note. The last note has no blank after it, so a
+      // one-line note reports the same y at both ends: use the line's height.
+      int end_at = buffer->get_char_count();
+      if (index + 1 < static_cast<int>(starts.size()))
+        end_at = std::max(0, starts[static_cast<size_t>(index + 1)] - 1);
+      const int y1 = note_line_y(notes_view_, buffer, end_at);
+      if (y1 > y0)
+        return y1 - y0;
+      Gdk::Rectangle loc;
+      const int chars = buffer->get_char_count();
+      const int at = std::max(0, std::min(starts[static_cast<size_t>(index)], chars));
+      notes_view_.get_iter_location(buffer->get_iter_at_offset(at), loc);
+      return std::max(0, loc.get_height());
+    };
+    int blank = 0;
+    if (starts.size() >= 2) {
+      const int at = std::max(0, starts[1] - 1);
+      blank = std::max(
+          0, note_line_y(notes_view_, buffer, starts[1]) - note_line_y(notes_view_, buffer, at));
+    }
+    int height = 0;
+    bool any = false;
+    for (size_t k = 0; k < group.indexes.size(); ++k) {
+      const int part = piece(group.indexes[k]);
+      if (part <= 0)
+        continue;
+      if (any)
+        height += blank;
+      height += part;
+      any = true;
+    }
+    if (height > 1)
+      return height;
+  }
+
+  auto held = [&](Gtk::Widget& box, int remembered) {
+    int min_h = 0;
+    int nat_h = 0;
+    box.get_preferred_height(min_h, nat_h);
+    if (note_editing_ && remembered > 1 && nat_h < remembered)
+      return remembered;
+    return nat_h > 1 ? nat_h : 0;
+  };
+  if (!note_groups_.empty() && group.indexes == note_groups_.front().indexes) {
+    const int drawn = held(note_box_, note_h_);
+    if (drawn > 1)
+      return drawn;
+  }
+  for (size_t i = 1; i < note_groups_.size() && i - 1 < note_bands_.size(); ++i) {
+    if (!note_bands_[i - 1] || note_groups_[i].indexes != group.indexes)
+      continue;
+    const int drawn = held(note_bands_[i - 1]->box, note_bands_[i - 1]->h);
+    if (drawn > 1)
+      return drawn;
+  }
+
+  const std::string text = note_group_text(group);
+  auto layout =
+      notes_view_.create_pango_layout(text.empty() ? Glib::ustring(" ") : Glib::ustring(text));
+  const ViewGeometry sheet = geometry();
+  const int width =
+      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  const int inner = std::max(40, width - 36);
+  layout->set_width(inner * PANGO_SCALE);
+  layout->set_wrap(Pango::WRAP_WORD_CHAR);
+  int layout_w = 0;
+  int layout_h = 0;
+  layout->get_pixel_size(layout_w, layout_h);
+  return std::max(1, layout_h);
+}
+
+bool MainWindow::note_overlay_box(GtkWidget* widget, int& x, int& y, int& w, int& h) const
+{
+  if (widget == GTK_WIDGET(note_box_.gobj())) {
+    x = note_x_;
+    y = note_y_;
+    w = note_w_;
+    h = note_h_;
+    return true;
+  }
+  for (const auto& band : note_bands_) {
+    if (!band || widget != GTK_WIDGET(band->box.gobj()))
+      continue;
+    x = band->x;
+    y = band->y;
+    w = band->w;
+    h = band->h;
+    return true;
+  }
+  return false;
+}
+
+bool MainWindow::is_note_view(const Gtk::Widget* widget) const
+{
+  if (widget == &notes_view_)
+    return true;
+  for (const auto& band : note_bands_) {
+    if (band && widget == &band->view)
+      return true;
+  }
+  return false;
+}
+
+Gtk::TextView* MainWindow::note_view_for(Gtk::Widget* widget)
+{
+  if (widget == &notes_view_)
+    return &notes_view_;
+  for (auto& band : note_bands_) {
+    if (band && widget == &band->view)
+      return &band->view;
+  }
+  return nullptr;
+}
+
+Gtk::TextView* MainWindow::view_for_note(int number)
+{
+  if (note_groups_.size() <= 1 || number <= 0)
+    return &notes_view_;
+  const int index = number - 1;
+  for (size_t g = 0; g < note_groups_.size(); ++g) {
+    const auto& indexes = note_groups_[g].indexes;
+    if (std::find(indexes.begin(), indexes.end(), index) == indexes.end())
+      continue;
+    if (g == 0)
+      return &notes_view_;
+    if (g - 1 < note_bands_.size() && note_bands_[g - 1])
+      return &note_bands_[g - 1]->view;
+  }
+  return &notes_view_;
+}
+
+Gtk::Box* MainWindow::box_for_note(int number)
+{
+  if (note_groups_.size() <= 1 || number <= 0)
+    return &note_box_;
+  const int index = number - 1;
+  for (size_t g = 0; g < note_groups_.size(); ++g) {
+    const auto& indexes = note_groups_[g].indexes;
+    if (std::find(indexes.begin(), indexes.end(), index) == indexes.end())
+      continue;
+    if (g == 0)
+      return &note_box_;
+    if (g - 1 < note_bands_.size() && note_bands_[g - 1])
+      return &note_bands_[g - 1]->box;
+  }
+  return &note_box_;
+}
+
+MainWindow::NoteBand& MainWindow::ensure_note_band(size_t index)
+{
+  while (note_bands_.size() <= index)
+    note_bands_.push_back(std::make_unique<NoteBand>());
+  NoteBand& band = *note_bands_[index];
+  if (!band.wired)
+    wire_note_band(band);
+  return band;
+}
+
+void MainWindow::wire_note_band(NoteBand& band)
+{
+  band.view.set_wrap_mode(Gtk::WRAP_WORD_CHAR);
+  band.view.set_hexpand(true);
+  band.view.set_left_margin(8);
+  band.view.set_right_margin(8);
+  band.view.get_style_context()->add_class("page-text");
+  band.view.set_no_show_all(false);
+  band.label.set_halign(Gtk::ALIGN_START);
+  band.label.set_valign(Gtk::ALIGN_START);
+  band.marks.put(band.label, 0, 0);
+  band.marks.set_margin_right(6);
+  band.marks.set_halign(Gtk::ALIGN_START);
+  band.marks.set_valign(Gtk::ALIGN_START);
+  band.box.pack_start(band.marks, Gtk::PACK_SHRINK);
+  band.box.pack_start(band.view, Gtk::PACK_EXPAND_WIDGET);
+  band.box.set_halign(Gtk::ALIGN_START);
+  band.box.set_valign(Gtk::ALIGN_START);
+  band.box.set_no_show_all(true);
+  band.box.hide();
+  page_overlay_.add_overlay(band.box);
+  band.size_conn =
+      band.view.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
+  band.focus_in_conn = band.view.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    note_editing_ = true;
+    return false;
+  });
+  band.focus_out_conn = band.view.signal_focus_out_event().connect([this, &band](GdkEventFocus*) {
+    note_editing_ = false;
+    release_note_scroll(false);
+    if (!loading_ && band.view.get_parent() != nullptr)
+      place_notes();
+    return false;
+  });
+  band.end_conn = band.view.get_buffer()->signal_end_user_action().connect(
+      [this, &band] { on_note_view_end(band.view); });
+  band.key_conn =
+      band.view.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
+  band.wired = true;
+}
+
 void MainWindow::reveal_note_view()
 {
-  if (!note_box_.get_visible() || note_box_.get_parent() == nullptr)
+  Gtk::Box* box = box_for_note(reveal_note_);
+  if (!box)
+    box = &note_box_;
+  if (!box->get_visible() || box->get_parent() == nullptr)
     return;
   int x = 0;
   int y = 0;
-  if (!note_box_.translate_coordinates(board_, 0, 0, x, y))
+  if (!box->translate_coordinates(board_, 0, 0, x, y))
     return;
   auto adj = paste_.get_vadjustment();
   if (!adj)
@@ -2230,15 +2655,70 @@ void MainWindow::reveal_note_view()
   if (page <= 0)
     return;
   const double from = y;
-  const double size = std::max(1, note_box_.get_allocated_height());
-  const double pad = page >= size + 36 ? 18.0 : 0.0;
-  double want = adj->get_value();
-  if (from - pad < want)
+  const double size = std::max(1, box->get_allocated_height());
+  const double value = adj->get_value();
+  // Taller than the window: the top and the bottom cannot both be on screen.
+  // Asking for one and then the other alternates on each layout, so the page
+  // bounces under the line being typed. Bring the top in only when the note
+  // is off screen. A note that fits still slides in whole, with a little room.
+  const bool fits = page >= size + 36.0;
+  const double pad = fits ? 18.0 : 0.0;
+  double want = value;
+  if (!fits) {
+    if (from >= value + page || from + size <= value)
+      want = from;
+  } else if (from - pad < value) {
     want = from - pad;
-  else if (from + size + pad > want + page)
+  } else if (from + size + pad > value + page) {
+    want = from + size + pad - page;
+  }
+  want = std::max(adj->get_lower(), std::min(want, adj->get_upper() - page));
+  if (want != value)
+    adj->set_value(want);
+}
+
+void MainWindow::reveal_story_caret(Gtk::TextView& view)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer || !view.get_realized() || !view.get_visible() || view.get_allocated_height() <= 1)
+    return;
+  const Gtk::TextIter caret = buffer->get_insert()->get_iter();
+  Gdk::Rectangle rect;
+  view.get_iter_location(caret, rect);
+  if (rect.get_height() <= 0)
+    return;
+  // Before the lines are laid out every offset is reported at y 0. Scrolling
+  // there jumps the page to the top for one key, then back on the next.
+  if (rect.get_y() == 0 && caret.get_offset() > 0) {
+    Gdk::Rectangle end_rect;
+    view.get_iter_location(buffer->end(), end_rect);
+    if (end_rect.get_y() == 0)
+      return;
+  }
+  int wx = 0;
+  int wy = 0;
+  view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(), rect.get_y(), wx, wy);
+  int x = 0;
+  int y = 0;
+  if (!view.translate_coordinates(board_, wx, wy, x, y))
+    return;
+  auto adj = paste_.get_vadjustment();
+  if (!adj)
+    return;
+  const double page = adj->get_page_size();
+  if (page <= 0)
+    return;
+  const double from = y;
+  const double size = std::max(1, rect.get_height());
+  const double value = adj->get_value();
+  const double pad = page >= size + 36.0 ? 18.0 : 0.0;
+  double want = value;
+  if (from - pad < value)
+    want = from - pad;
+  else if (from + size + pad > value + page)
     want = from + size + pad - page;
   want = std::max(adj->get_lower(), std::min(want, adj->get_upper() - page));
-  if (want != adj->get_value())
+  if (want != value)
     adj->set_value(want);
 }
 
@@ -2302,31 +2782,152 @@ void MainWindow::on_story_end(std::vector<Paragraph>* story)
     loading_ = was;
   }
   commit_document(before, after);
-  if (focused == &header_view_ || focused == &footer_view_ || focused == &notes_view_)
+  if (focused == &header_view_ || focused == &footer_view_ || is_note_view(focused))
     focused->grab_focus();
+}
+
+void MainWindow::hold_note_scroll()
+{
+  auto adj = paste_.get_vadjustment();
+  if (!adj)
+    return;
+  if (Gtk::TextView* view = note_view_for(get_focus()))
+    note_scroll_view_ = view;
+  if (!note_scroll_lock_) {
+    note_scroll_held_ = adj->get_value();
+    note_scroll_lock_ = true;
+    note_scroll_conn_.disconnect();
+    note_scroll_conn_ = adj->signal_value_changed().connect([this, adj] {
+      if (!note_scroll_lock_ || note_scroll_snapping_)
+        return;
+      const double page = adj->get_page_size();
+      const double room = std::max(adj->get_lower(), adj->get_upper() - std::max(0.0, page));
+      const double keep = std::max(adj->get_lower(), std::min(note_scroll_held_, room));
+      if (adj->get_value() == keep)
+        return;
+      note_scroll_snapping_ = true;
+      adj->set_value(keep);
+      note_scroll_snapping_ = false;
+    });
+  }
+  // Two idle turns: the page-status idle lays the seams out and queues a
+  // resize, and that resize runs on the next turn. Releasing on the first
+  // would let the clamp run after the lock.
+  note_scroll_wait_ = 2;
+  if (note_scroll_idle_.connected())
+    return;
+  note_scroll_idle_ = Glib::signal_idle().connect(
+      [this] {
+        if (note_scroll_wait_ > 1) {
+          --note_scroll_wait_;
+          return true;
+        }
+        note_scroll_idle_.disconnect();
+        Gtk::TextView* const view = note_scroll_view_;
+        const bool reveal = note_scroll_lock_ && view && get_focus() == view;
+        note_scroll_lock_ = false;
+        note_scroll_conn_.disconnect();
+        note_scroll_wait_ = 0;
+        if (reveal)
+          reveal_story_caret(*view);
+        return false;
+      },
+      Glib::PRIORITY_LOW);
+}
+
+void MainWindow::release_note_scroll(bool reveal)
+{
+  const bool was = note_scroll_lock_;
+  note_scroll_lock_ = false;
+  note_scroll_wait_ = 0;
+  note_scroll_conn_.disconnect();
+  note_scroll_idle_.disconnect();
+  Gtk::TextView* const view = note_scroll_view_;
+  if (reveal && was && view && get_focus() == view)
+    reveal_story_caret(*view);
 }
 
 void MainWindow::on_notes_end()
 {
-  if (loading_ || restoring_ || !buffer_)
+  on_note_view_end(notes_view_);
+}
+
+void MainWindow::on_note_view_end(Gtk::TextView& view)
+{
+  if (loading_ || restoring_ || !buffer_ || !view.get_buffer())
     return;
-  const std::string text = notes_view_.get_buffer()->get_text().raw();
-  if (text == notes_text(notes_))
+  const bool whole = note_groups_.size() <= 1;
+  NoteGroup group;
+  if (!whole) {
+    if (&view == &notes_view_) {
+      group = note_groups_.front();
+    } else {
+      for (size_t i = 1; i < note_groups_.size() && i - 1 < note_bands_.size(); ++i) {
+        if (note_bands_[i - 1] && &note_bands_[i - 1]->view == &view)
+          group = note_groups_[i];
+      }
+      if (group.indexes.empty())
+        return;
+    }
+  }
+  const std::string text = view.get_buffer()->get_text().raw();
+  const std::string current = whole ? notes_text(notes_) : note_group_text(group);
+  if (text == current)
     return;
+  note_editing_ = true;
+  hold_note_scroll();
   Document before = capture();
   Document after = before;
-  after.notes = notes_from_text(text, typing_);
-  Gtk::Widget* focused = get_focus();
+  std::vector<std::vector<Paragraph>> parsed = notes_from_text(text, typing_);
   if (blank_text(text)) {
     const bool was = loading_;
     loading_ = true;
-    notes_view_.get_buffer()->set_text("");
-    notes_shown_ = "";
+    view.get_buffer()->set_text("");
+    if (&view == &notes_view_)
+      notes_shown_ = "";
     loading_ = was;
+    parsed.clear();
   }
+  if (whole) {
+    after.notes = std::move(parsed);
+  } else {
+    const int first = group.indexes.front();
+    const int last = group.indexes.back();
+    const bool range = last >= first &&
+                       last - first + 1 == static_cast<int>(group.indexes.size()) && first >= 0 &&
+                       last < static_cast<int>(after.notes.size());
+    if (!range)
+      return;
+    const int old_count = last - first + 1;
+    const int new_count = static_cast<int>(parsed.size());
+    after.notes.erase(after.notes.begin() + first, after.notes.begin() + last + 1);
+    after.notes.insert(after.notes.begin() + first, std::make_move_iterator(parsed.begin()),
+                       std::make_move_iterator(parsed.end()));
+    if (static_cast<int>(after.notes.size()) > kMaxNotes)
+      after.notes.resize(static_cast<size_t>(kMaxNotes));
+    const int delta = new_count - old_count;
+    for (NoteGroup& item : note_groups_) {
+      if (item.indexes.empty())
+        continue;
+      if (item.indexes.front() == first) {
+        item.indexes.clear();
+        for (int k = 0; k < new_count; ++k)
+          item.indexes.push_back(first + k);
+      } else if (item.indexes.front() > first) {
+        for (int& index : item.indexes)
+          index += delta;
+      }
+    }
+    note_groups_.erase(std::remove_if(note_groups_.begin(), note_groups_.end(),
+                                      [](const NoteGroup& item) { return item.indexes.empty(); }),
+                       note_groups_.end());
+    if (note_groups_.size() <= 1)
+      note_groups_.clear();
+  }
+  Gtk::Widget* focused = get_focus();
   commit_document(before, after);
-  if (focused == &notes_view_)
-    notes_view_.grab_focus();
+  if (focused == &view)
+    view.grab_focus();
 }
 
 void MainWindow::on_page_setup()
@@ -3090,10 +3691,16 @@ void MainWindow::on_footnote()
     commit_document(before, after);
   else
     commit_document(before, after, body_caret);
+  // The new marker's sheet is known once the seams are laid out. Until then
+  // every note still shares the first column.
+  update_page_seams();
   place_notes();
-  if (auto notes = notes_view_.get_buffer())
+  Gtk::TextView* view = view_for_note(number);
+  if (!view)
+    view = &notes_view_;
+  if (auto notes = view->get_buffer())
     notes->place_cursor(notes->end());
-  notes_view_.grab_focus();
+  view->grab_focus();
 }
 
 void MainWindow::on_picture()

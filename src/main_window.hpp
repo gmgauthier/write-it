@@ -368,12 +368,38 @@ class MainWindow : public Gtk::ApplicationWindow {
   void apply_document_page(PageSetup page);
   void install_stories(const Document& doc);
   void refresh_stories();
-  // The notes column, at the foot of the sheet that holds the first marker.
+  // Put each footnote number beside the first line of that note. A label of
+  // one line per note slips once a note wraps or gains a paragraph.
+  void align_note_numbers();
+  void queue_note_numbers();
+  // The notes for one sheet. `indexes` are into notes_, in order.
+  struct NoteGroup {
+    int page = 0;
+    std::vector<int> indexes;
+  };
+  // The notes column. One sheet keeps every note in the first column. A
+  // marker on a later sheet gets that note at the foot of its own sheet.
   void place_notes();
+  void place_split_notes();
+  void hide_extra_notes();
   // Scroll that column into the pasteboard.
   void reveal_note_view();
+  // The header, footer, or notes have the keyboard. Keep that caret on
+  // screen. The body's caret is somewhere else, and following it jumps the
+  // page away from the line being typed.
+  void reveal_story_caret(Gtk::TextView& view);
   // The height the body of one sheet gives up to the notes, or 0.
   int note_block_px() const;
+  // The height `group` needs at the foot of its sheet.
+  int measure_note_group(const NoteGroup& group);
+  std::string note_group_text(const NoteGroup& group) const;
+  void show_note_text(Gtk::TextView& view, const std::string& text);
+  bool is_note_view(const Gtk::Widget* widget) const;
+  Gtk::TextView* note_view_for(Gtk::Widget* widget);
+  Gtk::TextView* view_for_note(int number);
+  Gtk::Box* box_for_note(int number);
+  void on_note_view_end(Gtk::TextView& view);
+  bool note_overlay_box(GtkWidget* widget, int& x, int& y, int& w, int& h) const;
   void on_page_setup();
   // File → Print… and the toolbar button. The system dialog; the page view
   // is what it draws, including when the window is showing Draft.
@@ -477,6 +503,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_header_footer();
   void on_story_end(std::vector<Paragraph>* story);
   void on_notes_end();
+  // Hold the pasteboard still across a note commit. The page's allocation
+  // dips while the note's lines are invalid, and GTK then clamps the scroll
+  // to the top. Released once that layout has settled.
+  void hold_note_scroll();
+  void release_note_scroll(bool reveal);
+  void align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::Label& first_label,
+                       std::vector<Gtk::Label*>& labels, std::vector<int>& ys,
+                       const std::vector<int>& numbers);
+  struct NoteBand;
+  NoteBand& ensure_note_band(size_t index);
+  void wire_note_band(NoteBand& band);
   // Ctrl+Z in a header, footer, or note undoes the document. Other Ctrl keys
   // that would format the body are swallowed; the story is plain text.
   bool on_story_key(GdkEventKey* event);
@@ -620,11 +657,54 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Box page_box_{Gtk::ORIENTATION_VERTICAL};
   Gtk::TextView header_view_;
   PageText text_;
-  // The notes sit on top of the sheet, at its foot, rather than in the
-  // column under the whole body.
+  // The notes sit on top of the sheet that holds their marker, at its foot,
+  // rather than in the column under the whole body.
   Gtk::Box note_box_{Gtk::ORIENTATION_HORIZONTAL};
+  // Number labels, each moved to the y of its note. Declared before the
+  // labels so it is destroyed after them.
+  Gtk::Fixed note_marks_;
   Gtk::Label note_label_;
+  std::vector<Gtk::Label*> note_numbers_;
+  std::vector<int> note_number_y_;
+  // Disconnected in the destructor. The idle outlives a window that closes
+  // before the next loop turn, and the clipboard test closes one that way.
+  sigc::connection note_numbers_idle_;
   Gtk::TextView notes_view_;
+  // A sheet after the first one that has a marker. The first sheet keeps
+  // note_box_. Destroyed before the overlay, while it can still unparent.
+  struct NoteBand {
+    Gtk::Box box{Gtk::ORIENTATION_HORIZONTAL};
+    Gtk::Fixed marks;
+    Gtk::Label label;
+    Gtk::TextView view;
+    std::vector<Gtk::Label*> numbers;
+    std::vector<int> number_y;
+    sigc::connection size_conn;
+    sigc::connection focus_in_conn;
+    sigc::connection focus_out_conn;
+    sigc::connection end_conn;
+    sigc::connection key_conn;
+    int x = 0;
+    int y = 0;
+    int w = 40;
+    int h = 1;
+    bool wired = false;
+    ~NoteBand()
+    {
+      size_conn.disconnect();
+      focus_in_conn.disconnect();
+      focus_out_conn.disconnect();
+      end_conn.disconnect();
+      key_conn.disconnect();
+      if (Gtk::Widget* parent = box.get_parent()) {
+        if (auto* container = dynamic_cast<Gtk::Container*>(parent))
+          container->remove(box);
+      }
+    }
+  };
+  std::vector<std::unique_ptr<NoteBand>> note_bands_;
+  // Empty when every note shares one sheet. The first entry is note_box_.
+  std::vector<NoteGroup> note_groups_;
   Gtk::TextView footer_view_;
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   Gtk::Box status_{Gtk::ORIENTATION_HORIZONTAL};
@@ -886,6 +966,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   int note_y_ = 0;
   int note_w_ = 40;
   int note_h_ = 1;
+  // A key is in the notes. Until the lines are valid the preferred height is
+  // one line. The band keeps the height it had, and may grow, so the page
+  // does not drop and spring back on the key.
+  bool note_editing_ = false;
+  // Pasteboard value held across that key. See hold_note_scroll().
+  bool note_scroll_lock_ = false;
+  bool note_scroll_snapping_ = false;
+  int note_scroll_wait_ = 0;
+  double note_scroll_held_ = 0;
+  Gtk::TextView* note_scroll_view_ = nullptr;
+  sigc::connection note_scroll_conn_;
+  sigc::connection note_scroll_idle_;
   // Enter at the end of a paragraph: the new one takes the next style.
   bool next_style_pending_ = false;
   // apply_align() is under way: the alignment was chosen, so it is direct.

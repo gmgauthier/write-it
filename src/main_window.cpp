@@ -175,6 +175,9 @@ MainWindow::~MainWindow()
   alive_.reset();
   page_idle_.disconnect();
   caret_idle_.disconnect();
+  note_numbers_idle_.disconnect();
+  note_scroll_conn_.disconnect();
+  note_scroll_idle_.disconnect();
   restore_idle_.disconnect();
   cell_typing_idle_.disconnect();
   page_status_idle_.disconnect();
@@ -679,10 +682,28 @@ void MainWindow::build_page()
   prepare_story(notes_view_);
   notes_view_.set_no_show_all(false);
   prepare_story(footer_view_);
-  note_label_.set_margin_right(6);
+  note_label_.set_halign(Gtk::ALIGN_START);
   note_label_.set_valign(Gtk::ALIGN_START);
-  note_box_.pack_start(note_label_, Gtk::PACK_SHRINK);
+  note_marks_.put(note_label_, 0, 0);
+  note_marks_.set_margin_right(6);
+  note_marks_.set_halign(Gtk::ALIGN_START);
+  note_marks_.set_valign(Gtk::ALIGN_START);
+  note_box_.pack_start(note_marks_, Gtk::PACK_SHRINK);
   note_box_.pack_start(notes_view_, Gtk::PACK_EXPAND_WIDGET);
+  notes_view_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
+  notes_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    note_editing_ = true;
+    return false;
+  });
+  notes_view_.signal_focus_out_event().connect([this](GdkEventFocus*) {
+    note_editing_ = false;
+    release_note_scroll(false);
+    // A rebuild clears the body while this view still holds the keyboard.
+    // Placing the band then uses the empty page. The rebuild places it.
+    if (!loading_ && notes_view_.get_parent() != nullptr)
+      place_notes();
+    return false;
+  });
   note_box_.set_halign(Gtk::ALIGN_START);
   note_box_.set_valign(Gtk::ALIGN_START);
   note_box_.set_no_show_all(true);
@@ -700,12 +721,18 @@ void MainWindow::build_page()
                    G_CALLBACK(+[](GtkOverlay*, GtkWidget* widget, GdkRectangle* allocation,
                                   gpointer data) -> gboolean {
                      auto* window = static_cast<MainWindow*>(data);
-                     if (widget != GTK_WIDGET(window->note_box_.gobj()) || allocation == nullptr)
+                     if (allocation == nullptr)
                        return FALSE;
-                     allocation->x = window->note_x_;
-                     allocation->y = window->note_y_;
-                     allocation->width = std::max(1, window->note_w_);
-                     allocation->height = std::max(1, window->note_h_);
+                     int x = 0;
+                     int y = 0;
+                     int w = 1;
+                     int h = 1;
+                     if (!window->note_overlay_box(widget, x, y, w, h))
+                       return FALSE;
+                     allocation->x = x;
+                     allocation->y = y;
+                     allocation->width = std::max(1, w);
+                     allocation->height = std::max(1, h);
                      return TRUE;
                    }),
                    this);
@@ -928,12 +955,23 @@ void MainWindow::release_view()
 
 void MainWindow::scroll_to_caret()
 {
-  if (reveal_note_ > 0) {
-    if (!hold_scroll_)
-      reveal_note_view();
+  if (hold_scroll_)
+    return;
+  // Typing in a note lays the page out again on the key. The body caret is
+  // the marker, often at the top of the sheet, and a note taller than the
+  // window cannot show its first line and its last line together. Either
+  // scroll leaves the character just typed.
+  Gtk::Widget* const focused = get_focus();
+  if (focused == &header_view_ || focused == &footer_view_ || is_note_view(focused)) {
+    if (follow_caret_)
+      reveal_story_caret(static_cast<Gtk::TextView&>(*focused));
     return;
   }
-  if (hold_scroll_ || !follow_caret_ || !buffer_ || !text_.get_realized())
+  if (reveal_note_ > 0) {
+    reveal_note_view();
+    return;
+  }
+  if (!follow_caret_ || !buffer_ || !text_.get_realized())
     return;
   Gdk::Rectangle rect;
   text_.get_iter_location(buffer_->get_insert()->get_iter(), rect);

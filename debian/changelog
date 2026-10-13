@@ -1,3 +1,11 @@
+write-it (1.0.16-1) unstable; urgency=medium
+
+  * Each footnote sits at the foot of the sheet that holds its marker.
+  * The number beside a note stays with the first line of that note.
+  * Typing in a footnote keeps the page on the line being typed.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Tue, 13 Oct 2026 00:46:08 +0100
+
 write-it (1.0.15-1) unstable; urgency=medium
 
   * A picture goes into the table cell being edited.

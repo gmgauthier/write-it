@@ -160,6 +160,182 @@ struct MainWindowProbe {
     return window.note_label_.get_text() == text;
   }
 
+  static std::string note_number(MainWindow& window, int index)
+  {
+    if (index < 0 || index >= static_cast<int>(window.note_numbers_.size()))
+      return {};
+    Gtk::Label* label = window.note_numbers_[static_cast<size_t>(index)];
+    return label ? label->get_text().raw() : std::string();
+  }
+
+  static int note_number_y(MainWindow& window, int index)
+  {
+    if (index < 0 || index >= static_cast<int>(window.note_numbers_.size()))
+      return -1;
+    Gtk::Label* label = window.note_numbers_[static_cast<size_t>(index)];
+    if (!label)
+      return -1;
+    int x = 0;
+    int y = 0;
+    if (!label->translate_coordinates(window.note_box_, 0, 0, x, y))
+      return -1;
+    return y;
+  }
+
+  static int note_text_y(MainWindow& window, int offset)
+  {
+    auto buffer = window.notes_view_.get_buffer();
+    if (!buffer)
+      return -1;
+    const int chars = buffer->get_char_count();
+    const int at = offset < 0 ? 0 : offset > chars ? chars : offset;
+    Gdk::Rectangle loc;
+    window.notes_view_.get_iter_location(buffer->get_iter_at_offset(at), loc);
+    int wx = 0;
+    int wy = 0;
+    window.notes_view_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, loc.get_x(), loc.get_y(), wx,
+                                               wy);
+    int x = 0;
+    int y = 0;
+    if (!window.notes_view_.translate_coordinates(window.note_box_, wx, wy, x, y))
+      return -1;
+    return y;
+  }
+
+  // The first character whose line is below offset 0, or -1 when the note
+  // does not wrap.
+  static int note_wrap_offset(MainWindow& window)
+  {
+    auto buffer = window.notes_view_.get_buffer();
+    if (!buffer)
+      return -1;
+    const int top = note_text_y(window, 0);
+    if (top < 0)
+      return -1;
+    const int chars = buffer->get_char_count();
+    for (int at = 1; at < chars; ++at) {
+      const int y = note_text_y(window, at);
+      if (y > top + 4)
+        return at;
+    }
+    return -1;
+  }
+
+  static void set_notes(MainWindow& window, const std::string& text)
+  {
+    if (auto buffer = window.notes_view_.get_buffer())
+      buffer->set_text(text);
+    window.on_notes_end();
+  }
+
+  // One character, as a keystroke in the notes. Returns the smallest
+  // pasteboard scroll reached while that key was committed.
+  static double type_note(MainWindow& window, const std::string& text)
+  {
+    auto v = window.paste_.get_vadjustment();
+    double low = v ? v->get_value() : 0.0;
+    sigc::connection watch;
+    if (v) {
+      watch = v->signal_value_changed().connect([&] {
+        low = std::min(low, v->get_value());
+      });
+    }
+    auto buffer = window.notes_view_.get_buffer();
+    window.notes_view_.grab_focus();
+    if (buffer) {
+      buffer->place_cursor(buffer->end());
+      buffer->begin_user_action();
+      buffer->insert_at_cursor(text);
+      buffer->end_user_action();
+    }
+    watch.disconnect();
+    return low;
+  }
+
+  // Scroll, note band, and body length while `text` is typed into the notes.
+  // The watches stay up through the idles that follow the key, which is when
+  // the page used to jump.
+  struct NoteMotion {
+    double low_scroll = 0;
+    double end_scroll = 0;
+    int low_height = 0;
+    int high_y = 0;
+    int low_body = 0;
+    // The band grew and then got shorter, or moved down the page. A new line
+    // only grows the band and moves it up.
+    bool dipped = false;
+  };
+
+  static int note_band_y(MainWindow& window)
+  {
+    return window.note_y_;
+  }
+
+  static int note_band_height(MainWindow& window)
+  {
+    return window.note_box_.get_allocated_height();
+  }
+
+  static NoteMotion type_note_motion(MainWindow& window, const std::string& text)
+  {
+    NoteMotion motion;
+    auto v = window.paste_.get_vadjustment();
+    motion.low_scroll = v ? v->get_value() : 0;
+    motion.low_height = window.note_box_.get_allocated_height();
+    motion.high_y = window.note_y_;
+    motion.low_body = window.buffer_ ? window.buffer_->get_char_count() : 0;
+    int peak_h = motion.low_height;
+    int best_y = motion.high_y;
+    sigc::connection scroll_watch;
+    sigc::connection size_watch;
+    sigc::connection body_watch;
+    if (v) {
+      scroll_watch = v->signal_value_changed().connect([&] {
+        motion.low_scroll = std::min(motion.low_scroll, v->get_value());
+      });
+    }
+    size_watch = window.note_box_.signal_size_allocate().connect([&](Gtk::Allocation& alloc) {
+      const int h = alloc.get_height();
+      const int y = window.note_y_;
+      if (h + 4 < peak_h || y > best_y + 4)
+        motion.dipped = true;
+      peak_h = std::max(peak_h, h);
+      best_y = std::min(best_y, y);
+      motion.low_height = std::min(motion.low_height, h);
+      motion.high_y = std::max(motion.high_y, y);
+    });
+    if (window.buffer_) {
+      body_watch = window.buffer_->signal_changed().connect([&] {
+        motion.low_body = std::min(motion.low_body, window.buffer_->get_char_count());
+      });
+    }
+    window.notes_view_.grab_focus();
+    auto buffer = window.notes_view_.get_buffer();
+    auto context = Glib::MainContext::get_default();
+    auto pump = [&] {
+      for (int round = 0; round < 6; ++round) {
+        while (context->pending())
+          context->iteration(false);
+      }
+    };
+    if (buffer) {
+      buffer->place_cursor(buffer->end());
+      buffer->begin_user_action();
+      buffer->insert_at_cursor(text);
+      buffer->end_user_action();
+      // A real key commits, then scrolls that view's caret on screen. The
+      // insert above is the commit. The scroll is what the key does next.
+      gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(window.notes_view_.gobj()),
+                                         gtk_text_buffer_get_insert(buffer->gobj()));
+    }
+    pump();
+    scroll_watch.disconnect();
+    size_watch.disconnect();
+    body_watch.disconnect();
+    motion.end_scroll = v ? v->get_value() : 0;
+    return motion;
+  }
+
   // The note column is on the first sheet: below the marker, and in the
   // lower part of that sheet rather than under the line or past the page.
   static bool note_on_first_sheet(MainWindow& window)
@@ -279,6 +455,127 @@ struct MainWindowProbe {
   static bool context_copy_on(MainWindow& window)
   {
     return window.context_copy_ && window.context_copy_->get_sensitive();
+  }
+
+  // Overlay y of a body footnote marker, in the same space as the note band.
+  static int marker_overlay_y(MainWindow& window, int note)
+  {
+    if (!window.buffer_ || note <= 0)
+      return -1;
+    for (auto iter = window.buffer_->begin(); !iter.is_end(); ++iter) {
+      int found = 0;
+      for (const auto& tag : iter.get_tags()) {
+        const std::string name = tag->property_name().get_value().raw();
+        if (name.compare(0, 4, "fmt\x1f") != 0)
+          continue;
+        int fields = 1;
+        size_t last = 0;
+        for (size_t i = 0; i < name.size(); ++i) {
+          if (name[i] != '\x1f')
+            continue;
+          ++fields;
+          last = i + 1;
+        }
+        if (fields != 8)
+          continue;
+        int n = 0;
+        bool digits = last < name.size();
+        for (size_t i = last; i < name.size(); ++i) {
+          if (name[i] < '0' || name[i] > '9') {
+            digits = false;
+            break;
+          }
+          n = n * 10 + (name[i] - '0');
+        }
+        if (digits && n == note)
+          found = n;
+      }
+      if (found == 0)
+        continue;
+      int top = 0;
+      int height = 0;
+      window.text_.get_line_yrange(iter, top, height);
+      int wx = 0;
+      int wy = 0;
+      window.text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top, wx, wy);
+      int ox = 0;
+      int oy = 0;
+      if (!window.text_.translate_coordinates(window.page_overlay_, wx, wy, ox, oy))
+        return -1;
+      return oy;
+    }
+    return -1;
+  }
+
+  // The band that shows this note: its overlay y, its text, and its number.
+  static bool note_band_at(MainWindow& window, int note, int& y, std::string& text,
+                           std::string& number)
+  {
+    y = -1;
+    text.clear();
+    number.clear();
+    if (note <= 0)
+      return false;
+    const int index = note - 1;
+    Gtk::TextView* view = &window.notes_view_;
+    y = window.note_y_;
+    if (window.note_groups_.size() > 1) {
+      bool found = false;
+      for (size_t g = 0; g < window.note_groups_.size(); ++g) {
+        const auto& indexes = window.note_groups_[g].indexes;
+        if (std::find(indexes.begin(), indexes.end(), index) == indexes.end())
+          continue;
+        found = true;
+        if (g == 0) {
+          view = &window.notes_view_;
+          y = window.note_y_;
+        } else if (g - 1 < window.note_bands_.size() && window.note_bands_[g - 1]) {
+          view = &window.note_bands_[g - 1]->view;
+          y = window.note_bands_[g - 1]->y;
+        }
+        break;
+      }
+      if (!found)
+        return false;
+    }
+    if (!view || !view->get_buffer())
+      return false;
+    text = view->get_buffer()->get_text().raw();
+    if (index >= 0 && index < static_cast<int>(window.note_numbers_.size()) &&
+        window.note_groups_.size() <= 1) {
+      Gtk::Label* label = window.note_numbers_[static_cast<size_t>(index)];
+      if (label)
+        number = label->get_text().raw();
+    } else if (window.note_groups_.size() > 1) {
+      for (size_t g = 0; g < window.note_groups_.size(); ++g) {
+        const auto& indexes = window.note_groups_[g].indexes;
+        auto at = std::find(indexes.begin(), indexes.end(), index);
+        if (at == indexes.end())
+          continue;
+        const size_t slot = static_cast<size_t>(at - indexes.begin());
+        const std::vector<Gtk::Label*>& labels =
+            g == 0 ? window.note_numbers_
+                   : (g - 1 < window.note_bands_.size() && window.note_bands_[g - 1]
+                          ? window.note_bands_[g - 1]->numbers
+                          : window.note_numbers_);
+        if (slot < labels.size() && labels[slot])
+          number = labels[slot]->get_text().raw();
+      }
+    }
+    return y >= 0;
+  }
+
+  static void type_in_note(MainWindow& window, int note, const std::string& text)
+  {
+    Gtk::TextView* view = window.view_for_note(note);
+    if (!view || !view->get_buffer())
+      return;
+    view->grab_focus();
+    auto buffer = view->get_buffer();
+    buffer->place_cursor(buffer->end());
+    buffer->begin_user_action();
+    buffer->insert_at_cursor(text);
+    buffer->end_user_action();
   }
 };
 
@@ -535,7 +832,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 130;
+constexpr int kChecks = 165;
 
 int main(int argc, char* argv[])
 {
@@ -1371,6 +1668,235 @@ int main(int argc, char* argv[])
             writeit::MainWindowProbe::cell_focused(window, 0, 1, 1) &&
             writeit::MainWindowProbe::scroll_value(window) > 400.0);
     }
+
+    auto note_plain = [](const writeit::Document& doc, size_t index) {
+      std::string out;
+      if (index >= doc.notes.size())
+        return out;
+      for (size_t i = 0; i < doc.notes[index].size(); ++i) {
+        if (i)
+          out.push_back('\n');
+        for (const writeit::Run& run : doc.notes[index][i].runs)
+          out += run.text;
+      }
+      return out;
+    };
+    auto line = [](const std::string& text) {
+      writeit::Paragraph paragraph;
+      writeit::Run run;
+      run.text = text;
+      paragraph.runs.push_back(run);
+      return paragraph;
+    };
+    writeit::Paragraph marker_paragraph;
+    writeit::Run marker;
+    marker.text = "1";
+    marker.note = 1;
+    marker_paragraph.runs.push_back(marker);
+
+    writeit::Document noted;
+    noted.paragraphs.push_back(marker_paragraph);
+    noted.notes.push_back({line("alpha"), line("beta")});
+    noted.notes.push_back({line("gamma")});
+    writeit::MainWindowProbe::load(window, noted);
+    settle();
+    {
+      const writeit::Document shown = writeit::MainWindowProbe::doc(window);
+      CHECK(note_plain(shown, 0) == "alpha\nbeta" && note_plain(shown, 1) == "gamma");
+    }
+    CHECK(writeit::MainWindowProbe::note_number(window, 0) == "1" &&
+          writeit::MainWindowProbe::note_number(window, 1) == "2");
+    const int top = writeit::MainWindowProbe::note_text_y(window, 0);
+    const int beta = writeit::MainWindowProbe::note_text_y(window, 6);
+    const int gamma = writeit::MainWindowProbe::note_text_y(window, 12);
+    const int number_one = writeit::MainWindowProbe::note_number_y(window, 0);
+    const int number_two = writeit::MainWindowProbe::note_number_y(window, 1);
+    CHECK(number_one >= 0 && top >= 0 && std::abs(number_one - top) <= 4);
+    CHECK(number_two >= 0 && gamma >= 0 && std::abs(number_two - gamma) <= 4);
+    CHECK(beta >= 0 && number_two > beta + 8);
+
+    writeit::MainWindowProbe::set_notes(window, "one\ntwo");
+    settle();
+    {
+      const writeit::Document joined = writeit::MainWindowProbe::doc(window);
+      CHECK(joined.notes.size() == 1 && note_plain(joined, 0) == "one\ntwo");
+    }
+    writeit::MainWindowProbe::set_notes(window, "one\n\ntwo");
+    settle();
+    {
+      const writeit::Document split = writeit::MainWindowProbe::doc(window);
+      CHECK(split.notes.size() == 2 && note_plain(split, 0) == "one" &&
+            note_plain(split, 1) == "two");
+    }
+
+    std::string long_note;
+    for (int i = 0; i < 40; ++i)
+      long_note += "word ";
+    writeit::Document wrapped;
+    wrapped.paragraphs.push_back(marker_paragraph);
+    wrapped.notes.push_back({line(long_note)});
+    wrapped.notes.push_back({line("Tail")});
+    writeit::MainWindowProbe::load(window, wrapped);
+    settle();
+    const int wrap_at = writeit::MainWindowProbe::note_wrap_offset(window);
+    const int wrap_y = writeit::MainWindowProbe::note_text_y(window, wrap_at);
+    const int tail_at = static_cast<int>(long_note.size()) + 2;
+    const int tail_y = writeit::MainWindowProbe::note_text_y(window, tail_at);
+    const int wrapped_number = writeit::MainWindowProbe::note_number_y(window, 1);
+    CHECK(wrap_at > 0 && wrap_y > writeit::MainWindowProbe::note_text_y(window, 0) + 8);
+    CHECK(wrapped_number >= 0 && tail_y >= 0 && std::abs(wrapped_number - tail_y) <= 4);
+    CHECK(wrapped_number > wrap_y + 8);
+
+    // The note sits at the foot of a sheet taller than the window. A key
+    // there keeps the pasteboard on that foot instead of jumping to the
+    // marker and back.
+    window.resize(800, 500);
+    settle();
+    writeit::MainWindowProbe::scroll_to_end(window);
+    settle();
+    const double foot = writeit::MainWindowProbe::scroll_value(window);
+    const double lowest = writeit::MainWindowProbe::type_note(window, "a");
+    settle();
+    const double stayed = writeit::MainWindowProbe::scroll_value(window);
+    CHECK(foot > 150.0 && lowest > foot - 40.0);
+    CHECK(stayed > foot - 40.0);
+    // The next key finds the body caret already marked to be followed.
+    const double again = writeit::MainWindowProbe::type_note(window, "b");
+    settle();
+    const double still = writeit::MainWindowProbe::scroll_value(window);
+    CHECK(again > foot - 40.0 && still > foot - 40.0);
+
+    // A burst that rewraps the note used to collapse the band to one line
+    // and drop it down the page, then grow it back.
+    const int band_y = writeit::MainWindowProbe::note_band_y(window);
+    const int band_h = writeit::MainWindowProbe::note_band_height(window);
+    const double band_at = writeit::MainWindowProbe::scroll_value(window);
+    const auto burst = writeit::MainWindowProbe::type_note_motion(window, std::string(200, 'W'));
+    CHECK(band_h > 20 && burst.low_height >= band_h - 4);
+    CHECK(burst.high_y <= band_y + 4);
+    CHECK(burst.low_scroll > band_at - 40.0 && burst.end_scroll > band_at - 40.0);
+    CHECK(!burst.dipped);
+
+    // The same dip on the insert that first wraps the note. The band reaches
+    // its full height and then a layout pass reports one line.
+    writeit::Document fresh_note;
+    fresh_note.paragraphs.push_back(marker_paragraph);
+    fresh_note.notes.push_back({line("Hi")});
+    writeit::MainWindowProbe::load(window, fresh_note);
+    window.resize(800, 500);
+    settle();
+    writeit::MainWindowProbe::scroll_to_end(window);
+    settle();
+    const double fresh_at = writeit::MainWindowProbe::scroll_value(window);
+    const auto grown = writeit::MainWindowProbe::type_note_motion(window, std::string(200, 'W'));
+    CHECK(!grown.dipped);
+    CHECK(grown.low_scroll > fresh_at - 40.0 && grown.end_scroll > fresh_at - 40.0);
+
+    // A table and a picture make a note key rebuild the body. The page
+    // clears, the scroll goes to the top, and the note is no longer where
+    // it was typed.
+    writeit::Document heavy;
+    for (int i = 0; i < 60; ++i) {
+      writeit::Paragraph paragraph;
+      writeit::Run run;
+      run.text = "A line of the letter, long enough to fill the sheet.";
+      paragraph.runs.push_back(run);
+      heavy.paragraphs.push_back(std::move(paragraph));
+    }
+    const size_t table_at = heavy.paragraphs.size();
+    writeit::insert_table(heavy.paragraphs, table_at, 2, 2, writeit::page_text_twips(heavy.page));
+    writeit::Paragraph pictured;
+    writeit::Run image_run;
+    writeit::Image stored;
+    stored.type = "png";
+    stored.data = png_bytes;
+    image_run.image = std::move(stored);
+    pictured.runs.push_back(std::move(image_run));
+    heavy.paragraphs.push_back(std::move(pictured));
+    writeit::Paragraph marker_line;
+    writeit::Run marker_run;
+    marker_run.text = "1";
+    marker_run.note = 1;
+    marker_line.runs.push_back(marker_run);
+    heavy.paragraphs.push_back(std::move(marker_line));
+    heavy.notes.push_back({line("Noted")});
+    CHECK(heavy.paragraphs[table_at].cell.table != 0);
+    writeit::MainWindowProbe::load(window, heavy);
+    window.resize(800, 500);
+    settle();
+    writeit::MainWindowProbe::scroll_to_end(window);
+    settle();
+    const double foot2 = writeit::MainWindowProbe::scroll_value(window);
+    const auto keyed = writeit::MainWindowProbe::type_note_motion(window, "x");
+    CHECK(foot2 > 150.0);
+    CHECK(keyed.low_scroll > foot2 - 40.0 && keyed.end_scroll > foot2 - 40.0);
+    CHECK(keyed.low_body > 100);
+    {
+      const writeit::Document typed = writeit::MainWindowProbe::doc(window);
+      CHECK(note_plain(typed, 0).find('x') != std::string::npos);
+    }
+    writeit::MainWindowProbe::undo(window);
+    settle();
+    {
+      const writeit::Document undone = writeit::MainWindowProbe::doc(window);
+      CHECK(note_plain(undone, 0) == "Noted" &&
+            writeit::MainWindowProbe::scroll_value(window) > foot2 - 40.0);
+    }
+
+    // A marker on a later sheet keeps its note on that sheet. The column on
+    // the first sheet used to hold every note.
+    writeit::Document paged;
+    for (int i = 0; i < 80; ++i) {
+      writeit::Paragraph paragraph;
+      writeit::Run run;
+      run.text = "A line of the letter, long enough to fill the sheet.";
+      paragraph.runs.push_back(run);
+      paged.paragraphs.push_back(std::move(paragraph));
+    }
+    writeit::Run first_mark;
+    first_mark.text = "1";
+    first_mark.note = 1;
+    paged.paragraphs.front().runs.push_back(first_mark);
+    writeit::Run second_mark;
+    second_mark.text = "2";
+    second_mark.note = 2;
+    paged.paragraphs.back().runs.push_back(second_mark);
+    paged.notes.push_back({line("Alpha")});
+    paged.notes.push_back({line("Beta")});
+    writeit::MainWindowProbe::load(window, paged);
+    window.resize(800, 500);
+    settle();
+    settle();
+    const int mark_one = writeit::MainWindowProbe::marker_overlay_y(window, 1);
+    const int mark_two = writeit::MainWindowProbe::marker_overlay_y(window, 2);
+    int band_one = -1;
+    int band_two = -1;
+    std::string text_one;
+    std::string text_two;
+    std::string number_one_band;
+    std::string number_two_band;
+    const bool spot_one =
+        writeit::MainWindowProbe::note_band_at(window, 1, band_one, text_one, number_one_band);
+    const bool spot_two =
+        writeit::MainWindowProbe::note_band_at(window, 2, band_two, text_two, number_two_band);
+    CHECK(spot_one && spot_two);
+    CHECK(mark_one >= 0 && mark_two > mark_one + 400);
+    CHECK(band_one > mark_one && band_one < mark_two);
+    CHECK(band_two > mark_two - 40 && band_two < mark_two + 1600);
+    CHECK(text_one.find("Alpha") != std::string::npos && text_one.find("Beta") == std::string::npos);
+    CHECK(text_two.find("Beta") != std::string::npos && text_two.find("Alpha") == std::string::npos);
+    CHECK(number_one_band == "1" && number_two_band == "2");
+    writeit::MainWindowProbe::type_in_note(window, 2, "z");
+    settle();
+    int band_two_after = -1;
+    std::string text_two_after;
+    std::string number_two_after;
+    writeit::MainWindowProbe::note_band_at(window, 2, band_two_after, text_two_after,
+                                           number_two_after);
+    const int mark_two_after = writeit::MainWindowProbe::marker_overlay_y(window, 2);
+    CHECK(text_two_after.find('z') != std::string::npos);
+    CHECK(band_two_after > mark_two_after - 40);
+    CHECK(writeit::MainWindowProbe::doc(window).paragraphs.size() > 40);
   }
   return suite_test::done("page-ui", kChecks);
 }
