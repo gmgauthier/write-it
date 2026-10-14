@@ -115,8 +115,6 @@ int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index)
 
 namespace {
 
-constexpr int kPicturePx = 480;
-
 struct PaperPreset {
   const char* name;
   int width;
@@ -774,6 +772,16 @@ class TableSheet : public Gtk::Grid {
       }
     }
     queue_resize();
+  }
+
+  void each_view(const std::function<void(Gtk::TextView&)>& visit)
+  {
+    for (const auto& row : views_) {
+      for (Gtk::TextView* view : row) {
+        if (view)
+          visit(*view);
+      }
+    }
   }
 
   int table_id() const;
@@ -2242,6 +2250,7 @@ void MainWindow::align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::La
     labels.push_back(&first_label);
   while (labels.size() < starts.size()) {
     auto* label = Gtk::manage(new Gtk::Label());
+    use_story_css(*label);
     label->set_halign(Gtk::ALIGN_START);
     label->set_valign(Gtk::ALIGN_START);
     marks.put(*label, 0, 0);
@@ -2730,6 +2739,7 @@ void MainWindow::wire_note_band(NoteBand& band)
   band.key_conn =
       band.view.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   band.wired = true;
+  apply_story_zoom();
 }
 
 void MainWindow::reveal_note_view()
@@ -4062,17 +4072,127 @@ void MainWindow::insert_picture(Image image)
 
 Glib::RefPtr<Gdk::Pixbuf> MainWindow::pixbuf_for(const Image& image)
 {
-  auto scaled = [](const Glib::RefPtr<Gdk::Pixbuf>& pix) {
-    if (!pix || pix->get_width() <= kPicturePx || pix->get_width() <= 0)
+  auto fit = [this](const Glib::RefPtr<Gdk::Pixbuf>& pix) {
+    if (!pix || pix->get_width() <= 0 || pix->get_height() <= 0)
       return pix;
-    const int height = std::max(1, pix->get_height() * kPicturePx / pix->get_width());
-    return pix->scale_simple(kPicturePx, height, Gdk::INTERP_BILINEAR);
+    const PictureSpan span = picture_display_px(pix->get_width(), pix->get_height(), zoom_factor());
+    if (pix->get_width() == span.width && pix->get_height() == span.height)
+      return pix;
+    return pix->scale_simple(span.width, span.height, Gdk::INTERP_BILINEAR);
   };
   if (image.data.empty())
-    return placeholder_pixbuf();
+    return fit(placeholder_pixbuf());
   if (auto pix = pixbuf_from_bytes(image.data))
-    return scaled(pix);
-  return placeholder_pixbuf();
+    return fit(pix);
+  return fit(placeholder_pixbuf());
+}
+
+void MainWindow::rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
+{
+  if (!buffer)
+    return;
+  struct Slot {
+    int offset = 0;
+    Image image;
+  };
+  std::vector<Slot> slots;
+  for (auto iter = buffer->begin(); !iter.is_end(); ++iter) {
+    const auto pix = iter.get_pixbuf();
+    if (!pix)
+      continue;
+    const auto found = image_pix_.find(pix->gobj());
+    if (found == image_pix_.end() || found->second.data.empty())
+      continue;
+    slots.push_back(Slot{iter.get_offset(), found->second});
+  }
+  if (slots.empty())
+    return;
+
+  const int insert = buffer->get_insert()->get_iter().get_offset();
+  const int bound = buffer->get_selection_bound()->get_iter().get_offset();
+  bool changed = false;
+  const double zoom = zoom_factor();
+  for (auto slot = slots.rbegin(); slot != slots.rend(); ++slot) {
+    auto source = pixbuf_from_bytes(slot->image.data);
+    if (!source)
+      source = placeholder_pixbuf();
+    if (!source || source->get_width() <= 0 || source->get_height() <= 0)
+      continue;
+    const PictureSpan span = picture_display_px(source->get_width(), source->get_height(), zoom);
+    auto at = buffer->get_iter_at_offset(slot->offset);
+    const auto shown = at.get_pixbuf();
+    if (!shown || (shown->get_width() == span.width && shown->get_height() == span.height))
+      continue;
+    Glib::RefPtr<Gdk::Pixbuf> next = source;
+    if (source->get_width() != span.width || source->get_height() != span.height)
+      next = source->scale_simple(span.width, span.height, Gdk::INTERP_BILINEAR);
+    if (!next)
+      continue;
+    const std::vector<Glib::RefPtr<Gtk::TextTag>> tags = at.get_tags();
+    auto end = at;
+    end.forward_char();
+    image_pix_.erase(shown->gobj());
+    undo_.retarget_pixbuf(shown, next);
+    image_pix_[next->gobj()] = slot->image;
+    buffer->erase(at, end);
+    auto placed = buffer->insert_pixbuf(buffer->get_iter_at_offset(slot->offset), next);
+    auto after = placed;
+    if (!after.is_end())
+      after.forward_char();
+    buffer->remove_all_tags(placed, after);
+    for (const auto& tag : tags) {
+      if (tag)
+        buffer->apply_tag(tag, placed, after);
+    }
+    changed = true;
+  }
+  if (!changed)
+    return;
+  const int count = buffer->get_char_count();
+  const int now_insert = buffer->get_insert()->get_iter().get_offset();
+  const int now_bound = buffer->get_selection_bound()->get_iter().get_offset();
+  if (now_insert == insert && now_bound == bound)
+    return;
+  buffer->select_range(buffer->get_iter_at_offset(std::max(0, std::min(insert, count))),
+                       buffer->get_iter_at_offset(std::max(0, std::min(bound, count))));
+}
+
+void MainWindow::rescale_pictures()
+{
+  if (scaling_pictures_ || !buffer_)
+    return;
+  // loading_ stops the erase from dropping the map and from scrolling. The
+  // flag goes back to whatever the caller had, including a load in progress.
+  struct Guard {
+    MainWindow& window;
+    bool was_loading;
+    explicit Guard(MainWindow& self)
+        : window(self),
+          was_loading(self.loading_)
+    {
+      window.scaling_pictures_ = true;
+      window.loading_ = true;
+      window.undo_.suspend(true);
+    }
+    ~Guard()
+    {
+      window.undo_.suspend(false);
+      window.loading_ = was_loading;
+      window.scaling_pictures_ = false;
+    }
+  };
+  Guard guard(*this);
+  std::vector<TableSheet*> sheets;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    if (TableSheet* sheet = sheet_from(iter.get_child_anchor()))
+      sheets.push_back(sheet);
+  }
+  rescale_picture_buffer(buffer_);
+  for (TableSheet* sheet : sheets) {
+    if (!sheet)
+      continue;
+    sheet->each_view([this](Gtk::TextView& view) { rescale_picture_buffer(view.get_buffer()); });
+  }
 }
 
 }  // namespace writeit

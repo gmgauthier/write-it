@@ -157,6 +157,22 @@ int twips_to_px(int twips, double zoom)
   return static_cast<int>(std::lround(px));
 }
 
+PictureSpan picture_display_px(int src_w, int src_h, double zoom)
+{
+  if (src_w <= 0 || src_h <= 0 || !(zoom > 0))
+    return {1, 1};
+  int width = src_w;
+  int height = src_h;
+  if (width > kPictureCapPx) {
+    height = std::max(1, height * kPictureCapPx / width);
+    width = kPictureCapPx;
+  }
+  PictureSpan span;
+  span.width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * zoom)));
+  span.height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * zoom)));
+  return span;
+}
+
 static_assert(default_page().paper_width == kScreenPageTwips, "default paper is the screen page");
 static_assert(default_page().paper_height == kA4Twips, "default paper is A4");
 

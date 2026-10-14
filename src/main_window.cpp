@@ -904,7 +904,8 @@ void MainWindow::follow_caret()
 {
   // A style apply, or collapsing a selection the caret has left, moves marks
   // without the user going to the first line.
-  if (hold_scroll_ || releasing_)
+  // A zoom swaps picture pixbufs and moves marks. That is not the caret.
+  if (hold_scroll_ || releasing_ || scaling_pictures_)
     return;
   follow_caret_ = true;
   // Opening a file or an undo rebuilds the buffer in many edits; the idle

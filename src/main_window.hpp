@@ -316,6 +316,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   Glib::RefPtr<Gtk::TextTag> heading_tag_on(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int level);
   void raise_headings();
   void restyle_tags();
+  // The document default at the current zoom. Blank body lines, footnotes,
+  // and the header and footer use it. Run tags scale on their own.
+  Pango::FontDescription story_font() const;
+  void apply_story_zoom();
+  void use_story_css(Gtk::Widget& widget);
   void apply_margins();
   ViewGeometry geometry() const;
   void set_view(ViewMode mode);
@@ -593,6 +598,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Body, then each cell, then the header, the footer, and the notes.
   std::vector<Gtk::TextView*> find_targets();
   Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image);
+  // Pictures are pixbufs in the buffer, so a tag restyle cannot resize them.
+  // Drawn again from the file bytes at the current zoom.
+  void rescale_pictures();
+  void rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer);
   // commit_document()'s retagging when the text is the same and no picture
   // has to be placed. False otherwise.
   bool retag_paragraphs(const Document& before, const Document& after);
@@ -990,6 +999,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The buffer has stopped tracking PRIMARY for the size box.
   bool primary_lent_ = false;
   double styled_zoom_ = -1;
+  // Replacing a picture's pixbuf for a zoom. follow_caret() stays put.
+  bool scaling_pictures_ = false;
   // View > Page / Draft. Not saved: every launch opens in Page.
   ViewMode view_ = kDefaultView;
   ViewMode styled_view_ = kDefaultView;
@@ -1003,6 +1014,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Run pending_mark_;
   bool pending_mark_set_ = false;
   std::string caret_key_;
+  // Footnotes, the header, and the footer. override_font() loses the
+  // fraction of a point; this CSS keeps it.
+  Glib::RefPtr<Gtk::CssProvider> story_css_;
   // Undo and redo, recorded as operations (undo.hpp); undo_.state_id() is
   // the saved-state hook.
   UndoHistory undo_;

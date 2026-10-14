@@ -163,10 +163,55 @@ void mode_names()
   CHECK(writeit::kDefaultView == ViewMode::Page);
 }
 
+void picture_span()
+{
+  // At 100% a picture no wider than 480 keeps its pixels. Wider ones cap
+  // there, then the zoom scales that size. The cap's division truncates.
+  const auto native = writeit::picture_display_px(200, 100, 1);
+  CHECK(native.width == 200);
+  CHECK(native.height == 100);
+  const auto three_quarters = writeit::picture_display_px(200, 100, 0.75);
+  CHECK(three_quarters.width == 150);
+  CHECK(three_quarters.height == 75);
+  const auto half = writeit::picture_display_px(200, 100, 0.5);
+  CHECK(half.width == 100);
+  CHECK(half.height == 50);
+  const auto twice = writeit::picture_display_px(200, 100, 2);
+  CHECK(twice.width == 400);
+  CHECK(twice.height == 200);
+
+  const auto capped = writeit::picture_display_px(800, 400, 1);
+  CHECK(capped.width == 480);
+  CHECK(capped.height == 240);
+  const auto capped_75 = writeit::picture_display_px(800, 400, 0.75);
+  CHECK(capped_75.width == 360);
+  CHECK(capped_75.height == 180);
+  const auto capped_50 = writeit::picture_display_px(640, 320, 0.5);
+  CHECK(capped_50.width == 240);
+  CHECK(capped_50.height == 120);
+  const auto exact = writeit::picture_display_px(480, 240, 1);
+  CHECK(exact.width == 480);
+  CHECK(exact.height == 240);
+
+  const auto stand_in = writeit::picture_display_px(48, 24, 0.5);
+  CHECK(stand_in.width == 24);
+  CHECK(stand_in.height == 12);
+  const auto tiny = writeit::picture_display_px(1, 1, 0.5);
+  CHECK(tiny.width == 1);
+  CHECK(tiny.height == 1);
+
+  const auto bad_size = writeit::picture_display_px(0, 10, 1);
+  CHECK(bad_size.width == 1);
+  CHECK(bad_size.height == 1);
+  const auto bad_zoom = writeit::picture_display_px(10, 10, 0);
+  CHECK(bad_zoom.width == 1);
+  CHECK(bad_zoom.height == 1);
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 318;
+constexpr int kChecks = 342;
 
 int main()
 {
@@ -176,5 +221,6 @@ int main()
   page_widths();
   transitions();
   mode_names();
+  picture_span();
   return suite_test::done("view", kChecks);
 }

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1699,6 +1700,9 @@ void MainWindow::after_replay(int caret)
   restoring_ = false;
   text_.scroll_to(buffer_->get_insert());
   apply_page_size();
+  // A replay inserts the pixbuf the step stored. The zoom did not restyle,
+  // so that copy is still the size it was drawn at.
+  rescale_pictures();
   // The sheet may be another one now.
   fill_style_combo();
   update_title();
@@ -2539,6 +2543,8 @@ void MainWindow::restyle_tags()
   caret_key_.clear();
   update_caret_font();
   relayout_tables();
+  apply_story_zoom();
+  rescale_pictures();
 }
 
 ViewGeometry MainWindow::geometry() const
@@ -3061,6 +3067,78 @@ void MainWindow::sync_format_controls()
   show_format(typing_);
 }
 
+Pango::FontDescription MainWindow::story_font() const
+{
+  const std::string font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
+  const int size = known_size(settings_.default_size) ? settings_.default_size : 11;
+  Pango::FontDescription desc;
+  desc.set_family(font);
+  desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
+  return desc;
+}
+
+void MainWindow::use_story_css(Gtk::Widget& widget)
+{
+  if (!story_css_)
+    story_css_ = Gtk::CssProvider::create();
+  auto context = widget.get_style_context();
+  if (!context)
+    return;
+  context->remove_provider(story_css_);
+  context->add_provider(story_css_, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
+void MainWindow::apply_story_zoom()
+{
+  const double zoom = zoom_factor();
+  const int margin = std::max(1, static_cast<int>(std::lround(8.0 * zoom)));
+  const int mark = std::max(1, static_cast<int>(std::lround(6.0 * zoom)));
+  const std::string family_raw = settings_.default_font.empty() ? "Sans" : settings_.default_font;
+  std::string family;
+  for (char c : family_raw) {
+    if (c != '"' && c != '\\' && c != '\n' && c != '\r')
+      family.push_back(c);
+  }
+  if (family.empty())
+    family = "Sans";
+  const int size = known_size(settings_.default_size) ? settings_.default_size : 11;
+  char points[32];
+  std::snprintf(points, sizeof points, "%.4f", static_cast<double>(size) * zoom);
+  const std::string css = "* { font-family: \"" + family + "\"; font-size: " + points + "pt; }\n";
+  if (!story_css_)
+    story_css_ = Gtk::CssProvider::create();
+  try {
+    story_css_->load_from_data(css);
+  } catch (const Glib::Error&) {
+  }
+  auto face = [&](Gtk::TextView& view) {
+    use_story_css(view);
+    if (view.get_left_margin() != margin)
+      view.set_left_margin(margin);
+    if (view.get_right_margin() != margin)
+      view.set_right_margin(margin);
+  };
+  auto numbers = [&](Gtk::Label& first, const std::vector<Gtk::Label*>& labels, Gtk::Fixed& marks) {
+    use_story_css(first);
+    for (Gtk::Label* label : labels) {
+      if (label)
+        use_story_css(*label);
+    }
+    if (marks.get_margin_right() != mark)
+      marks.set_margin_right(mark);
+  };
+  face(header_view_);
+  face(footer_view_);
+  face(notes_view_);
+  numbers(note_label_, note_numbers_, note_marks_);
+  for (const auto& band : note_bands_) {
+    if (!band || !band->wired)
+      continue;
+    face(band->view);
+    numbers(band->label, band->numbers, band->marks);
+  }
+}
+
 void MainWindow::update_caret_font()
 {
   // A blank line with no format of its own (an untagged newline) renders in
@@ -3073,10 +3151,7 @@ void MainWindow::update_caret_font()
   if (key == caret_key_)
     return;
   caret_key_ = key;
-  Pango::FontDescription desc;
-  desc.set_family(font);
-  desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
-  text_.override_font(desc);
+  text_.override_font(story_font());
 }
 
 void MainWindow::on_font_changed()
