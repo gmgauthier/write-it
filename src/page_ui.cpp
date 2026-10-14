@@ -2928,6 +2928,7 @@ void MainWindow::on_note_view_end(Gtk::TextView& view)
     if (note_groups_.size() <= 1)
       note_groups_.clear();
   }
+  retarget_note_markers(after, before.notes);
   Gtk::Widget* focused = get_focus();
   commit_document(before, after);
   if (focused == &view)

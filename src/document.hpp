@@ -441,6 +441,12 @@ void adopt_sheet(Document& doc, const std::string& font, double size);
 // document with a sheet, or without headings, is left alone.
 void adopt_heading_styles(Document& doc, const std::string& font, double size);
 
+// A blank line in a note splits it, and the new half has no marker. Markers
+// after the changed notes move by the change in note count. A marker that
+// still names the note that split stays. `doc.notes` is already the edited
+// list; `before_notes` is the list it replaced. The same count changes nothing.
+void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragraph>>& before_notes);
+
 Document blank_document(const std::string& font, double size);
 Document plain_import(const std::string& text, const std::string& font, double size);
 Document markdown_import(const std::string& text, const std::string& font, double size);

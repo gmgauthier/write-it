@@ -1800,4 +1800,44 @@ bool document_needs_custom_undo(const Document& before, const Document& after)
          document_has_picture(after);
 }
 
+void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragraph>>& before_notes)
+{
+  const int old_n = static_cast<int>(before_notes.size());
+  const int new_n = static_cast<int>(doc.notes.size());
+  const int delta = new_n - old_n;
+  if (delta == 0)
+    return;
+
+  int prefix = 0;
+  const int share = std::min(old_n, new_n);
+  while (prefix < share &&
+         before_notes[static_cast<size_t>(prefix)] == doc.notes[static_cast<size_t>(prefix)])
+    ++prefix;
+
+  // The tail is the old notes still equal at the end, and not already in the
+  // prefix. after_index is how many old notes are outside that tail.
+  int suffix = 0;
+  while (suffix < old_n - prefix && suffix < new_n - prefix &&
+         before_notes[static_cast<size_t>(old_n - 1 - suffix)] ==
+             doc.notes[static_cast<size_t>(new_n - 1 - suffix)])
+    ++suffix;
+  const int after_index = old_n - suffix;
+
+  auto shift_story = [&](std::vector<Paragraph>& story) {
+    for (Paragraph& paragraph : story) {
+      for (Run& run : paragraph.runs) {
+        if (run.note > after_index)
+          run.note += delta;
+        if (run.note > new_n)
+          run.note = new_n;
+        if (run.note < 0)
+          run.note = 0;
+      }
+    }
+  };
+  shift_story(doc.paragraphs);
+  shift_story(doc.header);
+  shift_story(doc.footer);
+}
+
 }  // namespace writeit

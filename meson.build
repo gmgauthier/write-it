@@ -202,76 +202,83 @@ write_it_plain_breaks_tests = executable(
   dependencies: [writeit_dep],
 )
 test('plain-breaks', write_it_plain_breaks_tests)
-||||||| parent of 0ac3423 (Escape Markdown markup that is ordinary text.)
+
 write_it_markdown_escape_tests = executable(
   'write-it-markdown-escape-tests',
   'tests/test_markdown_escape.cpp',
   dependencies: [writeit_dep],
 )
 test('markdown-escape', write_it_markdown_escape_tests)
-||||||| parent of 2ab122c (Keep a page break that is the last control word in an RTF file.)
+
 write_it_rtf_final_page_tests = executable(
   'write-it-rtf-final-page-tests',
   'tests/test_rtf_final_page.cpp',
   dependencies: [writeit_dep],
 )
 test('rtf-final-page', write_it_rtf_final_page_tests)
-||||||| parent of e23b777 (Stop a footnote from cutting a number off the previous sentence.)
+
 write_it_rtf_footnote_marker_tests = executable(
   'write-it-rtf-footnote-marker-tests',
   'tests/test_rtf_footnote_marker.cpp',
   dependencies: [writeit_dep],
 )
 test('rtf-footnote-marker', write_it_rtf_footnote_marker_tests)
-||||||| parent of 3608d81 (Skip the metafile fallback stored beside an RTF picture.)
+
 write_it_rtf_metafile_tests = executable(
   'write-it-rtf-metafile-tests',
   'tests/test_rtf_metafile.cpp',
   dependencies: [writeit_dep],
 )
 test('rtf-metafile', write_it_rtf_metafile_tests)
-||||||| parent of 46e04b2 (Write a table cell's paragraph format into the RTF.)
+
 write_it_rtf_cell_format_tests = executable(
   'write-it-rtf-cell-format-tests',
   'tests/test_rtf_cell_format.cpp',
   dependencies: [writeit_dep],
 )
 test('rtf-cell-format', write_it_rtf_cell_format_tests)
-||||||| parent of 479ed1d (Write styles and lists from headers, footers, and footnotes.)
+
 write_it_rtf_story_format_tests = executable(
   'write-it-rtf-story-format-tests',
   'tests/test_rtf_story_format.cpp',
   dependencies: [writeit_dep],
 )
 test('rtf-story-format', write_it_rtf_story_format_tests)
-||||||| parent of 3d7168f (Treat a stalled spell checker as not knowing the word.)
+
 write_it_aspell_failure_tests = executable(
   'write-it-aspell-failure-tests',
   'tests/test_aspell_failure.cpp',
   dependencies: [writeit_dep],
 )
 test('aspell-failure', write_it_aspell_failure_tests)
-||||||| parent of e10f0a0 (Let word motion through in a cell, header, footer, or note.)
+
 write_it_cell_word_keys_tests = executable(
   'write-it-cell-word-keys-tests',
   'tests/test_cell_word_keys.cpp',
   dependencies: [writeit_dep],
 )
 test('cell-word-keys', write_it_cell_word_keys_tests)
-||||||| parent of 66358ce (Record a custom undo step when a rebuild holds a picture.)
+
 write_it_undo_picture_tests = executable(
   'write-it-undo-picture-tests',
   'tests/test_undo_picture.cpp',
   dependencies: [writeit_dep],
 )
 test('undo-picture', write_it_undo_picture_tests)
-||||||| parent of 95f8b16 (Keep the bytes of a picture pasted into the body or a cell.)
+
 write_it_picture_paste_tests = executable(
   'write-it-picture-paste-tests',
   'tests/test_picture_paste.cpp',
   dependencies: [writeit_dep],
 )
 test('picture-paste', with_display, args: [write_it_picture_paste_tests.full_path()], depends: write_it_picture_paste_tests, timeout: 90, suite: 'ui')
+
+write_it_note_retarget_tests = executable(
+  'write-it-note-retarget-tests',
+  'tests/test_note_retarget.cpp',
+  dependencies: [writeit_dep],
+)
+test('note-retarget', write_it_note_retarget_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
