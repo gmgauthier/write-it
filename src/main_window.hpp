@@ -24,6 +24,13 @@ namespace writeit {
 
 class TableSheet;
 
+// Ctrl+Z and Ctrl+Y in a cell, header, footer, or note. Every other Ctrl key
+// belongs to the text view: word motion, Ctrl+Backspace, Ctrl+Delete.
+// Accelerators have already run, so passing the key on does not type over them.
+enum class StoryKey { Pass, Undo, Redo };
+
+StoryKey story_key(unsigned keyval, unsigned state);
+
 // What a paragraph tag carries: the paragraph's indents, alignment, list,
 // and style.
 struct ParaFormat {

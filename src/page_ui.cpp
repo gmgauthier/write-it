@@ -800,24 +800,21 @@ class TableSheet : public Gtk::Grid {
       focus_next(row, column);
       return true;
     }
-    if ((mods & GDK_CONTROL_MASK) == 0)
-      return false;
-    if (event->keyval == GDK_KEY_z && !shift) {
-      MainWindow& window = window_;
-      Glib::signal_idle().connect_once([&window] { window.undo(); });
-      return true;
+    switch (story_key(event->keyval, event->state)) {
+      case StoryKey::Undo: {
+        MainWindow& window = window_;
+        Glib::signal_idle().connect_once([&window] { window.undo(); });
+        return true;
+      }
+      case StoryKey::Redo: {
+        MainWindow& window = window_;
+        Glib::signal_idle().connect_once([&window] { window.redo(); });
+        return true;
+      }
+      case StoryKey::Pass:
+        return false;
     }
-    if (event->keyval == GDK_KEY_y || (event->keyval == GDK_KEY_z && shift) ||
-        event->keyval == GDK_KEY_Z) {
-      MainWindow& window = window_;
-      Glib::signal_idle().connect_once([&window] { window.redo(); });
-      return true;
-    }
-    if (event->keyval == GDK_KEY_a || event->keyval == GDK_KEY_c || event->keyval == GDK_KEY_v ||
-        event->keyval == GDK_KEY_x || event->keyval == GDK_KEY_A || event->keyval == GDK_KEY_C ||
-        event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_X)
-      return false;
-    return true;
+    return false;
   }
 
   bool on_cell_press(GdkEventButton* event, int column, CellFrame* frame);
@@ -2723,28 +2720,34 @@ void MainWindow::reveal_story_caret(Gtk::TextView& view)
     adj->set_value(want);
 }
 
+StoryKey story_key(unsigned keyval, unsigned state)
+{
+  const guint mods = static_cast<guint>(state) & gtk_accelerator_get_default_mod_mask();
+  if ((mods & GDK_CONTROL_MASK) == 0)
+    return StoryKey::Pass;
+  const bool shift = (mods & GDK_SHIFT_MASK) != 0;
+  if (keyval == GDK_KEY_z && !shift)
+    return StoryKey::Undo;
+  if (keyval == GDK_KEY_y || (keyval == GDK_KEY_z && shift) || keyval == GDK_KEY_Z)
+    return StoryKey::Redo;
+  return StoryKey::Pass;
+}
+
 bool MainWindow::on_story_key(GdkEventKey* event)
 {
   if (!event)
     return false;
-  const guint mods = event->state & gtk_accelerator_get_default_mod_mask();
-  if ((mods & GDK_CONTROL_MASK) == 0)
-    return false;
-  const bool shift = (mods & GDK_SHIFT_MASK) != 0;
-  if (event->keyval == GDK_KEY_z && !shift) {
-    undo();
-    return true;
+  switch (story_key(event->keyval, event->state)) {
+    case StoryKey::Undo:
+      undo();
+      return true;
+    case StoryKey::Redo:
+      redo();
+      return true;
+    case StoryKey::Pass:
+      return false;
   }
-  if (event->keyval == GDK_KEY_y || (event->keyval == GDK_KEY_z && shift) ||
-      event->keyval == GDK_KEY_Z) {
-    redo();
-    return true;
-  }
-  if (event->keyval == GDK_KEY_a || event->keyval == GDK_KEY_c || event->keyval == GDK_KEY_v ||
-      event->keyval == GDK_KEY_x || event->keyval == GDK_KEY_A || event->keyval == GDK_KEY_C ||
-      event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_X)
-    return false;
-  return true;
+  return false;
 }
 
 void MainWindow::on_header_footer()

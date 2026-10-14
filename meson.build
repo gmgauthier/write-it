@@ -251,6 +251,13 @@ write_it_aspell_failure_tests = executable(
   dependencies: [writeit_dep],
 )
 test('aspell-failure', write_it_aspell_failure_tests)
+||||||| parent of e10f0a0 (Let word motion through in a cell, header, footer, or note.)
+write_it_cell_word_keys_tests = executable(
+  'write-it-cell-word-keys-tests',
+  'tests/test_cell_word_keys.cpp',
+  dependencies: [writeit_dep],
+)
+test('cell-word-keys', write_it_cell_word_keys_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
