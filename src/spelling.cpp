@@ -390,9 +390,13 @@ const std::string& AspellDictionary::error() const
 
 bool AspellDictionary::contains(const std::string& word)
 {
+  // A dictionary that never opened, or one whose pipe just failed, has not
+  // confirmed the word. Returning true here marked every later word correct.
   if (!impl_->ok)
-    return true;
+    return false;
   const std::vector<std::string> lines = impl_->exchange(word);
+  if (!impl_->ok)
+    return false;
   for (const std::string& line : lines) {
     if (!line.empty() && (line[0] == '&' || line[0] == '#'))
       return false;

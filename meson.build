@@ -244,6 +244,13 @@ write_it_rtf_story_format_tests = executable(
   dependencies: [writeit_dep],
 )
 test('rtf-story-format', write_it_rtf_story_format_tests)
+||||||| parent of 3d7168f (Treat a stalled spell checker as not knowing the word.)
+write_it_aspell_failure_tests = executable(
+  'write-it-aspell-failure-tests',
+  'tests/test_aspell_failure.cpp',
+  dependencies: [writeit_dep],
+)
+test('aspell-failure', write_it_aspell_failure_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
