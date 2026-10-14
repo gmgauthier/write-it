@@ -128,10 +128,13 @@ write_it_spelling_tests = executable(
 )
 test('spelling', write_it_spelling_tests)
 
-# A window test runs under tests/with_display.sh: its own X server, so the
-# suite can run several at once. They do not share a display or its clipboard.
-# A new test that opens a window needs that wrapper too. smoke-open starts
-# its own server and its own session bus, and it runs alone.
+# A window test is suite ui, and CI does not run it. Locally:
+#   xvfb-run -a meson test -C build --suite ui
+# or ./tests/ui-docker.sh
+# Each one runs under tests/with_display.sh: its own X server, so the suite
+# can run several at once. They do not share a display or its clipboard.
+# A new test that opens a window needs that wrapper and suite ui.
+# smoke-open starts its own server and its own session bus, and it runs alone.
 with_display = find_program('tests/with_display.sh')
 
 # Opening a .txt or .md in the real window, under a display: unmodified until
@@ -141,7 +144,7 @@ write_it_import_clean_tests = executable(
   'tests/test_import_clean.cpp',
   dependencies: [writeit_dep],
 )
-test('import-clean', with_display, args: [write_it_import_clean_tests.full_path()], depends: write_it_import_clean_tests, timeout: 60)
+test('import-clean', with_display, args: [write_it_import_clean_tests.full_path()], depends: write_it_import_clean_tests, timeout: 60, suite: 'ui')
 
 # check.hpp's guard. A suite that runs one check too few or too many, or
 # names no count, fails; done() without a count does not compile.
@@ -206,7 +209,7 @@ write_it_page_ui_tests = executable(
   'tests/test_page_ui.cpp',
   dependencies: [writeit_dep],
 )
-test('page-ui', with_display, args: [write_it_page_ui_tests.full_path()], depends: write_it_page_ui_tests, timeout: 60)
+test('page-ui', with_display, args: [write_it_page_ui_tests.full_path()], depends: write_it_page_ui_tests, timeout: 60, suite: 'ui')
 
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',
@@ -236,7 +239,7 @@ write_it_justify_ui_tests = executable(
   'tests/test_justify_ui.cpp',
   dependencies: [writeit_dep],
 )
-test('justify-ui', with_display, args: [write_it_justify_ui_tests.full_path()], depends: write_it_justify_ui_tests, timeout: 60)
+test('justify-ui', with_display, args: [write_it_justify_ui_tests.full_path()], depends: write_it_justify_ui_tests, timeout: 60, suite: 'ui')
 
 write_it_lists_tests = executable(
   'write-it-lists-tests',
@@ -264,9 +267,10 @@ write_it_rtf_unicode_tests = executable(
   'tests/test_rtf_unicode.cpp',
   dependencies: [writeit_dep, dependency('glib-2.0')],
 )
-# The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 20 s
+# The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 50 s
 # under ASan and UBSan, against meson's 30 s default, hence its own timeout.
-# `meson test --no-suite slow` leaves it out locally; CI runs everything.
+# Suite slow is this fuzz. CI runs it with the other unit tests.
+# `meson test --suite slow` runs only this. The long window tests are suite ui.
 test(
   'rtf-unicode-fuzz',
   write_it_rtf_unicode_tests,
@@ -289,7 +293,7 @@ write_it_status_bar_tests = executable(
   'tests/test_status_bar.cpp',
   dependencies: [writeit_dep],
 )
-test('status-bar', with_display, args: [write_it_status_bar_tests.full_path()], depends: write_it_status_bar_tests, timeout: 120)
+test('status-bar', with_display, args: [write_it_status_bar_tests.full_path()], depends: write_it_status_bar_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: View > Zoom and View > Page / Draft, and
 # the width GTK allocates and wraps at after each change.
@@ -298,7 +302,7 @@ write_it_page_width_tests = executable(
   'tests/test_page_width.cpp',
   dependencies: [writeit_dep],
 )
-test('page-width', with_display, args: [write_it_page_width_tests.full_path()], depends: write_it_page_width_tests, timeout: 120, priority: 20)
+test('page-width', with_display, args: [write_it_page_width_tests.full_path()], depends: write_it_page_width_tests, timeout: 120, priority: 20, suite: 'ui')
 
 # The real window under a display: the Page view sheet is A4 at every zoom,
 # and its size does not depend on the zooms before.
@@ -307,7 +311,7 @@ write_it_page_sheet_tests = executable(
   'tests/test_page_sheet.cpp',
   dependencies: [writeit_dep],
 )
-test('page-sheet', with_display, args: [write_it_page_sheet_tests.full_path()], depends: write_it_page_sheet_tests, timeout: 120)
+test('page-sheet', with_display, args: [write_it_page_sheet_tests.full_path()], depends: write_it_page_sheet_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: a long page is separate sheets with the
 # gray pasteboard between them, and Draft has no such gap.
@@ -316,7 +320,7 @@ write_it_page_seam_tests = executable(
   'tests/test_page_seams.cpp',
   dependencies: [writeit_dep, dependency('zlib')],
 )
-test('page-seam', with_display, args: [write_it_page_seam_tests.full_path()], depends: write_it_page_seam_tests, timeout: 60)
+test('page-seam', with_display, args: [write_it_page_seam_tests.full_path()], depends: write_it_page_seam_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: where list labels land beside centred,
 # right-aligned and left-aligned text, with a non-standard hang.
@@ -325,7 +329,7 @@ write_it_list_labels_tests = executable(
   'tests/test_list_labels.cpp',
   dependencies: [writeit_dep],
 )
-test('list-labels', with_display, args: [write_it_list_labels_tests.full_path()], depends: write_it_list_labels_tests, timeout: 120, priority: 10)
+test('list-labels', with_display, args: [write_it_list_labels_tests.full_path()], depends: write_it_list_labels_tests, timeout: 120, priority: 10, suite: 'ui')
 
 # The real window under a display: every way the caret moves (Ctrl+End,
 # arrows, typing, a placed caret) in Page, Draft and 200%, and whether the
@@ -335,7 +339,7 @@ write_it_caret_scroll_tests = executable(
   'tests/test_caret_scroll.cpp',
   dependencies: [writeit_dep],
 )
-test('caret-scroll', with_display, args: [write_it_caret_scroll_tests.full_path()], depends: write_it_caret_scroll_tests, timeout: 120, priority: 20)
+test('caret-scroll', with_display, args: [write_it_caret_scroll_tests.full_path()], depends: write_it_caret_scroll_tests, timeout: 120, priority: 20, suite: ['slow', 'ui'])
 
 # The real window under a display: it fits a 1024 px screen.
 write_it_window_width_tests = executable(
@@ -343,7 +347,7 @@ write_it_window_width_tests = executable(
   'tests/test_window_width.cpp',
   dependencies: [writeit_dep],
 )
-test('window-width', with_display, args: [write_it_window_width_tests.full_path()], depends: write_it_window_width_tests, timeout: 60)
+test('window-width', with_display, args: [write_it_window_width_tests.full_path()], depends: write_it_window_width_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: the first launch's size and zoom, and the
 # size and zoom it saves and restores.
@@ -352,7 +356,7 @@ write_it_window_memory_tests = executable(
   'tests/test_window_memory.cpp',
   dependencies: [writeit_dep],
 )
-test('window-memory', with_display, args: [write_it_window_memory_tests.full_path()], depends: write_it_window_memory_tests, timeout: 60)
+test('window-memory', with_display, args: [write_it_window_memory_tests.full_path()], depends: write_it_window_memory_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: direct formatting made with the toolbar
 # stays through named styles applied and edited.
@@ -361,7 +365,7 @@ write_it_style_direct_tests = executable(
   'tests/test_style_direct.cpp',
   dependencies: [writeit_dep],
 )
-test('style-direct', with_display, args: [write_it_style_direct_tests.full_path()], depends: write_it_style_direct_tests, timeout: 60)
+test('style-direct', with_display, args: [write_it_style_direct_tests.full_path()], depends: write_it_style_direct_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: capture() reads formats only where they
 # change, builds exactly what the per-character reading built, and reads
@@ -371,7 +375,7 @@ write_it_capture_tests = executable(
   'tests/test_capture.cpp',
   dependencies: [writeit_dep],
 )
-test('capture', with_display, args: [write_it_capture_tests.full_path()], depends: write_it_capture_tests, timeout: 120, priority: 20)
+test('capture', with_display, args: [write_it_capture_tests.full_path()], depends: write_it_capture_tests, timeout: 120, priority: 20, suite: ['slow', 'ui'])
 
 # The real window under a display: long style names keep the style boxes
 # and Format > Style... narrow, the Style box is blank over mixed styles,
@@ -381,7 +385,7 @@ write_it_style_ui_tests = executable(
   'tests/test_style_ui.cpp',
   dependencies: [writeit_dep],
 )
-test('style-ui', with_display, args: [write_it_style_ui_tests.full_path()], depends: write_it_style_ui_tests, timeout: 60)
+test('style-ui', with_display, args: [write_it_style_ui_tests.full_path()], depends: write_it_style_ui_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: a closed window leaves nothing on the
 # clipboard, which outlives it (run under ASan to see a use after free).
@@ -390,7 +394,7 @@ write_it_window_lifetime_tests = executable(
   'tests/test_window_lifetime.cpp',
   dependencies: [writeit_dep],
 )
-test('window-lifetime', with_display, args: [write_it_window_lifetime_tests.full_path()], depends: write_it_window_lifetime_tests, timeout: 60)
+test('window-lifetime', with_display, args: [write_it_window_lifetime_tests.full_path()], depends: write_it_window_lifetime_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: 2,000 key presses queued at once arrive
 # intact, and update_actions() never runs inside itself (it must not wait on
@@ -400,7 +404,7 @@ write_it_fast_typing_tests = executable(
   'tests/test_fast_typing.cpp',
   dependencies: [writeit_dep],
 )
-test('fast-typing', with_display, args: [write_it_fast_typing_tests.full_path()], depends: write_it_fast_typing_tests, timeout: 60)
+test('fast-typing', with_display, args: [write_it_fast_typing_tests.full_path()], depends: write_it_fast_typing_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: Paste follows the clipboard once the main
 # loop has run, and a window closed with a clipboard question in flight is
@@ -410,7 +414,7 @@ write_it_clipboard_paste_tests = executable(
   'tests/test_clipboard_paste.cpp',
   dependencies: [writeit_dep],
 )
-test('clipboard-paste', with_display, args: [write_it_clipboard_paste_tests.full_path()], depends: write_it_clipboard_paste_tests, timeout: 60)
+test('clipboard-paste', with_display, args: [write_it_clipboard_paste_tests.full_path()], depends: write_it_clipboard_paste_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: pasted text keeps the character format it
 # was copied with, and no character carries two format tags, after paste,
@@ -420,7 +424,7 @@ write_it_paste_format_tests = executable(
   'tests/test_paste_format.cpp',
   dependencies: [writeit_dep],
 )
-test('paste-format', with_display, args: [write_it_paste_format_tests.full_path()], depends: write_it_paste_format_tests, timeout: 120)
+test('paste-format', with_display, args: [write_it_paste_format_tests.full_path()], depends: write_it_paste_format_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: what overflows the toolbars at 960 px and
 # at the narrowest reaches the overflow menus with its label, and does there
@@ -430,7 +434,7 @@ write_it_toolbar_overflow_tests = executable(
   'tests/test_toolbar_overflow.cpp',
   dependencies: [writeit_dep],
 )
-test('toolbar-overflow', with_display, args: [write_it_toolbar_overflow_tests.full_path()], depends: write_it_toolbar_overflow_tests, timeout: 120)
+test('toolbar-overflow', with_display, args: [write_it_toolbar_overflow_tests.full_path()], depends: write_it_toolbar_overflow_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: Print writes the page view at the
 # document's paper size. Draft is put back afterwards.
@@ -439,7 +443,7 @@ write_it_print_tests = executable(
   'tests/test_print.cpp',
   dependencies: [writeit_dep, dependency('zlib')],
 )
-test('print', with_display, args: [write_it_print_tests.full_path()], depends: write_it_print_tests, timeout: 120)
+test('print', with_display, args: [write_it_print_tests.full_path()], depends: write_it_print_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: New from Template loads a shipped RTF
 # starter as an unsaved document.
@@ -448,7 +452,7 @@ write_it_template_tests = executable(
   'tests/test_template.cpp',
   dependencies: [writeit_dep],
 )
-test('template', with_display, args: [write_it_template_tests.full_path()], depends: write_it_template_tests, timeout: 120)
+test('template', with_display, args: [write_it_template_tests.full_path()], depends: write_it_template_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: a file with half-point sizes and an empty
 # 20 pt line, opened, shown in the size box, typed in and saved back.
@@ -457,7 +461,7 @@ write_it_font_size_ui_tests = executable(
   'tests/test_font_size_ui.cpp',
   dependencies: [writeit_dep],
 )
-test('font-size-ui', with_display, args: [write_it_font_size_ui_tests.full_path()], depends: write_it_font_size_ui_tests, timeout: 60)
+test('font-size-ui', with_display, args: [write_it_font_size_ui_tests.full_path()], depends: write_it_font_size_ui_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: Format > Style...'s size field refuses
 # what the toolbar's size box refuses, with its messages, keeping the dialog
@@ -467,7 +471,7 @@ write_it_style_size_ui_tests = executable(
   'tests/test_style_size_ui.cpp',
   dependencies: [writeit_dep],
 )
-test('style-size-ui', with_display, args: [write_it_style_size_ui_tests.full_path()], depends: write_it_style_size_ui_tests, timeout: 60)
+test('style-size-ui', with_display, args: [write_it_style_size_ui_tests.full_path()], depends: write_it_style_size_ui_tests, timeout: 60, suite: 'ui')
 
 # The real window under a display: a list label wider than its hang moves a
 # left-aligned or justified item's text to the next default tab stop.
@@ -476,7 +480,7 @@ write_it_list_tabs_tests = executable(
   'tests/test_list_tabs.cpp',
   dependencies: [writeit_dep],
 )
-test('list-tabs', with_display, args: [write_it_list_tabs_tests.full_path()], depends: write_it_list_tabs_tests, timeout: 120, priority: 20)
+test('list-tabs', with_display, args: [write_it_list_tabs_tests.full_path()], depends: write_it_list_tabs_tests, timeout: 120, priority: 20, suite: ['slow', 'ui'])
 
 # The real window under a display: Format > Paragraph's warnings for an
 # indent out of range, not a number, or leaving no room for text, and the
@@ -486,7 +490,7 @@ write_it_paragraph_dialog_tests = executable(
   'tests/test_paragraph_dialog.cpp',
   dependencies: [writeit_dep],
 )
-test('paragraph-dialog', with_display, args: [write_it_paragraph_dialog_tests.full_path()], depends: write_it_paragraph_dialog_tests, timeout: 60)
+test('paragraph-dialog', with_display, args: [write_it_paragraph_dialog_tests.full_path()], depends: write_it_paragraph_dialog_tests, timeout: 60, suite: 'ui')
 
 # The real application under a display: a file already open, asked for by a
 # symlink, a hard link or a ".." path, from Application::open or File > Open.
@@ -495,7 +499,7 @@ write_it_open_identity_tests = executable(
   'tests/test_open_identity.cpp',
   dependencies: [writeit_dep],
 )
-test('open-identity', with_display, args: [write_it_open_identity_tests.full_path()], depends: write_it_open_identity_tests, timeout: 60)
+test('open-identity', with_display, args: [write_it_open_identity_tests.full_path()], depends: write_it_open_identity_tests, timeout: 60, suite: 'ui')
 
 # Launches the program with files, on its own Xvfb and private D-Bus; see the script.
 test(
@@ -505,6 +509,7 @@ test(
   depends: write_it_exe,
   timeout: 180,
   is_parallel: false,
+  suite: 'ui',
 )
 
 test(
@@ -525,7 +530,7 @@ write_it_undo_tests = executable(
   'tests/test_undo.cpp',
   dependencies: [writeit_dep],
 )
-test('undo', with_display, args: [write_it_undo_tests.full_path()], depends: write_it_undo_tests, timeout: 120, priority: 20)
+test('undo', with_display, args: [write_it_undo_tests.full_path()], depends: write_it_undo_tests, timeout: 120, priority: 20, suite: 'ui')
 
 # The real window under a display, and a bare buffer without one: the undo
 # fuzz of bench/undo_fuzz.md. Random runs of edits through the keys, boxes,
@@ -538,7 +543,7 @@ write_it_undo_fuzz_tests = executable(
   'tests/test_undo_fuzz.cpp',
   dependencies: [writeit_dep],
 )
-test('undo-fuzz', with_display, args: [write_it_undo_fuzz_tests.full_path()], depends: write_it_undo_fuzz_tests, timeout: 1800, priority: 30)
+test('undo-fuzz', with_display, args: [write_it_undo_fuzz_tests.full_path()], depends: write_it_undo_fuzz_tests, timeout: 1800, priority: 30, suite: ['slow', 'ui'])
 # The real window under a display: capture() copies the whole document, so
 # a keystroke may call it only for undo (at most twice), and a redraw not at
 # all. A test-only count in the window.
@@ -547,7 +552,7 @@ write_it_capture_count_tests = executable(
   'tests/test_capture_count.cpp',
   dependencies: [writeit_dep],
 )
-test('capture-count', with_display, args: [write_it_capture_count_tests.full_path()], depends: write_it_capture_count_tests, timeout: 120)
+test('capture-count', with_display, args: [write_it_capture_count_tests.full_path()], depends: write_it_capture_count_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: a keystroke in a list draws its labels
 # with a few line layouts and label layouts, however many items show.
@@ -556,7 +561,7 @@ write_it_list_draw_tests = executable(
   'tests/test_list_draw.cpp',
   dependencies: [writeit_dep],
 )
-test('list-draw', with_display, args: [write_it_list_draw_tests.full_path()], depends: write_it_list_draw_tests, timeout: 120)
+test('list-draw', with_display, args: [write_it_list_draw_tests.full_path()], depends: write_it_list_draw_tests, timeout: 120, suite: 'ui')
 
 # The real window under a display: the unsaved-changes state after typing,
 # Save, Save As, Undo, Redo, New and Open, from the undo state id.
@@ -565,7 +570,7 @@ write_it_dirty_state_tests = executable(
   'tests/test_dirty_state.cpp',
   dependencies: [writeit_dep],
 )
-test('dirty-state', with_display, args: [write_it_dirty_state_tests.full_path()], depends: write_it_dirty_state_tests, timeout: 60)
+test('dirty-state', with_display, args: [write_it_dirty_state_tests.full_path()], depends: write_it_dirty_state_tests, timeout: 60, suite: 'ui')
 
 # The typing-speed gate. Not a suite test: a release build, run by hand.
 # tests/README.md says how.

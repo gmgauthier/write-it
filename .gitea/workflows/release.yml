@@ -1,0 +1,205 @@
+name: Release
+
+# A version tag publishes the source tarball, the amd64 deb, and the AppImage.
+# Cordle and Gralculator do the same with two reusable jobs. Those jobs each
+# build a small binary, so they build twice. This builds once, then uploads
+# that set to both forges.
+#
+# On this repo, the same secret names those projects use:
+#   RELEASE_TOKEN      write access here, for the Gitea release
+#   GH_PUBLISH_TOKEN   contents:write on github.com/gmgauthier/write-it
+# Gitea rejects a secret whose name starts with GITHUB_.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-gitea
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build tools
+        run: |
+          apt update
+          apt -y --no-install-recommends install \
+            build-essential debhelper dpkg-dev fakeroot \
+            meson ninja-build pkg-config g++ \
+            libgtkmm-3.0-dev zlib1g-dev \
+            xvfb xauth desktop-file-utils \
+            ca-certificates curl jq file
+
+      - name: Install linuxdeploy
+        run: |
+          curl -fsSL -o /usr/local/bin/linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x /usr/local/bin/linuxdeploy
+          curl -fsSL -o /usr/local/bin/linuxdeploy-plugin-gtk.sh \
+            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x /usr/local/bin/linuxdeploy-plugin-gtk.sh
+          ln -sf linuxdeploy-plugin-gtk.sh /usr/local/bin/linuxdeploy-plugin-gtk
+
+      - name: Build the three artifacts
+        run: ./scripts/release.sh all
+
+      - name: Publish to Gitea and GitHub
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          VER="${TAG#v}"
+          MESON=$(sed -n "s/^  version: '\\(.*\\)',/\\1/p" meson.build | head -1)
+          if [ "$VER" != "$MESON" ]; then
+            echo "tag ${TAG} does not match meson version ${MESON}" >&2
+            exit 1
+          fi
+
+          mapfile -t ASSETS < <(find dist -maxdepth 1 -type f \
+            \( -name "write-it-${VER}.tar.xz" \
+               -o -name "Write-It-${VER}-x86_64.AppImage" \
+               -o -name "write-it_${VER}-*_amd64.deb" \) \
+            ! -name 'write-it-dbgsym_*' | sort)
+          if [ "${#ASSETS[@]}" -ne 3 ]; then
+            echo "expected the tarball, the deb, and the AppImage" >&2
+            printf '%s\n' "${ASSETS[@]:-}"
+            ls -l dist >&2 || true
+            exit 1
+          fi
+
+          BODY=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}")
+          if [ -z "$BODY" ]; then
+            BODY=$(printf 'Write-It %s\n\nThe source tarball, the amd64 deb, and the AppImage are attached.\n' "$VER")
+          fi
+
+          mime_of() {
+            case "$1" in
+              *.tar.xz) printf '%s' 'application/x-xz' ;;
+              *.deb) printf '%s' 'application/vnd.debian.binary-package' ;;
+              *) printf '%s' 'application/octet-stream' ;;
+            esac
+          }
+
+          # Gitea. Create, or reuse on 409, then replace any asset of the same name.
+          GITEA_API="${GITHUB_SERVER_URL%/}/api/v1"
+          REPO="${GITHUB_REPOSITORY}"
+          payload=$(jq -n \
+            --arg tag "$TAG" \
+            --arg name "Write-It ${VER}" \
+            --arg body "$BODY" \
+            --arg sha "$GITHUB_SHA" \
+            '{tag_name:$tag, name:$name, target:$sha, body:$body, draft:false}')
+          HTTP_CODE=$(curl --silent --show-error -o release.json -w '%{http_code}' \
+            -X POST "${GITEA_API}/repos/${REPO}/releases" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$payload")
+          echo "Gitea create HTTP ${HTTP_CODE}"
+          case "${HTTP_CODE}" in
+            201) RELEASE_ID=$(jq -r '.id // empty' release.json) ;;
+            409)
+              RELEASE_ID=$(curl --fail --silent --show-error \
+                "${GITEA_API}/repos/${REPO}/releases/tags/${TAG}" \
+                -H "Authorization: token ${GITEA_TOKEN}" | jq -r '.id // empty')
+              ;;
+            *)
+              echo "could not create the Gitea release" >&2
+              cat release.json >&2
+              exit 1
+              ;;
+          esac
+          [ -n "${RELEASE_ID}" ]
+          EXISTING=$(curl --fail --silent --show-error \
+            "${GITEA_API}/repos/${REPO}/releases/${RELEASE_ID}/assets" \
+            -H "Authorization: token ${GITEA_TOKEN}")
+          for asset in "${ASSETS[@]}"; do
+            name=$(basename "$asset")
+            old=$(printf '%s' "${EXISTING}" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id' | head -n1)
+            if [ -n "$old" ]; then
+              curl --fail --silent --show-error -X DELETE \
+                "${GITEA_API}/repos/${REPO}/releases/${RELEASE_ID}/assets/${old}" \
+                -H "Authorization: token ${GITEA_TOKEN}"
+            fi
+            curl --fail --silent --show-error -X POST \
+              "${GITEA_API}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+              -H "Authorization: token ${GITEA_TOKEN}" \
+              -H "Content-Type: $(mime_of "$name")" \
+              --data-binary "@${asset}"
+            echo "Gitea ${name}"
+          done
+
+          # GitHub. Create, or reuse on 422, then replace any asset of the same name.
+          GH_API="https://api.github.com"
+          GH_UPLOADS="https://uploads.github.com"
+          GH_REPO="gmgauthier/write-it"
+          gh_payload=$(jq -n \
+            --arg tag "$TAG" \
+            --arg name "Write-It ${VER}" \
+            --arg body "$BODY" \
+            --arg sha "$GITHUB_SHA" \
+            '{tag_name:$tag, name:$name, body:$body, target_commitish:$sha, draft:false, prerelease:false}')
+          HTTP_CODE=$(curl --silent --show-error -o gh-release.json -w '%{http_code}' \
+            -X POST "${GH_API}/repos/${GH_REPO}/releases" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/json" \
+            -d "$gh_payload")
+          echo "GitHub create HTTP ${HTTP_CODE}"
+          case "${HTTP_CODE}" in
+            201) GH_ID=$(jq -r '.id // empty' gh-release.json) ;;
+            422)
+              HTTP_GET=$(curl --silent --show-error -o gh-release.json -w '%{http_code}' \
+                "${GH_API}/repos/${GH_REPO}/releases/tags/${TAG}" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28")
+              if [ "${HTTP_GET}" != "200" ]; then
+                echo "could not create or find the GitHub release" >&2
+                cat gh-release.json >&2
+                exit 1
+              fi
+              GH_ID=$(jq -r '.id // empty' gh-release.json)
+              ;;
+            *)
+              echo "could not create the GitHub release" >&2
+              cat gh-release.json >&2
+              exit 1
+              ;;
+          esac
+          [ -n "${GH_ID}" ]
+          GH_EXISTING=$(curl --fail --silent --show-error \
+            "${GH_API}/repos/${GH_REPO}/releases/${GH_ID}/assets" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28")
+          for asset in "${ASSETS[@]}"; do
+            name=$(basename "$asset")
+            old=$(printf '%s' "${GH_EXISTING}" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id' | head -n1)
+            if [ -n "$old" ]; then
+              curl --fail --silent --show-error -X DELETE \
+                "${GH_API}/repos/${GH_REPO}/releases/assets/${old}" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28"
+            fi
+            curl --fail --silent --show-error -X POST \
+              "${GH_UPLOADS}/repos/${GH_REPO}/releases/${GH_ID}/assets?name=${name}" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: $(mime_of "$name")" \
+              --data-binary "@${asset}"
+            echo "GitHub ${name}"
+          done

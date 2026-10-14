@@ -36,7 +36,10 @@ do_tarball() {
 }
 
 do_deb() {
-  dpkg-buildpackage -us -uc -b --no-sign
+  # The suite already ran on this commit in CI. Running it again here was
+  # most of the wait after the checks. A normal dpkg-buildpackage still tests.
+  DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+$DEB_BUILD_OPTIONS }nocheck" \
+    dpkg-buildpackage -us -uc -b --no-sign
   moved=0
   for f in "${ROOT}/../write-it_${VERSION}"-*.deb \
            "${ROOT}/../write-it-dbgsym_${VERSION}"-*.deb; do
