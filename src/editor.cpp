@@ -5806,6 +5806,92 @@ void MainWindow::present_find(bool replace)
     find_entry_->grab_focus();
 }
 
+namespace {
+
+struct FoldedText {
+  Glib::ustring text;
+  std::vector<int> origin;
+};
+
+FoldedText fold_chars(const Glib::ustring& text)
+{
+  FoldedText folded;
+  const int count = static_cast<int>(text.length());
+  for (int i = 0; i < count; ++i) {
+    const Glib::ustring part = Glib::ustring(1, text[i]).casefold();
+    const int part_count = static_cast<int>(part.length());
+    for (int k = 0; k < part_count; ++k)
+      folded.origin.push_back(i);
+    folded.text.append(part);
+  }
+  return folded;
+}
+
+int folded_end(const FoldedText& folded, int begin, int end)
+{
+  int last = folded.origin[static_cast<size_t>(begin)];
+  for (int i = begin; i < end; ++i)
+    last = std::max(last, folded.origin[static_cast<size_t>(i)]);
+  return last + 1;
+}
+
+}  // namespace
+
+FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
+                     bool match_case)
+{
+  FindHit miss;
+  if (needle.empty())
+    return miss;
+  const int count = static_cast<int>(doc.length());
+  if (origin < 0)
+    origin = 0;
+  if (origin > count)
+    origin = count;
+  if (match_case) {
+    const int width = static_cast<int>(needle.length());
+    if (width <= 0 || width > count)
+      return miss;
+    auto matches = [&](int index) {
+      return doc.substr(static_cast<Glib::ustring::size_type>(index),
+                        static_cast<Glib::ustring::size_type>(width)) == needle;
+    };
+    for (int i = origin; i + width <= count; ++i) {
+      if (matches(i))
+        return FindHit{i, width};
+    }
+    for (int i = 0; i < std::min(origin, count); ++i) {
+      if (matches(i))
+        return FindHit{i, width};
+    }
+    return miss;
+  }
+  const FoldedText hay = fold_chars(doc);
+  const Glib::ustring want = needle.casefold();
+  const int folded_count = static_cast<int>(hay.text.length());
+  const int width = static_cast<int>(want.length());
+  if (width <= 0 || width > folded_count)
+    return miss;
+  int from = 0;
+  while (from < folded_count && hay.origin[static_cast<size_t>(from)] < origin)
+    ++from;
+  auto hit_at = [&](int folded_index) {
+    const int index = hay.origin[static_cast<size_t>(folded_index)];
+    return FindHit{index, folded_end(hay, folded_index, folded_index + width) - index};
+  };
+  for (int i = from; i + width <= folded_count; ++i) {
+    if (hay.text.substr(static_cast<Glib::ustring::size_type>(i),
+                        static_cast<Glib::ustring::size_type>(width)) == want)
+      return hit_at(i);
+  }
+  for (int i = 0; i < std::min(from, folded_count); ++i) {
+    if (hay.text.substr(static_cast<Glib::ustring::size_type>(i),
+                        static_cast<Glib::ustring::size_type>(width)) == want)
+      return hit_at(i);
+  }
+  return miss;
+}
+
 void MainWindow::find_next()
 {
   if (!find_entry_ || !buffer_)
@@ -5815,45 +5901,18 @@ void MainWindow::find_next()
     return;
   const Glib::ustring doc = buffer_->get_text();
   const bool match_case = match_case_ && match_case_->get_active();
-  const Glib::ustring folded = match_case ? needle : needle.casefold();
-  const int count = static_cast<int>(doc.length());
-  const int width = static_cast<int>(needle.length());
   int origin = cursor_offset();
   Gtk::TextBuffer::iterator sel_start;
   Gtk::TextBuffer::iterator sel_end;
   if (buffer_->get_selection_bounds(sel_start, sel_end))
     origin = sel_end.get_offset();
-  auto matches = [&](int index) {
-    if (index < 0 || index + width > count)
-      return false;
-    const Glib::ustring slice = doc.substr(static_cast<Glib::ustring::size_type>(index),
-                                           static_cast<Glib::ustring::size_type>(width));
-    if (match_case)
-      return slice == needle;
-    return slice.casefold() == folded;
-  };
-  int found = -1;
-  for (int i = origin; i + width <= count; ++i) {
-    if (matches(i)) {
-      found = i;
-      break;
-    }
-  }
-  if (found < 0) {
-    const int limit = std::min(origin, count);
-    for (int i = 0; i < limit; ++i) {
-      if (matches(i)) {
-        found = i;
-        break;
-      }
-    }
-  }
-  if (found < 0) {
+  const FindHit hit = find_in_text(doc, needle, origin, match_case);
+  if (hit.index < 0) {
     message_.set_text("No matches.");
     return;
   }
-  auto start = buffer_->get_iter_at_offset(found);
-  auto end = buffer_->get_iter_at_offset(found + width);
+  auto start = buffer_->get_iter_at_offset(hit.index);
+  auto end = buffer_->get_iter_at_offset(hit.index + hit.length);
   buffer_->select_range(start, end);
   text_.scroll_to(start);
 }

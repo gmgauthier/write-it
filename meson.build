@@ -327,6 +327,12 @@ write_it_page_break_before_table_tests = executable(
   dependencies: [writeit_dep],
 )
 test('page-break-before-table', write_it_page_break_before_table_tests)
+write_it_find_casefold_tests = executable(
+  'write-it-find-casefold-tests',
+  'tests/test_find_casefold.cpp',
+  dependencies: [writeit_dep],
+)
+test('find-casefold', write_it_find_casefold_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

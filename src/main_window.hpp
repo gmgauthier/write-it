@@ -30,6 +30,17 @@ class TableSheet;
 enum class StoryKey { Pass, Undo, Redo };
 
 StoryKey story_key(unsigned keyval, unsigned state);
+// One Find hit. index is -1 when there is none. length is in characters of
+// `doc`, which can differ from the needle when casefolding changes length.
+struct FindHit {
+  int index = -1;
+  int length = 0;
+};
+
+// Searches `doc` from `origin`, then wraps. Match case off compares casefold
+// and maps the folded match back onto the original characters.
+FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
+                     bool match_case);
 
 // What a paragraph tag carries: the paragraph's indents, alignment, list,
 // and style.
