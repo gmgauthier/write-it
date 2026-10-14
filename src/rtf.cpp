@@ -2346,7 +2346,38 @@ std::string rtf_export(const Document& doc)
         }
       }
       out << "\\pard\\intbl";
+      // The same paragraph words the body writes. A default left cell with
+      // text still starts \pard\intbl and then its runs, as before.
+      const int cell_style = any_style ? style_index(paragraph.style) : -1;
+      if (cell_style > 0)
+        out << "\\s" << cell_style;
+      const Indents cell_indents = clamp_indents(paragraph.indents);
+      if (cell_indents.left != 0)
+        out << "\\li" << cell_indents.left;
+      if (cell_indents.right != 0)
+        out << "\\ri" << cell_indents.right;
+      if (cell_indents.first != 0)
+        out << "\\fi" << cell_indents.first;
+      if (paragraph.align == Align::Center)
+        out << "\\qc";
+      else if (paragraph.align == Align::Right)
+        out << "\\qr";
+      else if (paragraph.align == Align::Justify)
+        out << "\\qj";
+      if (list.kind != ListKind::None)
+        out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
       emit_runs(paragraph);
+      bool cell_text = false;
+      for (const Run& run : paragraph.runs) {
+        if (!run.text.empty() || run.image || run.note != 0)
+          cell_text = true;
+      }
+      if (!cell_text) {
+        if (const Run* mark = mark_of(paragraph))
+          out << "\\f" << index_of(mark->font) << "\\fs" << half_points_of(mark->size)
+              << (mark->bold ? "\\b" : "\\b0") << (mark->italic ? "\\i" : "\\i0")
+              << (mark->underline ? "\\ul" : "\\ulnone");
+      }
       out << (cell_end ? "\\cell" : "\\par");
       if (row_end)
         out << "\\row\n";

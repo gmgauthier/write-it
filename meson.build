@@ -230,6 +230,13 @@ write_it_rtf_metafile_tests = executable(
   dependencies: [writeit_dep],
 )
 test('rtf-metafile', write_it_rtf_metafile_tests)
+||||||| parent of 46e04b2 (Write a table cell's paragraph format into the RTF.)
+write_it_rtf_cell_format_tests = executable(
+  'write-it-rtf-cell-format-tests',
+  'tests/test_rtf_cell_format.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-cell-format', write_it_rtf_cell_format_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
