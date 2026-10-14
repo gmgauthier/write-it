@@ -960,8 +960,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<Paragraph> footer_;
   std::vector<std::vector<Paragraph>> notes_;
   // Pictures in the body, keyed by the pixbuf the buffer is showing. The
-  // value is the file's bytes; the pixbuf may be a scaled copy.
-  std::map<GdkPixbuf*, Image> image_pix_;
+  // value is the file's bytes; the pixbuf may be a scaled copy. Mutable so
+  // capture() and read_cell() can register a pasted pixbuf that was never
+  // inserted through Insert > Picture. Bytes already stored are not replaced.
+  mutable std::map<GdkPixbuf*, Image> image_pix_;
   // The document as a cell edit began, so that edit is one undo step.
   Document cell_before_;
   bool cell_step_ = false;

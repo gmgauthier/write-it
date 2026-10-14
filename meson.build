@@ -265,6 +265,13 @@ write_it_undo_picture_tests = executable(
   dependencies: [writeit_dep],
 )
 test('undo-picture', write_it_undo_picture_tests)
+||||||| parent of 95f8b16 (Keep the bytes of a picture pasted into the body or a cell.)
+write_it_picture_paste_tests = executable(
+  'write-it-picture-paste-tests',
+  'tests/test_picture_paste.cpp',
+  dependencies: [writeit_dep],
+)
+test('picture-paste', with_display, args: [write_it_picture_paste_tests.full_path()], depends: write_it_picture_paste_tests, timeout: 90, suite: 'ui')
 
 write_it_page_tests = executable(
   'write-it-page-tests',

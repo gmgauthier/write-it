@@ -2,9 +2,15 @@
 
 #pragma once
 
+#include <glibmm/refptr.h>
+
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace Gdk {
+class Pixbuf;
+}
 
 namespace writeit {
 
@@ -451,6 +457,9 @@ std::string image_type_of(const std::string& data);
 // kMaxImageBytes. Leaves path and alt alone. False when the file is missing
 // or not a picture this slice embeds.
 bool load_image_file(const std::string& path, Image& image);
+// PNG bytes of a pixbuf a paste left in the buffer. Empty when `pix` is
+// null or will not encode. Does not invent width or height.
+Image image_from_pixbuf(const Glib::RefPtr<Gdk::Pixbuf>& pix);
 
 // True when a body rebuild has to be one custom undo step. Either document
 // has a table, or a picture with bytes, including a picture in a cell. A

@@ -31,6 +31,32 @@ constexpr int kFindReplace = Gtk::RESPONSE_YES;
 // hold. capture() skips it. It is not part of the document or the file.
 constexpr gunichar kPageBreakPad = 0x200B;
 
+// The map wins when it already has bytes (a file picture, possibly scaled on
+// screen). A paste leaves a pixbuf with no entry; keep a PNG of that pixbuf.
+Image remember_shown(std::map<GdkPixbuf*, Image>& images, const Glib::RefPtr<Gdk::Pixbuf>& pix)
+{
+  Image image;
+  if (!pix)
+    return image;
+  const auto found = images.find(pix->gobj());
+  if (found != images.end())
+    image = found->second;
+  if (!image.data.empty())
+    return image;
+  const Image encoded = image_from_pixbuf(pix);
+  if (encoded.data.empty()) {
+    if (image.alt.empty())
+      image.alt = "image";
+    return image;
+  }
+  image.data = encoded.data;
+  image.type = encoded.type;
+  if (image.alt.empty())
+    image.alt = encoded.alt;
+  images[pix->gobj()] = image;
+  return image;
+}
+
 // Asked about the file a save would really replace, on top of the chooser.
 bool confirm_replace(Gtk::Window& parent, const std::string& path)
 {
@@ -1319,14 +1345,7 @@ Document MainWindow::capture() const
     if (auto pix = iter.get_pixbuf()) {
       flush_run();
       Run image_run;
-      const auto found = image_pix_.find(pix->gobj());
-      if (found != image_pix_.end())
-        image_run.image = found->second;
-      else {
-        Image missing;
-        missing.alt = "image";
-        image_run.image = missing;
-      }
+      image_run.image = remember_shown(image_pix_, pix);
       add_run(paragraph, std::move(image_run));
       continue;
     }
@@ -2138,14 +2157,7 @@ std::vector<Paragraph> MainWindow::read_cell(const Gtk::TextView& view,
     if (auto pix = iter.get_pixbuf()) {
       flush_run();
       Run image_run;
-      const auto found = image_pix_.find(pix->gobj());
-      if (found != image_pix_.end())
-        image_run.image = found->second;
-      else {
-        Image missing;
-        missing.alt = "image";
-        image_run.image = missing;
-      }
+      image_run.image = remember_shown(image_pix_, pix);
       Paragraph holder;
       holder.runs = std::move(line.runs);
       add_run(holder, std::move(image_run));
