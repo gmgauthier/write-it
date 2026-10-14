@@ -216,6 +216,13 @@ write_it_rtf_final_page_tests = executable(
   dependencies: [writeit_dep],
 )
 test('rtf-final-page', write_it_rtf_final_page_tests)
+||||||| parent of e23b777 (Stop a footnote from cutting a number off the previous sentence.)
+write_it_rtf_footnote_marker_tests = executable(
+  'write-it-rtf-footnote-marker-tests',
+  'tests/test_rtf_footnote_marker.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-footnote-marker', write_it_rtf_footnote_marker_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

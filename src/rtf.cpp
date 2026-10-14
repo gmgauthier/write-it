@@ -311,6 +311,9 @@ struct State {
   Story story = Story::Body;
   // \intbl, cleared by \pard. Row tracking itself lives on the reader.
   bool intbl = false;
+  // \chftn is the automatic reference. The digits already in the sentence
+  // are not that reference.
+  bool auto_note = false;
 };
 
 // One {\s...} entry of the style sheet as read: only what it sets.
@@ -633,6 +636,10 @@ class Reader {
         pict_w_ = param;
       else if (word == "pichgoal" && has_param)
         pict_h_ = param;
+      return;
+    }
+    if (word == "chftn") {
+      state_.auto_note = true;
       return;
     }
     if (word == "par" || word == "line") {
@@ -1576,10 +1583,21 @@ class Reader {
     if (index <= 0)
       return;
     const std::string label = std::to_string(index);
-    if (take_note(paragraph_.runs, index, label))
+    const bool automatic = state_.auto_note;
+    state_.auto_note = false;
+    // \chftn is the reference. Do not cut the same digits out of the sentence.
+    if (!automatic && take_note(paragraph_.runs, index, label))
       return;
-    if (!paragraphs_.empty() && take_note(paragraphs_.back().runs, index, label))
-      return;
+    // A footnote that follows a finished paragraph used to cut a trailing
+    // number off that paragraph, so "Chapter 1" lost its 1. Only a run that
+    // is the marker and nothing else still belongs to the note.
+    if (!automatic && !paragraphs_.empty() && !paragraphs_.back().runs.empty()) {
+      Run& run = paragraphs_.back().runs.back();
+      if (!run.image && run.note == 0 && run.text == label) {
+        run.note = index;
+        return;
+      }
+    }
     Run run = char_run();
     run.text = label;
     run.note = index;
