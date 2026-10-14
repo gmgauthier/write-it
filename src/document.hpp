@@ -425,7 +425,8 @@ int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index)
 // Insert > Page Break at a body caret, counted the same way as chars_before().
 // Returns the caret's new offset, or -1 when that point already starts a
 // sheet. A caret past a table's anchor, clamped into a cell, appends a body
-// paragraph instead of splitting the cell or flagging it.
+// paragraph. A break at the end of the paragraph before a table inserts an
+// empty body paragraph in front of the table. The cell itself is not flagged.
 int break_page(Document& doc, int caret_offset);
 // Gives one paragraph the style `to`. An attribute whose direct bit is unset
 // takes the style's value and the bit stays unset, even when the old value

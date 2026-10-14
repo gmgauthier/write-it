@@ -3349,10 +3349,22 @@ int break_page(Document& doc, int caret_offset)
     doc.paragraphs[added].page_break = true;
     caret = chars_before(doc.paragraphs, added);
   } else if (into == length) {
-    if (doc.paragraphs[index + 1].page_break)
+    // The next paragraph is the table's first cell. Flagging the cell does
+    // not start a sheet; an empty body paragraph in front of the table does.
+    if (doc.paragraphs[index].cell.table == 0 && doc.paragraphs[index + 1].cell.table != 0) {
+      Paragraph gap;
+      const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+      doc.paragraphs.insert(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                            std::move(gap));
+      apply_style(doc, index + 1, index + 1, style);
+      doc.paragraphs[index + 1].page_break = true;
+      caret = chars_before(doc.paragraphs, index + 1);
+    } else if (doc.paragraphs[index + 1].page_break) {
       return -1;
-    doc.paragraphs[index + 1].page_break = true;
-    caret = chars_before(doc.paragraphs, index + 1);
+    } else {
+      doc.paragraphs[index + 1].page_break = true;
+      caret = chars_before(doc.paragraphs, index + 1);
+    }
   } else {
     Paragraph right;
     split_at(doc.paragraphs[index], into, right);

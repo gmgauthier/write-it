@@ -321,6 +321,12 @@ write_it_page_break_after_table_tests = executable(
   dependencies: [writeit_dep],
 )
 test('page-break-after-table', write_it_page_break_after_table_tests)
+write_it_page_break_before_table_tests = executable(
+  'write-it-page-break-before-table-tests',
+  'tests/test_page_break_before_table.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-break-before-table', write_it_page_break_before_table_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
