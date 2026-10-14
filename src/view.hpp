@@ -83,6 +83,16 @@ PageCount page_count(int text_height, int caret_y, double zoom);
 // `per_page` is page_text_height() for the document's paper.
 PageCount page_count(int text_height, int caret_y, int per_page);
 
+// How much of a sheet a footnote keeps. `page_h` is one page of text. A
+// positive `note_h` is the cut at the foot, and the body keeps
+// max(1, page_h - cut). No note, or a negative height, cuts nothing.
+struct FootnoteRoom {
+  int cut = 0;
+  int room = 1;
+};
+
+FootnoteRoom footnote_room(int page_h, int note_h);
+
 // "Page 2 of 4".
 std::string page_label(const PageCount& count);
 

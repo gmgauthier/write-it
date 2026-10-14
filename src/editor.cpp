@@ -4486,9 +4486,10 @@ bool MainWindow::has_page_break() const
 
 int MainWindow::sheet_y(int offset) const
 {
-  // The same sheet decisions as update_page_seams(), without footnote room.
-  // Draft draws no seams, so the status bar counts from this instead of from
-  // the gray gaps. A document with no page break stays on the laid-out height.
+  // The same sheet decisions as update_page_seams(). Draft draws no seams and
+  // does not paint the footnote, so the status bar counts from this. A sheet
+  // that holds a marker gives up the same note height Page view would. A
+  // document with no page break and no note stays on the laid-out height.
   if (!buffer_)
     return 0;
   struct Block {
@@ -4542,39 +4543,87 @@ int MainWindow::sheet_y(int offset) const
   }
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
   const int where = std::max(0, std::min(offset, count));
-  int y = 0;
-  int page = 0;
-  int result = 0;
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    const int text_h = blocks[i].text_h;
-    const int box = blocks[i].natural + text_h;
-    while (y >= (page + 1) * per)
-      ++page;
-    const int limit = (page + 1) * per;
-    const int page_edge = limit;
-    const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
-    const bool push = forced || (y > 0 && y + box > limit && text_h <= per);
-    const int visual = page + (push ? 1 : 0);
-    const bool last = i + 1 == blocks.size();
-    const bool inside = where >= blocks[i].start && (where < blocks[i].end || last);
-    if (inside) {
-      int within = 0;
-      if (where > blocks[i].start && where < blocks[i].end) {
-        Gdk::Rectangle loc;
-        text_.get_iter_location(buffer_->get_iter_at_offset(where), loc);
-        const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
-        within = std::max(0, loc.get_y() - blocks[i].top - displayed);
-      } else if (where >= blocks[i].end)
-        within = text_h;
-      result = visual * per + std::min(std::max(0, within), text_h);
+  const int note_px = draft_footnote_px();
+  // A body marker, the same scan Page view uses for a single note column.
+  // A cut of 0 leaves the push test as it was.
+  auto block_has_note = [&](int start, int end) {
+    if (note_px <= 0)
+      return false;
+    const int from = std::max(0, start);
+    const int to = std::max(from, std::min(end, count));
+    for (int at = from; at < to; ++at) {
+      Run run;
+      for (const auto& tag : buffer_->get_iter_at_offset(at).get_tags()) {
+        if (parse_fmt(tag_name(tag), run) && run.note != 0)
+          return true;
+      }
     }
-    if (push) {
-      y = page_edge + text_h;
-      ++page;
-    } else
-      y += box;
+    return false;
+  };
+  // `reserve_page` is the sheet that gives the note its band, or -1.
+  auto paginate = [&](int reserve_page, std::vector<int>* page_of) {
+    int y = 0;
+    int page = 0;
+    int result = 0;
+    if (page_of)
+      page_of->assign(blocks.size(), 0);
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const int text_h = blocks[i].text_h;
+      const int box = blocks[i].natural + text_h;
+      while (y >= (page + 1) * per)
+        ++page;
+      if (page_of)
+        (*page_of)[i] = page;
+      const int cut = reserve_page >= 0 && page == reserve_page ? note_px : 0;
+      const FootnoteRoom fit = footnote_room(per, cut);
+      const int limit = (page + 1) * per - fit.cut;
+      const int page_edge = (page + 1) * per;
+      const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
+      const bool push = forced || (y > 0 && y + box > limit && text_h <= fit.room);
+      const int visual = page + (push ? 1 : 0);
+      const bool last = i + 1 == blocks.size();
+      const bool inside = where >= blocks[i].start && (where < blocks[i].end || last);
+      if (inside) {
+        int within = 0;
+        if (where > blocks[i].start && where < blocks[i].end) {
+          Gdk::Rectangle loc;
+          text_.get_iter_location(buffer_->get_iter_at_offset(where), loc);
+          const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
+          within = std::max(0, loc.get_y() - blocks[i].top - displayed);
+        } else if (where >= blocks[i].end)
+          within = text_h;
+        result = visual * per + std::min(std::max(0, within), text_h);
+      }
+      if (push) {
+        y = page_edge + text_h;
+        ++page;
+      } else
+        y += box;
+    }
+    return result;
+  };
+  if (note_px <= 0)
+    return paginate(-1, nullptr);
+  std::vector<int> first_page;
+  const int plain = paginate(-1, &first_page);
+  int home = -1;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (!block_has_note(blocks[i].start, blocks[i].end))
+      continue;
+    home = first_page[i];
+    break;
   }
-  return result;
+  if (home < 0)
+    return plain;
+  std::vector<int> again;
+  const int reserved = paginate(home, &again);
+  // Keep the reserve when the marker stays on that sheet. A block the note
+  // itself pushes down is the next sheet, and the note stays put.
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (block_has_note(blocks[i].start, blocks[i].end) && again[i] == home)
+      return reserved;
+  }
+  return plain;
 }
 
 int MainWindow::page_content_y(int layout_y, int offset) const
@@ -4584,10 +4633,11 @@ int MainWindow::page_content_y(int layout_y, int offset) const
   const int count = buffer_->get_char_count();
   const int at = std::max(0, std::min(offset, count));
   const int content = layout_y - seam_extra_through(at);
-  // Draft strips the seams. A page break still starts a sheet, and the count
-  // has to match Page view. Ordinary text keeps the laid-out height.
+  // Draft strips the seams. A page break still starts a sheet, and a footnote
+  // still takes its room, so the count matches Page view. Ordinary text with
+  // no note keeps the laid-out height.
   if (view_ != ViewMode::Page)
-    return has_page_break() ? sheet_y(at) : content;
+    return (has_page_break() || !notes_.empty()) ? sheet_y(at) : content;
   // Each gray gap starts a sheet. The line's content y is short of that
   // sheet by whatever room the previous sheet did not fill, so a tall block
   // pushed onto the next page keeps the old page number until the caret has

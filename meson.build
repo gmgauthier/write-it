@@ -351,6 +351,12 @@ write_it_find_stories_tests = executable(
   dependencies: [writeit_dep],
 )
 test('find-stories', write_it_find_stories_tests)
+write_it_draft_note_count_tests = executable(
+  'write-it-draft-note-count-tests',
+  'tests/test_draft_note_count.cpp',
+  dependencies: [writeit_dep],
+)
+test('draft-note-count', with_display, args: [write_it_draft_note_count_tests.full_path()], depends: write_it_draft_note_count_tests, timeout: 90, suite: 'ui')
 
 write_it_page_tests = executable(
   'write-it-page-tests',

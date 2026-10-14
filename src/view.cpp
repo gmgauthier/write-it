@@ -116,6 +116,15 @@ PageCount page_count(int text_height, int caret_y, double zoom)
   return page_count(text_height, caret_y, page_text_height(zoom));
 }
 
+FootnoteRoom footnote_room(int page_h, int note_h)
+{
+  FootnoteRoom fit;
+  const int per = page_h > 0 ? page_h : 1;
+  fit.cut = note_h > 0 ? note_h : 0;
+  fit.room = std::max(1, per - fit.cut);
+  return fit;
+}
+
 std::string page_label(const PageCount& count)
 {
   return "Page " + std::to_string(count.page) + " of " + std::to_string(count.pages);

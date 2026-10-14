@@ -210,10 +210,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   // fit the room left on a sheet starts the next one, so the gap is the page
   // boundary even while the line's own content y is still short of it.
   // A page break starts a sheet the same way. Draft has no gaps; sheet_y()
-  // counts those sheets so the view does not change the count.
+  // counts those sheets, and the room a footnote would take, so the view
+  // does not change the count.
   int page_content_y(int layout_y, int offset) const;
-  // Sheet coordinate of `offset` when a page break is in the document and the
-  // seams are not drawn. The same rules as the Page view gaps, without notes.
+  // Sheet coordinate of `offset` when the seams are not drawn. The same rules
+  // as the Page view gaps. A footnote reserves the room Page view would give
+  // it, and the note is not painted.
   int sheet_y(int offset) const;
   bool has_page_break() const;
   // A page break on ordinary text. One stored on a table cell does not start
@@ -451,6 +453,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   void reveal_story_caret(Gtk::TextView& view);
   // The height the body of one sheet gives up to the notes, or 0.
   int note_block_px() const;
+  // That height while Draft is showing. Page view keeps note_block_px().
+  // Draft does not paint the note; the count still gives its sheet the room.
+  int draft_footnote_px() const;
   // The height `group` needs at the foot of its sheet.
   int measure_note_group(const NoteGroup& group);
   std::string note_group_text(const NoteGroup& group) const;

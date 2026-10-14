@@ -2433,6 +2433,29 @@ int MainWindow::note_block_px() const
   return std::max(1, static_cast<int>(std::ceil(18 * std::max(0.5, zoom_factor()))));
 }
 
+int MainWindow::draft_footnote_px() const
+{
+  if (notes_.empty() || view_ == ViewMode::Page)
+    return 0;
+  // The width Page view would give the column. Draft's own margins are not
+  // that width, and the note stays hidden: this only measures it.
+  const ViewGeometry sheet = view_geometry(ViewMode::Page, zoom_factor(), page_setup_);
+  const int width =
+      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  int min_h = 0;
+  int nat_h = 0;
+  note_box_.get_preferred_height_for_width(width, min_h, nat_h);
+  if (nat_h <= 1) {
+    const int inner = std::max(40, width - 36);
+    notes_view_.get_preferred_height_for_width(inner, min_h, nat_h);
+  }
+  if (note_editing_ && note_h_ > 1 && nat_h < note_h_)
+    return note_h_;
+  if (nat_h > 1)
+    return nat_h;
+  return std::max(1, static_cast<int>(std::ceil(18 * std::max(0.5, zoom_factor()))));
+}
+
 std::string MainWindow::note_group_text(const NoteGroup& group) const
 {
   std::vector<std::vector<Paragraph>> slice;
