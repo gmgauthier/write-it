@@ -1046,5 +1046,9 @@ class MainWindow : public Gtk::ApplicationWindow {
 // True when `text` is an empty list item: nothing, a newline, or only
 // page-break pads (U+200B). Real text, including "a" and "a\n", is not.
 bool paragraph_is_blank_item(const Glib::ustring& text);
+// True when deleting this character should also clear the paragraph's page
+// break: it is the page-break pad, it is the paragraph's only character, and
+// the break is set. A letter, a pad that is not alone, or no break, does not.
+bool deleting_pad_clears_break(gunichar erased, bool only_char, bool page_break);
 
 }  // namespace writeit

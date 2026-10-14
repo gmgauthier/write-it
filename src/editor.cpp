@@ -3374,6 +3374,11 @@ void MainWindow::normalise_paragraphs()
   normalising_ = false;
 }
 
+bool deleting_pad_clears_break(gunichar erased, bool only_char, bool page_break)
+{
+  return only_char && page_break && erased == kPageBreakPad;
+}
+
 void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
                           const Gtk::TextBuffer::iterator& to)
 {
@@ -3395,6 +3400,23 @@ void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
     return;
   pending_para_ = para_at(buffer_->get_char_count());
   pending_para_set_ = true;
+  // The seam sat on the pad. Delete removes that character, so the sheet is
+  // gone; keeping the break would save a page the screen no longer shows.
+  // Putting the pad back would make Delete look like it did nothing.
+  bool only_char = false;
+  if (to.get_offset() == from.get_offset() + 1) {
+    only_char = true;
+    const int end = paragraph_end(from.get_offset());
+    for (auto iter = buffer_->get_iter_at_offset(from.get_offset()); iter.get_offset() < end;
+         ++iter) {
+      if (iter.get_offset() == from.get_offset() || iter.get_char() == '\n')
+        continue;
+      only_char = false;
+      break;
+    }
+  }
+  if (deleting_pad_clears_break(from.get_char(), only_char, pending_para_.page_break))
+    pending_para_.page_break = false;
 }
 
 void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
