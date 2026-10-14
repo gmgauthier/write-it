@@ -456,6 +456,11 @@ struct MainWindowProbe {
     return false;
   }
 
+  static double zoom_factor(MainWindow& window)
+  {
+    return window.zoom_factor();
+  }
+
   // The same step Insert → Picture takes after the file is read. The menu
   // itself opens a dialog, which this suite does not run.
   static void commit(MainWindow& window, const Document& before, const Document& after, int caret)
@@ -1690,7 +1695,8 @@ int main(int argc, char* argv[])
     settle();
 
     // 1×1 red PNG. The header length is zero bytes, which the old string
-    // loader stopped on and replaced with the 48×24 stand-in.
+    // loader stopped on and replaced with the 48×24 stand-in. Fit width
+    // draws that one pixel at the current zoom, which is not the stand-in.
     const unsigned char png[] = {
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
@@ -1711,7 +1717,11 @@ int main(int argc, char* argv[])
     int picture_w = 0;
     int picture_h = 0;
     CHECK(writeit::MainWindowProbe::first_pixbuf(window, picture_w, picture_h));
-    CHECK(picture_w == 1 && picture_h == 1);
+    {
+      const writeit::PictureSpan span =
+          writeit::picture_display_px(1, 1, writeit::MainWindowProbe::zoom_factor(window));
+      CHECK(picture_w == span.width && picture_h == span.height);
+    }
 
     // Insert into a document that has just been opened, and into one that
     // has text but no table. Retagging sees no change in the text and used
@@ -1749,7 +1759,11 @@ int main(int argc, char* argv[])
     int fresh_w = 0;
     int fresh_h = 0;
     CHECK(writeit::MainWindowProbe::first_pixbuf(window, fresh_w, fresh_h));
-    CHECK(fresh_w == 1 && fresh_h == 1);
+    {
+      const writeit::PictureSpan span =
+          writeit::picture_display_px(1, 1, writeit::MainWindowProbe::zoom_factor(window));
+      CHECK(fresh_w == span.width && fresh_h == span.height);
+    }
     CHECK(kept_bytes(writeit::MainWindowProbe::doc(window)));
 
     writeit::Document hello = writeit::blank_document("Sans", 11);
@@ -1770,7 +1784,11 @@ int main(int argc, char* argv[])
     int typed_w = 0;
     int typed_h = 0;
     CHECK(writeit::MainWindowProbe::first_pixbuf(window, typed_w, typed_h));
-    CHECK(typed_w == 1 && typed_h == 1);
+    {
+      const writeit::PictureSpan span =
+          writeit::picture_display_px(1, 1, writeit::MainWindowProbe::zoom_factor(window));
+      CHECK(typed_w == span.width && typed_h == span.height);
+    }
     const writeit::Document typed = writeit::MainWindowProbe::doc(window);
     bool kept_hello = false;
     if (!typed.paragraphs.empty()) {
@@ -1790,8 +1808,13 @@ int main(int argc, char* argv[])
     settle();
     int body_w = 0;
     int body_h = 0;
-    CHECK(writeit::MainWindowProbe::first_pixbuf(window, body_w, body_h) && body_w == 1 &&
-          body_h == 1 && writeit::MainWindowProbe::cursor(window) == 6);
+    {
+      const writeit::PictureSpan span =
+          writeit::picture_display_px(1, 1, writeit::MainWindowProbe::zoom_factor(window));
+      CHECK(writeit::MainWindowProbe::first_pixbuf(window, body_w, body_h) &&
+            body_w == span.width && body_h == span.height &&
+            writeit::MainWindowProbe::cursor(window) == 6);
+    }
     {
       const writeit::Document placed = writeit::MainWindowProbe::doc(window);
       bool hello_then_picture = false;

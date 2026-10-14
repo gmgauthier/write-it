@@ -55,6 +55,10 @@ class UndoHistory {
                     std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&, const Image&)> restore,
                     std::function<void(const Glib::RefPtr<Gdk::Pixbuf>&)> drop);
 
+  // A zoom draws a new pixbuf for the same bytes. Steps that kept the old
+  // object would put that object back, and the window's map would miss it.
+  void retarget_pixbuf(const Glib::RefPtr<Gdk::Pixbuf>& from, const Glib::RefPtr<Gdk::Pixbuf>& to);
+
   // --- The saved-state hook. ---
   // Names the document state the history is at. Every new step, and every
   // edit coalesced into the top step, gets a fresh id; undo and redo move

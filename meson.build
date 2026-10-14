@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '1.0.21',
+  version: '1.0.22',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -369,6 +369,13 @@ write_it_tall_footnote_tests = executable(
   dependencies: [writeit_dep],
 )
 test('tall-footnote', write_it_tall_footnote_tests)
+
+write_it_zoom_scale_tests = executable(
+  'write-it-zoom-scale-tests',
+  'tests/test_zoom_scale.cpp',
+  dependencies: [writeit_dep],
+)
+test('zoom-scale', with_display, args: [write_it_zoom_scale_tests.full_path()], depends: write_it_zoom_scale_tests, timeout: 90, suite: 'ui')
 
 write_it_page_tests = executable(
   'write-it-page-tests',

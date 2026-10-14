@@ -105,6 +105,34 @@ void UndoHistory::set_pictures(
   picture_drop_ = std::move(drop);
 }
 
+void UndoHistory::retarget_pixbuf(const Glib::RefPtr<Gdk::Pixbuf>& from,
+                                  const Glib::RefPtr<Gdk::Pixbuf>& to)
+{
+  if (!from || !to || from->gobj() == to->gobj())
+    return;
+  auto retarget = [&](Op& op) {
+    for (Op::Picture& picture : op.pictures) {
+      if (picture.pixbuf && picture.pixbuf->gobj() == from->gobj())
+        picture.pixbuf = to;
+    }
+  };
+  auto steps = [&](std::vector<std::unique_ptr<Step>>& list) {
+    for (auto& step : list) {
+      if (!step)
+        continue;
+      for (Op& op : step->ops)
+        retarget(op);
+    }
+  };
+  steps(undo_);
+  steps(redo_);
+  steps(stashed_redo_);
+  if (current_) {
+    for (Op& op : current_->ops)
+      retarget(op);
+  }
+}
+
 void UndoHistory::detach()
 {
   for (auto& connection : connections_)

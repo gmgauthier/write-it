@@ -122,6 +122,23 @@ PageWidths page_widths(ViewMode mode, double zoom);
 // Twips to screen pixels at a zoom, on the screen page's scale.
 int twips_to_px(int twips, double zoom);
 
+// A picture wider than this, at 100%, is drawn at this width. Zooming out
+// scales that size. Zooming in leaves it: the full factor drew the picture
+// larger than the text around it.
+constexpr int kPictureCapPx = 480;
+
+struct PictureSpan {
+  int width = 1;
+  int height = 1;
+};
+
+// Screen pixels for a picture of `src_w` by `src_h` at `zoom`. At 1.0 a
+// picture no wider than kPictureCapPx keeps its own pixels. Above 1.0 the
+// picture stays at that 100% size. `limit` is a maximum width in pixels,
+// already at this zoom (the text column, or the inside of a cell); 0 applies
+// no extra cap. The height follows the width.
+PictureSpan picture_display_px(int src_w, int src_h, double zoom, int limit = 0);
+
 // A screen-only gap between page sheets. The tag is "page-seam", a unit
 // separator, and the gap's height in pixels. It is not a paragraph format
 // and it is not written to the file.

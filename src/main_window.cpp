@@ -904,7 +904,8 @@ void MainWindow::follow_caret()
 {
   // A style apply, or collapsing a selection the caret has left, moves marks
   // without the user going to the first line.
-  if (hold_scroll_ || releasing_)
+  // A zoom swaps picture pixbufs and moves marks. That is not the caret.
+  if (hold_scroll_ || releasing_ || scaling_pictures_)
     return;
   follow_caret_ = true;
   // Opening a file or an undo rebuilds the buffer in many edits; the idle
@@ -1162,6 +1163,7 @@ void MainWindow::apply_page_size()
   const int width = geometry().page_width;
   text_.set_layout_width(width);
   apply_margins();
+  fit_note_views();
   // Paragraph tags carry the text inset in their margins, so they are
   // restyled when the zoom or the view changes it.
   if (z != styled_zoom_ || view_ != styled_view_) {

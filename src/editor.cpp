@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1446,7 +1447,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
     bool any = false;
     for (const Run& run : paragraph.runs) {
       if (run.image) {
-        if (auto pix = pixbuf_for(*run.image)) {
+        if (auto pix = pixbuf_for(*run.image, picture_column_limit())) {
           image_pix_[pix->gobj()] = *run.image;
           auto at = buffer_->insert_pixbuf(buffer_->end(), pix);
           auto next = at;
@@ -1699,6 +1700,9 @@ void MainWindow::after_replay(int caret)
   restoring_ = false;
   text_.scroll_to(buffer_->get_insert());
   apply_page_size();
+  // A replay inserts the pixbuf the step stored. The zoom did not restyle,
+  // so that copy is still the size it was drawn at.
+  rescale_pictures();
   // The sheet may be another one now.
   fill_style_combo();
   update_title();
@@ -2104,12 +2108,23 @@ void MainWindow::fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& pa
 {
   auto buffer = view.get_buffer();
   buffer->set_text("");
+  int limit = picture_column_limit();
+  if (!paragraphs.empty()) {
+    const Cell& cell = paragraphs.front().cell;
+    if (cell.column >= 0 && cell.column < static_cast<int>(cell.widths.size())) {
+      const int twips = cell.widths[static_cast<size_t>(cell.column)];
+      if (twips > 0) {
+        const int px = std::max(36, twips_to_px(twips, zoom_factor()));
+        limit = picture_cell_limit(px);
+      }
+    }
+  }
   for (size_t i = 0; i < paragraphs.size(); ++i) {
     const Paragraph& paragraph = paragraphs[i];
     const int start = buffer->end().get_offset();
     for (const Run& run : paragraph.runs) {
       if (run.image) {
-        if (auto pix = pixbuf_for(*run.image)) {
+        if (auto pix = pixbuf_for(*run.image, limit)) {
           image_pix_[pix->gobj()] = *run.image;
           buffer->insert_pixbuf(buffer->end(), pix);
           continue;
@@ -2539,6 +2554,8 @@ void MainWindow::restyle_tags()
   caret_key_.clear();
   update_caret_font();
   relayout_tables();
+  apply_story_zoom();
+  rescale_pictures();
 }
 
 ViewGeometry MainWindow::geometry() const
@@ -3061,6 +3078,82 @@ void MainWindow::sync_format_controls()
   show_format(typing_);
 }
 
+Pango::FontDescription MainWindow::story_font() const
+{
+  const std::string font = settings_.default_font.empty() ? "Sans" : settings_.default_font;
+  const int size = known_size(settings_.default_size) ? settings_.default_size : 11;
+  Pango::FontDescription desc;
+  desc.set_family(font);
+  desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
+  return desc;
+}
+
+void MainWindow::use_story_css(Gtk::Widget& widget)
+{
+  if (!story_css_)
+    story_css_ = Gtk::CssProvider::create();
+  auto context = widget.get_style_context();
+  if (!context)
+    return;
+  context->remove_provider(story_css_);
+  context->add_provider(story_css_, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
+void MainWindow::apply_story_zoom()
+{
+  // The body keeps growing past 100%. Notes, the header, and the footer
+  // stop there: the full factor drew them as large as the zoomed body.
+  const double zoom = std::min(zoom_factor(), 1.0);
+  const int margin = std::max(1, static_cast<int>(std::lround(8.0 * zoom)));
+  const int mark = std::max(1, static_cast<int>(std::lround(6.0 * zoom)));
+  const std::string family_raw = settings_.default_font.empty() ? "Sans" : settings_.default_font;
+  std::string family;
+  for (char c : family_raw) {
+    if (c != '"' && c != '\\' && c != '\n' && c != '\r')
+      family.push_back(c);
+  }
+  if (family.empty())
+    family = "Sans";
+  const int size = known_size(settings_.default_size) ? settings_.default_size : 11;
+  char points[32];
+  std::snprintf(points, sizeof points, "%.4f", static_cast<double>(size) * zoom);
+  const std::string css = "* { font-family: \"" + family + "\"; font-size: " + points + "pt; }\n";
+  if (!story_css_)
+    story_css_ = Gtk::CssProvider::create();
+  try {
+    story_css_->load_from_data(css);
+  } catch (const Glib::Error&) {
+  }
+  auto face = [&](Gtk::TextView& view) {
+    use_story_css(view);
+    if (view.get_left_margin() != margin)
+      view.set_left_margin(margin);
+    if (view.get_right_margin() != margin)
+      view.set_right_margin(margin);
+  };
+  auto numbers = [&](Gtk::Label& first, const std::vector<Gtk::Label*>& labels, Gtk::Fixed& marks) {
+    use_story_css(first);
+    for (Gtk::Label* label : labels) {
+      if (label)
+        use_story_css(*label);
+    }
+    if (marks.get_margin_right() != mark)
+      marks.set_margin_right(mark);
+  };
+  face(header_view_);
+  face(footer_view_);
+  face(notes_view_);
+  numbers(note_label_, note_numbers_, note_marks_);
+  for (const auto& band : note_bands_) {
+    if (!band || !band->wired)
+      continue;
+    face(band->view);
+    numbers(band->label, band->numbers, band->marks);
+  }
+  // The gutter just changed with the mark margin. Rewrap to the new column.
+  fit_note_views();
+}
+
 void MainWindow::update_caret_font()
 {
   // A blank line with no format of its own (an untagged newline) renders in
@@ -3073,10 +3166,7 @@ void MainWindow::update_caret_font()
   if (key == caret_key_)
     return;
   caret_key_ = key;
-  Pango::FontDescription desc;
-  desc.set_family(font);
-  desc.set_size(static_cast<int>(size * zoom_factor() * PANGO_SCALE));
-  text_.override_font(desc);
+  text_.override_font(story_font());
 }
 
 void MainWindow::on_font_changed()
@@ -4856,6 +4946,47 @@ std::vector<int> MainWindow::cell_note_anchors() const
   return marks;
 }
 
+int MainWindow::note_column_width() const
+{
+  const ViewGeometry sheet = view_ == ViewMode::Page
+                                 ? geometry()
+                                 : view_geometry(ViewMode::Page, zoom_factor(), page_setup_);
+  return std::max(40, sheet.page_width - sheet.margin_left - sheet.margin_right);
+}
+
+int MainWindow::note_view_width(int column, const Gtk::Widget& marks) const
+{
+  int min_w = 0;
+  int nat_w = 0;
+  marks.get_preferred_width(min_w, nat_w);
+  const int gutter = std::max(min_w, nat_w) + marks.get_margin_left() + marks.get_margin_right();
+  return std::max(40, column - std::max(0, gutter));
+}
+
+void MainWindow::fit_note_views()
+{
+  const int column = note_column_width();
+  notes_view_.set_layout_width(note_view_width(column, note_marks_));
+  for (const auto& band : note_bands_) {
+    if (!band || !band->wired)
+      continue;
+    band->view.set_layout_width(note_view_width(column, band->marks));
+  }
+}
+
+int MainWindow::picture_column_limit() const
+{
+  const ViewGeometry sheet = geometry();
+  return std::max(1, sheet.page_width - sheet.margin_left - sheet.margin_right);
+}
+
+int MainWindow::picture_cell_limit(int column_px) const
+{
+  // The frame border is 1px a side and the cell text keeps a 4px margin a
+  // side. A picture is one character, so it does not wrap inside that.
+  return std::max(1, column_px - 10);
+}
+
 void MainWindow::place_notes()
 {
   if (closing_)
@@ -4866,14 +4997,14 @@ void MainWindow::place_notes()
     return;
   }
   // Every marker on one sheet keeps the single column this has always drawn.
+  fit_note_views();
   if (note_groups_.size() > 1) {
     place_split_notes();
     return;
   }
   hide_extra_notes();
   const ViewGeometry sheet = geometry();
-  const int width =
-      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  const int width = note_column_width();
   int asked_w = 0;
   int asked_h = 0;
   note_box_.get_size_request(asked_w, asked_h);
@@ -4985,8 +5116,8 @@ void MainWindow::place_notes()
 void MainWindow::place_split_notes()
 {
   const ViewGeometry sheet = geometry();
-  const int width =
-      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  const int width = note_column_width();
+  fit_note_views();
   const int left = sheet.margin_left;
   const int count = static_cast<int>(note_groups_.size());
   const int page_h = std::max(1, page_text_height(page_setup_, zoom_factor()));
@@ -5201,6 +5332,9 @@ void MainWindow::update_page_seams()
   sync_draft_gaps();
   if (text_.get_allocated_width() <= 1)
     return;
+  // Measure the notes at the width they will wrap, not the width they had
+  // at the previous zoom.
+  fit_note_views();
 
   struct Block {
     int start = 0;
