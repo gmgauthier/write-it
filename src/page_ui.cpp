@@ -3260,6 +3260,109 @@ void MainWindow::on_columns()
   }
 }
 
+// Paragraph under a body caret. A table is one anchor character; a caret on
+// that anchor is the first cell, and a caret past it skips the cells. The
+// last paragraph absorbs a caret past the end, which is how a caret after a
+// final table is clamped into the last cell.
+size_t paragraph_at_offset(const std::vector<Paragraph>& paragraphs, int offset)
+{
+  if (paragraphs.empty())
+    return 0;
+  if (offset < 0)
+    offset = 0;
+  size_t i = 0;
+  int pos = 0;
+  while (i < paragraphs.size()) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      size_t j = i + 1;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id)
+        ++j;
+      if (offset <= pos)
+        return i;
+      pos += 1;
+      if (j < paragraphs.size())
+        pos += 1;
+      if (j >= paragraphs.size())
+        return paragraphs.size() - 1;
+      i = j;
+      continue;
+    }
+    const int n = chars_of(paragraphs[i]);
+    if (offset <= pos + n)
+      return i;
+    if (i + 1 >= paragraphs.size())
+      return i;
+    pos += n + 1;
+    ++i;
+  }
+  return paragraphs.size() - 1;
+}
+
+int break_page(Document& doc, int caret_offset)
+{
+  if (doc.paragraphs.empty())
+    doc.paragraphs.emplace_back();
+  if (caret_offset < 0)
+    caret_offset = 0;
+  size_t index = paragraph_at_offset(doc.paragraphs, caret_offset);
+  if (index >= doc.paragraphs.size())
+    index = doc.paragraphs.size() - 1;
+  const int origin = chars_before(doc.paragraphs, index);
+  int into = caret_offset - origin;
+  const int length = chars_of(doc.paragraphs[index]);
+  if (into < 0)
+    into = 0;
+  if (into > length)
+    into = length;
+  // The caret is after the table. Clamping left it in a cell, where a page
+  // break cannot start a sheet, so the break is a new body paragraph.
+  if (doc.paragraphs[index].cell.table != 0 && caret_offset > origin) {
+    Paragraph next = doc.paragraphs[index];
+    next.runs.clear();
+    next.mark.reset();
+    next.page_break = false;
+    next.heading = 0;
+    next.cell = Cell{};
+    doc.paragraphs.push_back(std::move(next));
+    const size_t added = doc.paragraphs.size() - 1;
+    const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+    apply_style(doc, added, added, style);
+    doc.paragraphs[added].page_break = true;
+    return chars_before(doc.paragraphs, added);
+  }
+  int caret = origin;
+  if (into == 0) {
+    if (doc.paragraphs[index].page_break)
+      return -1;
+    doc.paragraphs[index].page_break = true;
+  } else if (into == length && index + 1 == doc.paragraphs.size()) {
+    Paragraph next = doc.paragraphs[index];
+    next.runs.clear();
+    next.mark.reset();
+    next.page_break = false;
+    next.heading = 0;
+    doc.paragraphs.push_back(std::move(next));
+    const size_t added = doc.paragraphs.size() - 1;
+    const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+    apply_style(doc, added, added, style);
+    doc.paragraphs[added].page_break = true;
+    caret = chars_before(doc.paragraphs, added);
+  } else if (into == length) {
+    if (doc.paragraphs[index + 1].page_break)
+      return -1;
+    doc.paragraphs[index + 1].page_break = true;
+    caret = chars_before(doc.paragraphs, index + 1);
+  } else {
+    Paragraph right;
+    split_at(doc.paragraphs[index], into, right);
+    doc.paragraphs.insert(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                          std::move(right));
+    caret = chars_before(doc.paragraphs, index + 1);
+  }
+  return caret;
+}
+
 bool MainWindow::caret_in_table() const
 {
   if (!buffer_)
@@ -3289,48 +3392,10 @@ void MainWindow::on_page_break()
   if (before.paragraphs.empty())
     before.paragraphs.emplace_back();
   Document after = before;
-  size_t index = caret_paragraph();
-  if (index >= after.paragraphs.size())
-    index = after.paragraphs.size() - 1;
-  const int origin = chars_before(after.paragraphs, index);
-  int into = cursor_offset() - origin;
-  const int length = chars_of(after.paragraphs[index]);
-  if (into < 0)
-    into = 0;
-  if (into > length)
-    into = length;
-  int caret = origin;
-  if (into == 0) {
-    if (after.paragraphs[index].page_break) {
-      text_.grab_focus();
-      return;
-    }
-    after.paragraphs[index].page_break = true;
-  } else if (into == length && index + 1 == after.paragraphs.size()) {
-    Paragraph next = after.paragraphs[index];
-    next.runs.clear();
-    next.mark.reset();
-    next.page_break = false;
-    next.heading = 0;
-    after.paragraphs.push_back(next);
-    const size_t added = after.paragraphs.size() - 1;
-    const std::string style = next_style(style_sheet(after), after.paragraphs[index].style);
-    apply_style(after, added, added, style);
-    after.paragraphs[added].page_break = true;
-    caret = chars_before(after.paragraphs, added);
-  } else if (into == length) {
-    if (after.paragraphs[index + 1].page_break) {
-      text_.grab_focus();
-      return;
-    }
-    after.paragraphs[index + 1].page_break = true;
-    caret = chars_before(after.paragraphs, index + 1);
-  } else {
-    Paragraph right;
-    split_at(after.paragraphs[index], into, right);
-    after.paragraphs.insert(after.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
-                            right);
-    caret = chars_before(after.paragraphs, index + 1);
+  const int caret = break_page(after, cursor_offset());
+  if (caret < 0) {
+    text_.grab_focus();
+    return;
   }
   commit_document(before, after, caret);
 }
