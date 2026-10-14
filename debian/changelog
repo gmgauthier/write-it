@@ -1,3 +1,10 @@
+write-it (1.0.20-1) unstable; urgency=medium
+
+  * Selecting the first line of a later page stops at the top of that line.
+  * The highlight does not run up the previous sheet or behind a footnote.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Wed, 14 Oct 2026 07:38:41 +0100
+
 write-it (1.0.19-1) unstable; urgency=medium
 
   * A heading on a document that already holds a table or a picture leaves the page where it is.
