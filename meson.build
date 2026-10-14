@@ -264,9 +264,11 @@ write_it_rtf_unicode_tests = executable(
   'tests/test_rtf_unicode.cpp',
   dependencies: [writeit_dep, dependency('glib-2.0')],
 )
-# The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 20 s
+# The 200,000-round fuzz, apart so rtf-unicode's own checks (below) stay quick. About 50 s
 # under ASan and UBSan, against meson's 30 s default, hence its own timeout.
-# `meson test --no-suite slow` leaves it out locally; CI runs everything.
+# Suite slow is this fuzz plus the window tests that dominate an ASan run
+# (undo-fuzz, list-tabs, capture, caret-scroll). Debian and Devuan CI run it.
+# The sanitizer job does not. `meson test --suite slow` runs only these.
 test(
   'rtf-unicode-fuzz',
   write_it_rtf_unicode_tests,
@@ -335,7 +337,7 @@ write_it_caret_scroll_tests = executable(
   'tests/test_caret_scroll.cpp',
   dependencies: [writeit_dep],
 )
-test('caret-scroll', with_display, args: [write_it_caret_scroll_tests.full_path()], depends: write_it_caret_scroll_tests, timeout: 120, priority: 20)
+test('caret-scroll', with_display, args: [write_it_caret_scroll_tests.full_path()], depends: write_it_caret_scroll_tests, timeout: 120, priority: 20, suite: 'slow')
 
 # The real window under a display: it fits a 1024 px screen.
 write_it_window_width_tests = executable(
@@ -371,7 +373,7 @@ write_it_capture_tests = executable(
   'tests/test_capture.cpp',
   dependencies: [writeit_dep],
 )
-test('capture', with_display, args: [write_it_capture_tests.full_path()], depends: write_it_capture_tests, timeout: 120, priority: 20)
+test('capture', with_display, args: [write_it_capture_tests.full_path()], depends: write_it_capture_tests, timeout: 120, priority: 20, suite: 'slow')
 
 # The real window under a display: long style names keep the style boxes
 # and Format > Style... narrow, the Style box is blank over mixed styles,
@@ -476,7 +478,7 @@ write_it_list_tabs_tests = executable(
   'tests/test_list_tabs.cpp',
   dependencies: [writeit_dep],
 )
-test('list-tabs', with_display, args: [write_it_list_tabs_tests.full_path()], depends: write_it_list_tabs_tests, timeout: 120, priority: 20)
+test('list-tabs', with_display, args: [write_it_list_tabs_tests.full_path()], depends: write_it_list_tabs_tests, timeout: 120, priority: 20, suite: 'slow')
 
 # The real window under a display: Format > Paragraph's warnings for an
 # indent out of range, not a number, or leaving no room for text, and the
@@ -538,7 +540,7 @@ write_it_undo_fuzz_tests = executable(
   'tests/test_undo_fuzz.cpp',
   dependencies: [writeit_dep],
 )
-test('undo-fuzz', with_display, args: [write_it_undo_fuzz_tests.full_path()], depends: write_it_undo_fuzz_tests, timeout: 1800, priority: 30)
+test('undo-fuzz', with_display, args: [write_it_undo_fuzz_tests.full_path()], depends: write_it_undo_fuzz_tests, timeout: 1800, priority: 30, suite: 'slow')
 # The real window under a display: capture() copies the whole document, so
 # a keystroke may call it only for undo (at most twice), and a redraw not at
 # all. A test-only count in the window.

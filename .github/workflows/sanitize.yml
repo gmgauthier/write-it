@@ -48,9 +48,10 @@ jobs:
       - name: Compile
         run: ninja -C build-asan
 
-      # Every suite, the slow rtf-unicode-fuzz included. Any ASan or UBSan
-      # report, or a leak not in tests/lsan.supp, aborts the test that hit it.
-      # lsan.supp lists system libraries only; see the comment at its top.
+      # Every suite except slow. That suite is the long fuzz and the window
+      # tests that took most of an ASan run; Debian and Devuan still run it.
+      # Any ASan or UBSan report, or a leak not in tests/lsan.supp, aborts the
+      # test that hit it. lsan.supp lists system libraries only; see its top.
       - name: Test
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:halt_on_error=1
@@ -60,7 +61,7 @@ jobs:
         run: |
           export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/tests/lsan.supp:print_suppressions=0"
           test -r "$GITHUB_WORKSPACE/tests/lsan.supp"
-          xvfb-run -a meson test -C build-asan --print-errorlogs --timeout-multiplier 4 --num-processes 2
+          xvfb-run -a meson test -C build-asan --print-errorlogs --timeout-multiplier 4 --num-processes 2 --no-suite slow
 
       - name: Upload test log
         if: failure()
