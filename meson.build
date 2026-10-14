@@ -202,6 +202,13 @@ write_it_plain_breaks_tests = executable(
   dependencies: [writeit_dep],
 )
 test('plain-breaks', write_it_plain_breaks_tests)
+||||||| parent of 0ac3423 (Escape Markdown markup that is ordinary text.)
+write_it_markdown_escape_tests = executable(
+  'write-it-markdown-escape-tests',
+  'tests/test_markdown_escape.cpp',
+  dependencies: [writeit_dep],
+)
+test('markdown-escape', write_it_markdown_escape_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
