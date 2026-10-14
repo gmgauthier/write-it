@@ -17,11 +17,18 @@ namespace {
 
 std::string strip_cr(const std::string& text)
 {
+  // A classic Mac file breaks lines with CR alone. CRLF is one break. A bare
+  // CR used to be deleted, so those lines became one paragraph.
   std::string out;
   out.reserve(text.size());
-  for (char c : text) {
-    if (c != '\r')
-      out.push_back(c);
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] != '\r') {
+      out.push_back(text[i]);
+      continue;
+    }
+    out.push_back('\n');
+    if (i + 1 < text.size() && text[i + 1] == '\n')
+      ++i;
   }
   return out;
 }

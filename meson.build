@@ -196,6 +196,13 @@ write_it_document_tests = executable(
 )
 test('document', write_it_document_tests)
 
+write_it_plain_breaks_tests = executable(
+  'write-it-plain-breaks-tests',
+  'tests/test_plain_breaks.cpp',
+  dependencies: [writeit_dep],
+)
+test('plain-breaks', write_it_plain_breaks_tests)
+
 write_it_page_tests = executable(
   'write-it-page-tests',
   'tests/test_page.cpp',
