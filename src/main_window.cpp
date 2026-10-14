@@ -693,6 +693,7 @@ void MainWindow::build_page()
   notes_view_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
   notes_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
     note_editing_ = true;
+    clear_cell_edit_on_story(false, false, true);
     return false;
   });
   notes_view_.signal_focus_out_event().connect([this](GdkEventFocus*) {
@@ -743,6 +744,14 @@ void MainWindow::build_page()
   header_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   footer_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   notes_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
+  header_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    clear_cell_edit_on_story(true, false, false);
+    return false;
+  });
+  footer_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    clear_cell_edit_on_story(false, true, false);
+    return false;
+  });
   text_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   text_.signal_button_press_event().connect(
       [this](GdkEventButton*) {

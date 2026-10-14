@@ -1447,6 +1447,21 @@ void MainWindow::leave_cell_edit()
   update_actions();
 }
 
+void MainWindow::clear_cell_edit_on_story(bool header, bool footer, bool note)
+{
+  if (!story_focus_clears_cell(header, footer, note))
+    return;
+  if (loading_ || restoring_)
+    return;
+  if (!cell_edit_.on && !cell_typing_on_)
+    return;
+  // leave_cell_edit() keeps the body's selection, which is a click there.
+  // Focusing a story must not pull the keyboard back to the body.
+  cell_edit_.on = false;
+  cell_typing_on_ = false;
+  update_actions();
+}
+
 void MainWindow::note_cell_blur(TableSheet& sheet, int row, int column)
 {
   if (loading_ || restoring_ || !cell_edit_.on)
@@ -2631,6 +2646,7 @@ void MainWindow::wire_note_band(NoteBand& band)
       band.view.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
   band.focus_in_conn = band.view.signal_focus_in_event().connect([this](GdkEventFocus*) {
     note_editing_ = true;
+    clear_cell_edit_on_story(false, false, true);
     return false;
   });
   band.focus_out_conn = band.view.signal_focus_out_event().connect([this, &band](GdkEventFocus*) {

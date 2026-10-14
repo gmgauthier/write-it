@@ -476,4 +476,9 @@ bool document_needs_custom_undo(const Document& before, const Document& after);
 // then just after every blank line. GTK counts characters, not UTF-8 bytes.
 std::vector<int> note_break_offsets(const std::string& utf8);
 
+// A header, footer, or note taking the keyboard leaves the cell that was
+// being edited. The body taking it does not: a file dialog and the Table
+// menu both focus away from the cell and still need it.
+bool story_focus_clears_cell(bool header, bool footer, bool note);
+
 }  // namespace writeit

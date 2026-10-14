@@ -285,6 +285,12 @@ write_it_note_measure_chars_tests = executable(
   dependencies: [writeit_dep],
 )
 test('note-measure-chars', write_it_note_measure_chars_tests)
+write_it_cell_edit_sticky_tests = executable(
+  'write-it-cell-edit-sticky-tests',
+  'tests/test_cell_edit_sticky.cpp',
+  dependencies: [writeit_dep],
+)
+test('cell-edit-sticky', with_display, args: [write_it_cell_edit_sticky_tests.full_path()], depends: write_it_cell_edit_sticky_tests, timeout: 60, suite: 'ui')
 
 write_it_page_tests = executable(
   'write-it-page-tests',

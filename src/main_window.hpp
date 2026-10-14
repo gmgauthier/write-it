@@ -503,6 +503,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // A menu or the style list can focus the body without the caret leaving the
   // cell. A click or a key in the body is what leaves it.
   void leave_cell_edit();
+  // Header, footer, and note focus. Not a body click: the caret stays put.
+  void clear_cell_edit_on_story(bool header, bool footer, bool note);
   // Each cell is its own buffer, so a highlight there stays up when the caret
   // is placed in another cell or in the body. Drop every selection but `keep`.
   void release_other_selections(const Gtk::TextView* keep);
