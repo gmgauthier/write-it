@@ -258,6 +258,13 @@ write_it_cell_word_keys_tests = executable(
   dependencies: [writeit_dep],
 )
 test('cell-word-keys', write_it_cell_word_keys_tests)
+||||||| parent of 66358ce (Record a custom undo step when a rebuild holds a picture.)
+write_it_undo_picture_tests = executable(
+  'write-it-undo-picture-tests',
+  'tests/test_undo_picture.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo-picture', write_it_undo_picture_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

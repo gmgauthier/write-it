@@ -452,4 +452,9 @@ std::string image_type_of(const std::string& data);
 // or not a picture this slice embeds.
 bool load_image_file(const std::string& path, Image& image);
 
+// True when a body rebuild has to be one custom undo step. Either document
+// has a table, or a picture with bytes, including a picture in a cell. A
+// picture with no bytes does not count, and neither does plain text.
+bool document_needs_custom_undo(const Document& before, const Document& after);
+
 }  // namespace writeit

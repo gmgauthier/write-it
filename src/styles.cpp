@@ -330,16 +330,11 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   }
   const int insert = caret >= 0 ? caret : buffer_->get_insert()->get_iter().get_offset();
   const int bound = caret >= 0 ? caret : buffer_->get_selection_bound()->get_iter().get_offset();
-  auto has_table = [](const Document& doc) {
-    for (const Paragraph& paragraph : doc.paragraphs) {
-      if (paragraph.cell.table != 0)
-        return true;
-    }
-    return false;
-  };
-  // A child widget is not in the buffer's own history. While a table is
-  // involved, the rebuild is one custom step that mounts the grid again.
-  const bool table = has_table(before) || has_table(after);
+  // A child widget is not in the buffer's own history, and a picture's bytes
+  // live in the window map, which a rebuild clears before the erase. While a
+  // table or a stored picture is involved, the rebuild is one custom step.
+  // The before and after documents already hold the bytes.
+  const bool custom = document_needs_custom_undo(before, after);
   // Notes, the header, and the footer are not in the body. A document that
   // holds a table or a picture used to rebuild the body for a note key. The
   // rebuild clears the page, and the pasteboard jumps to the top and back.
@@ -384,7 +379,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
     if (stories_only || retag_paragraphs(before, after))
       install_stories(after);
     else {
-      Suspend suspend(undo_, table);
+      Suspend suspend(undo_, custom);
       replace_buffer(after, insert);
       replaced = true;
     }
@@ -394,7 +389,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
     buffer_->select_range(buffer_->get_iter_at_offset(at), buffer_->get_iter_at_offset(to));
     restoring_ = false;
   }
-  if (table && replaced) {
+  if (custom && replaced) {
     const Document undo_doc = before;
     const Document redo_doc = after;
     undo_.record_custom(

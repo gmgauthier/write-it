@@ -1770,4 +1770,34 @@ std::string markdown_export(const Document& doc)
   return out;
 }
 
+namespace {
+
+bool document_has_table(const Document& doc)
+{
+  for (const Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0)
+      return true;
+  }
+  return false;
+}
+
+bool document_has_picture(const Document& doc)
+{
+  for (const Paragraph& paragraph : doc.paragraphs) {
+    for (const Run& run : paragraph.runs) {
+      if (run.image && !run.image->data.empty())
+        return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+bool document_needs_custom_undo(const Document& before, const Document& after)
+{
+  return document_has_table(before) || document_has_table(after) || document_has_picture(before) ||
+         document_has_picture(after);
+}
+
 }  // namespace writeit
