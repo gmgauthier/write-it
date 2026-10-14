@@ -1838,9 +1838,9 @@ void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragrap
   shift_story(doc.paragraphs);
   shift_story(doc.header);
   shift_story(doc.footer);
-bool story_focus_clears_cell(bool header, bool footer, bool note)
-{
-  return header || footer || note;
-}
+  bool story_focus_clears_cell(bool header, bool footer, bool note)
+  {
+    return header || footer || note;
+  }
 
 }  // namespace writeit

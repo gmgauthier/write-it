@@ -39,14 +39,33 @@ struct FindHit {
   int length = 0;
 };
 
-// Searches `doc` from `origin`, then wraps. Match case off compares casefold
-// and maps the folded match back onto the original characters.
+// Searches `doc` from `origin`, then wraps when `wrap` is set. Match case off
+// compares casefold and maps the folded match back onto the original characters.
+// `wrap` false stops at the end, which a search across several stories needs.
 FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
-                     bool match_case);
+                     bool match_case, bool wrap = true);
 // True when `selected` is the Find needle. A picture or table anchor is
 // U+FFFC in the slice, so a selection that only looks like the needle in
 // get_text() does not match and Replace will not delete the object.
 bool selection_matches(const Glib::ustring& selected, const Glib::ustring& needle, bool match_case);
+
+// One place Find can look: the body, a cell, the header, the footer, or a note.
+struct FindPiece {
+  int id = 0;
+  Glib::ustring text;
+};
+
+// id is -1 when nothing matched. index and length are characters of that piece.
+struct PieceHit {
+  int id = -1;
+  int index = -1;
+  int length = 0;
+};
+
+// Searches the pieces in order, from `start_id` at `origin`, then later pieces,
+// then earlier ones, then the start piece before `origin`.
+PieceHit find_in_pieces(const std::vector<FindPiece>& pieces, const Glib::ustring& needle,
+                        int start_id, int origin, bool match_case);
 
 // What a paragraph tag carries: the paragraph's indents, alignment, list,
 // and style.
@@ -561,6 +580,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Ctrl+Z in a header, footer, or note undoes the document. Other Ctrl keys
   // that would format the body are swallowed; the story is plain text.
   bool on_story_key(GdkEventKey* event);
+  // Body, then each cell, then the header, the footer, and the notes.
+  std::vector<Gtk::TextView*> find_targets();
   Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image);
   // commit_document()'s retagging when the text is the same and no picture
   // has to be placed. False otherwise.

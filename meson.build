@@ -345,6 +345,12 @@ write_it_replace_picture_tests = executable(
   dependencies: [writeit_dep],
 )
 test('replace-picture', write_it_replace_picture_tests)
+write_it_find_stories_tests = executable(
+  'write-it-find-stories-tests',
+  'tests/test_find_stories.cpp',
+  dependencies: [writeit_dep],
+)
+test('find-stories', write_it_find_stories_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

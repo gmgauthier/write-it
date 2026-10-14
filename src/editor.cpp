@@ -5838,7 +5838,7 @@ int folded_end(const FoldedText& folded, int begin, int end)
 }  // namespace
 
 FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
-                     bool match_case)
+                     bool match_case, bool wrap)
 {
   FindHit miss;
   if (needle.empty())
@@ -5860,9 +5860,11 @@ FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int 
       if (matches(i))
         return FindHit{i, width};
     }
-    for (int i = 0; i < std::min(origin, count); ++i) {
-      if (matches(i))
-        return FindHit{i, width};
+    if (wrap) {
+      for (int i = 0; i < std::min(origin, count); ++i) {
+        if (matches(i))
+          return FindHit{i, width};
+      }
     }
     return miss;
   }
@@ -5884,11 +5886,52 @@ FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int 
                         static_cast<Glib::ustring::size_type>(width)) == want)
       return hit_at(i);
   }
-  for (int i = 0; i < std::min(from, folded_count); ++i) {
-    if (hay.text.substr(static_cast<Glib::ustring::size_type>(i),
-                        static_cast<Glib::ustring::size_type>(width)) == want)
-      return hit_at(i);
+  if (wrap) {
+    for (int i = 0; i < std::min(from, folded_count); ++i) {
+      if (hay.text.substr(static_cast<Glib::ustring::size_type>(i),
+                          static_cast<Glib::ustring::size_type>(width)) == want)
+        return hit_at(i);
+    }
   }
+  return miss;
+}
+
+PieceHit find_in_pieces(const std::vector<FindPiece>& pieces, const Glib::ustring& needle,
+                        int start_id, int origin, bool match_case)
+{
+  PieceHit miss;
+  if (needle.empty() || pieces.empty())
+    return miss;
+  int start = 0;
+  for (int i = 0; i < static_cast<int>(pieces.size()); ++i) {
+    if (pieces[static_cast<size_t>(i)].id == start_id) {
+      start = i;
+      break;
+    }
+  }
+  auto take = [&](int piece, const FindHit& found) {
+    return PieceHit{pieces[static_cast<size_t>(piece)].id, found.index, found.length};
+  };
+  const FindHit in_start =
+      find_in_text(pieces[static_cast<size_t>(start)].text, needle, origin, match_case, false);
+  if (in_start.index >= 0)
+    return take(start, in_start);
+  for (int piece = start + 1; piece < static_cast<int>(pieces.size()); ++piece) {
+    const FindHit found =
+        find_in_text(pieces[static_cast<size_t>(piece)].text, needle, 0, match_case, false);
+    if (found.index >= 0)
+      return take(piece, found);
+  }
+  for (int piece = 0; piece < start; ++piece) {
+    const FindHit found =
+        find_in_text(pieces[static_cast<size_t>(piece)].text, needle, 0, match_case, false);
+    if (found.index >= 0)
+      return take(piece, found);
+  }
+  const FindHit wrapped =
+      find_in_text(pieces[static_cast<size_t>(start)].text, needle, 0, match_case, false);
+  if (wrapped.index >= 0 && wrapped.index < origin)
+    return take(start, wrapped);
   return miss;
 }
 
@@ -5899,24 +5942,58 @@ void MainWindow::find_next()
   const Glib::ustring needle = find_entry_->get_text();
   if (needle.empty())
     return;
-  // get_text() drops pictures and table anchors, so a later match is short
-  // by one character per object and the selection lands on the object.
-  const Glib::ustring doc = buffer_->get_slice(buffer_->begin(), buffer_->end(), true);
   const bool match_case = match_case_ && match_case_->get_active();
-  int origin = cursor_offset();
-  Gtk::TextBuffer::iterator sel_start;
-  Gtk::TextBuffer::iterator sel_end;
-  if (buffer_->get_selection_bounds(sel_start, sel_end))
-    origin = sel_end.get_offset();
-  const FindHit hit = find_in_text(doc, needle, origin, match_case);
-  if (hit.index < 0) {
+  const std::vector<Gtk::TextView*> views = find_targets();
+  std::vector<FindPiece> pieces;
+  pieces.reserve(views.size());
+  int start = 0;
+  Gtk::Widget* const focused = get_focus();
+  for (int i = 0; i < static_cast<int>(views.size()); ++i) {
+    Gtk::TextView* view = views[static_cast<size_t>(i)];
+    Glib::ustring text;
+    if (view && view->get_buffer()) {
+      auto buffer = view->get_buffer();
+      // get_text() drops pictures and table anchors. The slice keeps them as
+      // U+FFFC, so a match after one is at the buffer offset Find selects.
+      text = buffer->get_slice(buffer->begin(), buffer->end(), true);
+    }
+    pieces.push_back(FindPiece{i, text});
+    if (view == focused)
+      start = i;
+  }
+  int origin = 0;
+  if (start >= 0 && start < static_cast<int>(views.size()) && views[static_cast<size_t>(start)] &&
+      views[static_cast<size_t>(start)]->get_buffer()) {
+    auto buffer = views[static_cast<size_t>(start)]->get_buffer();
+    Gtk::TextBuffer::iterator sel_start;
+    Gtk::TextBuffer::iterator sel_end;
+    if (buffer->get_selection_bounds(sel_start, sel_end))
+      origin = sel_end.get_offset();
+    else
+      origin = buffer->get_insert()->get_iter().get_offset();
+  }
+  const PieceHit hit = find_in_pieces(pieces, needle, start, origin, match_case);
+  if (hit.id < 0 || hit.id >= static_cast<int>(views.size())) {
     message_.set_text("No matches.");
     return;
   }
-  auto start = buffer_->get_iter_at_offset(hit.index);
-  auto end = buffer_->get_iter_at_offset(hit.index + hit.length);
-  buffer_->select_range(start, end);
-  text_.scroll_to(start);
+  Gtk::TextView* const target = views[static_cast<size_t>(hit.id)];
+  if (!target || !target->get_buffer()) {
+    message_.set_text("No matches.");
+    return;
+  }
+  for (Gtk::TextView* other : views) {
+    if (!other || other == target || !other->get_buffer())
+      continue;
+    other->get_buffer()->place_cursor(other->get_buffer()->get_insert()->get_iter());
+  }
+  auto start_iter = target->get_buffer()->get_iter_at_offset(hit.index);
+  auto end_iter = target->get_buffer()->get_iter_at_offset(hit.index + hit.length);
+  target->get_buffer()->select_range(start_iter, end_iter);
+  target->grab_focus();
+  target->scroll_to(start_iter);
+  if (message_.get_text() == "No matches.")
+    message_.set_text("");
 }
 
 bool selection_matches(const Glib::ustring& selected, const Glib::ustring& needle, bool match_case)
@@ -5937,11 +6014,28 @@ void MainWindow::replace_once()
     return;
   const Glib::ustring replacement = replace_entry_->get_text();
   const bool match_case = match_case_ && match_case_->get_active();
+  Gtk::TextView* view = nullptr;
   Gtk::TextBuffer::iterator start;
   Gtk::TextBuffer::iterator end;
-  if (buffer_->get_selection_bounds(start, end)) {
-    const Glib::ustring selected = buffer_->get_slice(start, end, true);
-    if (selection_matches(selected, needle, match_case)) {
+  for (Gtk::TextView* candidate : find_targets()) {
+    if (!candidate || !candidate->get_buffer())
+      continue;
+    Gtk::TextBuffer::iterator from;
+    Gtk::TextBuffer::iterator to;
+    if (!candidate->get_buffer()->get_selection_bounds(from, to))
+      continue;
+    auto candidate_buffer = candidate->get_buffer();
+    const Glib::ustring selected = candidate_buffer->get_slice(from, to, true);
+    if (!selection_matches(selected, needle, match_case))
+      continue;
+    view = candidate;
+    start = from;
+    end = to;
+    break;
+  }
+  if (view && view->get_buffer()) {
+    auto buffer = view->get_buffer();
+    if (view == &text_) {
       const Run format = format_of(start);
       const int heading = heading_of(start);
       const int at = start.get_offset();
@@ -5962,6 +6056,16 @@ void MainWindow::replace_once()
           buffer_->apply_tag(heading_tag(heading), from, to);
       }
       buffer_->end_user_action();
+    } else {
+      const int at = start.get_offset();
+      const int len = static_cast<int>(replacement.length());
+      buffer->begin_user_action();
+      buffer->erase(start, end);
+      if (len > 0) {
+        auto iter = buffer->get_iter_at_offset(at);
+        buffer->insert(iter, replacement);
+      }
+      buffer->end_user_action();
     }
   }
   find_next();

@@ -2807,6 +2807,40 @@ StoryKey story_key(unsigned keyval, unsigned state)
   return StoryKey::Pass;
 }
 
+std::vector<Gtk::TextView*> MainWindow::find_targets()
+{
+  std::vector<Gtk::TextView*> views;
+  views.push_back(&text_);
+  if (buffer_) {
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      TableSheet* sheet = sheet_from(iter.get_child_anchor());
+      if (!sheet)
+        continue;
+      for (int row = 0; row < kMaxTableRows; ++row) {
+        bool row_has = false;
+        for (int column = 0; column < kMaxTableColumns; ++column) {
+          if (Gtk::TextView* cell = sheet->view_at(row, column)) {
+            views.push_back(cell);
+            row_has = true;
+          }
+        }
+        if (!row_has)
+          break;
+      }
+    }
+  }
+  views.push_back(&header_view_);
+  views.push_back(&footer_view_);
+  views.push_back(&notes_view_);
+  if (note_groups_.size() > 1) {
+    for (size_t i = 0; i + 1 < note_groups_.size() && i < note_bands_.size(); ++i) {
+      if (note_bands_[i])
+        views.push_back(&note_bands_[i]->view);
+    }
+  }
+  return views;
+}
+
 bool MainWindow::on_story_key(GdkEventKey* event)
 {
   if (!event)
