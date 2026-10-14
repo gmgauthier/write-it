@@ -93,6 +93,16 @@ struct FootnoteRoom {
 
 FootnoteRoom footnote_room(int page_h, int note_h);
 
+// A line leaves its sheet to make room for a footnote when the line fits in
+// the room the note left (`text_h <= room`). A note at least as tall as the
+// page cannot sit at the foot, so the line leaves even when it is taller
+// than that room. The caller still requires the line to be past the top.
+bool line_moves_for_note(int text_h, int room, int note_h, int page_h);
+
+// How tall a footnote may paint on one sheet. A taller note is clipped to
+// the page; notes do not continue on the next sheet.
+int clamp_note_height(int note_h, int page_text_h);
+
 // "Page 2 of 4".
 std::string page_label(const PageCount& count);
 

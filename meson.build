@@ -363,6 +363,12 @@ write_it_draft_heading_gap_tests = executable(
   dependencies: [writeit_dep],
 )
 test('draft-heading-gap', with_display, args: [write_it_draft_heading_gap_tests.full_path()], depends: write_it_draft_heading_gap_tests, timeout: 90, suite: 'ui')
+write_it_tall_footnote_tests = executable(
+  'write-it-tall-footnote-tests',
+  'tests/test_tall_footnote.cpp',
+  dependencies: [writeit_dep],
+)
+test('tall-footnote', write_it_tall_footnote_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

@@ -4879,7 +4879,8 @@ void MainWindow::place_notes()
   note_box_.get_size_request(asked_w, asked_h);
   if (asked_w != width)
     note_box_.set_size_request(width, -1);
-  const int note_h = note_block_px();
+  const int note_h =
+      clamp_note_height(note_block_px(), std::max(1, page_text_height(page_setup_, zoom_factor())));
   int buffer_y = -1;
   int marker_y = -1;
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
@@ -4988,12 +4989,14 @@ void MainWindow::place_split_notes()
       std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
   const int left = sheet.margin_left;
   const int count = static_cast<int>(note_groups_.size());
+  const int page_h = std::max(1, page_text_height(page_setup_, zoom_factor()));
   std::vector<int> height(static_cast<size_t>(count), 1);
   std::vector<int> marker(static_cast<size_t>(count), -1);
   int pages = 0;
   for (int i = 0; i < count; ++i) {
     const NoteGroup& group = note_groups_[static_cast<size_t>(i)];
-    height[static_cast<size_t>(i)] = std::max(1, measure_note_group(group));
+    height[static_cast<size_t>(i)] =
+        std::max(1, clamp_note_height(measure_note_group(group), page_h));
     pages = std::max(pages, group.page + 1);
     auto want = [&](int note) {
       return std::find(group.indexes.begin(), group.indexes.end(), note - 1) != group.indexes.end();
@@ -5299,12 +5302,14 @@ void MainWindow::update_page_seams()
       const int room = std::max(1, per - cut);
       const int page_edge = (page + 1) * per;
       // A paragraph that does not fit in the room left on this sheet starts
-      // the next one. One taller than a sheet stays put and crosses the edge.
-      // A page break starts a sheet even at the top of one, and even when the
-      // paragraph is taller than the sheet. An empty block has no character
-      // for the seam, so it is not forced here.
+      // the next one. One taller than that room stays put and crosses the
+      // edge, unless the note itself is taller than the sheet. A page break
+      // starts a sheet even at the top of one, and even when the paragraph
+      // is taller than the sheet. An empty block has no character for the
+      // seam, so it is not forced here.
       const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
-      if (forced || (y > 0 && y + box > limit && text_h <= room)) {
+      const bool moves = line_moves_for_note(text_h, room, cut, per);
+      if (forced || (y > 0 && y + box > limit && moves)) {
         placed[i] = std::max(0, page_edge - y) + chrome;
         y = page_edge + text_h;
         ++page;

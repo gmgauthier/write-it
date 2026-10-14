@@ -125,6 +125,18 @@ FootnoteRoom footnote_room(int page_h, int note_h)
   return fit;
 }
 
+bool line_moves_for_note(int text_h, int room, int note_h, int page_h)
+{
+  if (page_h > 0 && note_h >= page_h)
+    return true;
+  return text_h <= room;
+}
+
+int clamp_note_height(int note_h, int page_text_h)
+{
+  return std::min(note_h, page_text_h);
+}
+
 std::string page_label(const PageCount& count)
 {
   return "Page " + std::to_string(count.page) + " of " + std::to_string(count.pages);
