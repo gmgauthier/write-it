@@ -4715,26 +4715,47 @@ void MainWindow::hide_extra_notes()
 std::vector<int> MainWindow::cell_note_anchors() const
 {
   std::vector<int> marks;
-  if (!buffer_ || notes_.empty())
+  if (closing_ || !buffer_ || notes_.empty())
     return marks;
-  // Counting captures would make a seam pass look like an edit.
-  const long saved = captures_;
-  const std::vector<Paragraph> paragraphs = capture().paragraphs;
-  captures_ = saved;
-  const int count = buffer_->get_char_count();
-  for (int n = 1; n <= static_cast<int>(notes_.size()); ++n) {
-    const int at = note_marker_offset(paragraphs, n);
-    if (at < 0 || at >= count)
+  // A body marker wins, the same rule as note_marker_offset(). The cells are
+  // already on the page, so this does not capture(): a capture from a seam
+  // pass lays the page out again, and one while the window is closing reads
+  // widgets that are going away.
+  std::vector<char> in_body(notes_.size(), 0);
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    if (iter.get_child_anchor())
       continue;
-    if (!buffer_->get_iter_at_offset(at).get_child_anchor())
+    const int note = note_of(iter);
+    if (note > 0 && note <= static_cast<int>(in_body.size()))
+      in_body[static_cast<size_t>(note - 1)] = 1;
+  }
+  std::vector<char> seen(notes_.size(), 0);
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    auto anchor = iter.get_child_anchor();
+    if (!anchor)
       continue;
-    marks.push_back(at);
+    const int at = iter.get_offset();
+    for (Gtk::Widget* widget : anchor->get_widgets()) {
+      if (!widget)
+        continue;
+      collect_widget_notes(*widget, [&](int note) {
+        if (note <= 0 || note > static_cast<int>(notes_.size()))
+          return;
+        const size_t slot = static_cast<size_t>(note - 1);
+        if (in_body[slot] || seen[slot])
+          return;
+        seen[slot] = 1;
+        marks.push_back(at);
+      });
+    }
   }
   return marks;
 }
 
 void MainWindow::place_notes()
 {
+  if (closing_)
+    return;
   if (notes_.empty() || view_ != ViewMode::Page || !buffer_) {
     note_box_.hide();
     hide_extra_notes();
@@ -5041,7 +5062,7 @@ void MainWindow::place_split_notes()
 
 void MainWindow::update_page_seams()
 {
-  if (seaming_ || !buffer_)
+  if (closing_ || seaming_ || !buffer_)
     return;
   // Draft is one column. The gaps belong to Page only.
   if (view_ != ViewMode::Page) {

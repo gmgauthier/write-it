@@ -171,6 +171,9 @@ void lay_out_arrow(Gtk::Toolbar& bar)
 
 MainWindow::~MainWindow()
 {
+  // Focus leaving a note during teardown used to place the band again, and
+  // that read the document while the widgets were going away.
+  closing_ = true;
   // A clipboard answer still on its way finds the window gone.
   alive_.reset();
   page_idle_.disconnect();

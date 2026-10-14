@@ -703,6 +703,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void tell(const std::string& sentence);
 
   Settings settings_;
+  // Set in the destructor, before the widgets go. A story that loses focus
+  // while the window closes must not lay the page out again. Declared before
+  // the widgets so it is still alive when they emit that focus-out.
+  bool closing_ = false;
   // The size, while not maximised, and the maximised state, saved on close.
   WindowMemory window_memory_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
