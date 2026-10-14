@@ -67,6 +67,52 @@ int chars_before(const std::vector<Paragraph>& paragraphs, size_t index)
   return offset;
 }
 
+int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index)
+{
+  if (note_index <= 0)
+    return -1;
+  // A body marker wins, even when a cell also cites the note. The sheet of a
+  // body marker is the shipped placement; the anchor is only the stand-in
+  // when the cell is the only marker.
+  int body_at = -1;
+  int cell_at = -1;
+  size_t i = 0;
+  while (i < paragraphs.size()) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      const int anchor = chars_before(paragraphs, i);
+      size_t j = i;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id) {
+        if (cell_at < 0) {
+          for (const Run& run : paragraphs[j].runs) {
+            if (run.note == note_index) {
+              cell_at = anchor;
+              break;
+            }
+          }
+        }
+        ++j;
+      }
+      i = j;
+      continue;
+    }
+    if (body_at < 0) {
+      int offset = chars_before(paragraphs, i);
+      for (const Run& run : paragraphs[i].runs) {
+        if (run.note == note_index) {
+          body_at = offset;
+          break;
+        }
+        offset += chars_of(run);
+      }
+    }
+    ++i;
+  }
+  if (body_at >= 0)
+    return body_at;
+  return cell_at;
+}
+
 namespace {
 
 constexpr int kPicturePx = 480;
@@ -800,24 +846,21 @@ class TableSheet : public Gtk::Grid {
       focus_next(row, column);
       return true;
     }
-    if ((mods & GDK_CONTROL_MASK) == 0)
-      return false;
-    if (event->keyval == GDK_KEY_z && !shift) {
-      MainWindow& window = window_;
-      Glib::signal_idle().connect_once([&window] { window.undo(); });
-      return true;
+    switch (story_key(event->keyval, event->state)) {
+      case StoryKey::Undo: {
+        MainWindow& window = window_;
+        Glib::signal_idle().connect_once([&window] { window.undo(); });
+        return true;
+      }
+      case StoryKey::Redo: {
+        MainWindow& window = window_;
+        Glib::signal_idle().connect_once([&window] { window.redo(); });
+        return true;
+      }
+      case StoryKey::Pass:
+        return false;
     }
-    if (event->keyval == GDK_KEY_y || (event->keyval == GDK_KEY_z && shift) ||
-        event->keyval == GDK_KEY_Z) {
-      MainWindow& window = window_;
-      Glib::signal_idle().connect_once([&window] { window.redo(); });
-      return true;
-    }
-    if (event->keyval == GDK_KEY_a || event->keyval == GDK_KEY_c || event->keyval == GDK_KEY_v ||
-        event->keyval == GDK_KEY_x || event->keyval == GDK_KEY_A || event->keyval == GDK_KEY_C ||
-        event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_X)
-      return false;
-    return true;
+    return false;
   }
 
   bool on_cell_press(GdkEventButton* event, int column, CellFrame* frame);
@@ -1445,6 +1488,21 @@ void MainWindow::leave_cell_edit()
   if (!cell_edit_.on && !cell_typing_on_)
     return;
   release_other_selections(&text_);
+  cell_edit_.on = false;
+  cell_typing_on_ = false;
+  update_actions();
+}
+
+void MainWindow::clear_cell_edit_on_story(bool header, bool footer, bool note)
+{
+  if (!story_focus_clears_cell(header, footer, note))
+    return;
+  if (loading_ || restoring_)
+    return;
+  if (!cell_edit_.on && !cell_typing_on_)
+    return;
+  // leave_cell_edit() keeps the body's selection, which is a click there.
+  // Focusing a story must not pull the keyboard back to the body.
   cell_edit_.on = false;
   cell_typing_on_ = false;
   update_actions();
@@ -2375,6 +2433,29 @@ int MainWindow::note_block_px() const
   return std::max(1, static_cast<int>(std::ceil(18 * std::max(0.5, zoom_factor()))));
 }
 
+int MainWindow::draft_footnote_px() const
+{
+  if (notes_.empty() || view_ == ViewMode::Page)
+    return 0;
+  // The width Page view would give the column. Draft's own margins are not
+  // that width, and the note stays hidden: this only measures it.
+  const ViewGeometry sheet = view_geometry(ViewMode::Page, zoom_factor(), page_setup_);
+  const int width =
+      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
+  int min_h = 0;
+  int nat_h = 0;
+  note_box_.get_preferred_height_for_width(width, min_h, nat_h);
+  if (nat_h <= 1) {
+    const int inner = std::max(40, width - 36);
+    notes_view_.get_preferred_height_for_width(inner, min_h, nat_h);
+  }
+  if (note_editing_ && note_h_ > 1 && nat_h < note_h_)
+    return note_h_;
+  if (nat_h > 1)
+    return nat_h;
+  return std::max(1, static_cast<int>(std::ceil(18 * std::max(0.5, zoom_factor()))));
+}
+
 std::string MainWindow::note_group_text(const NoteGroup& group) const
 {
   std::vector<std::vector<Paragraph>> slice;
@@ -2417,6 +2498,20 @@ int note_line_y(Gtk::TextView& view, const Glib::RefPtr<Gtk::TextBuffer>& buffer
 
 }  // namespace
 
+std::vector<int> note_break_offsets(const std::string& utf8)
+{
+  const Glib::ustring text(utf8);
+  std::vector<int> starts;
+  starts.push_back(0);
+  for (int i = 0; i + 1 < static_cast<int>(text.size()); ++i) {
+    if (text[static_cast<size_t>(i)] != '\n' || text[static_cast<size_t>(i + 1)] != '\n')
+      continue;
+    starts.push_back(i + 2);
+    ++i;
+  }
+  return starts;
+}
+
 int MainWindow::measure_note_group(const NoteGroup& group)
 {
   if (group.indexes.empty())
@@ -2424,13 +2519,11 @@ int MainWindow::measure_note_group(const NoteGroup& group)
   auto buffer = notes_view_.get_buffer();
   const std::string full = notes_text(notes_);
   if (buffer && buffer->get_text().raw() == full) {
+    const std::vector<int> breaks = note_break_offsets(full);
     std::vector<int> starts;
-    starts.push_back(0);
-    for (int i = 0; i + 1 < static_cast<int>(full.size()); ++i) {
-      if (full[static_cast<size_t>(i)] != '\n' || full[static_cast<size_t>(i + 1)] != '\n')
-        continue;
-      starts.push_back(i + 2);
-      ++i;
+    starts.push_back(breaks.empty() ? 0 : breaks.front());
+    for (size_t i = 1; i < breaks.size(); ++i) {
+      starts.push_back(breaks[i]);
       if (starts.size() >= notes_.size())
         break;
     }
@@ -2622,6 +2715,7 @@ void MainWindow::wire_note_band(NoteBand& band)
       band.view.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
   band.focus_in_conn = band.view.signal_focus_in_event().connect([this](GdkEventFocus*) {
     note_editing_ = true;
+    clear_cell_edit_on_story(false, false, true);
     return false;
   });
   band.focus_out_conn = band.view.signal_focus_out_event().connect([this, &band](GdkEventFocus*) {
@@ -2723,28 +2817,68 @@ void MainWindow::reveal_story_caret(Gtk::TextView& view)
     adj->set_value(want);
 }
 
+StoryKey story_key(unsigned keyval, unsigned state)
+{
+  const guint mods = static_cast<guint>(state) & gtk_accelerator_get_default_mod_mask();
+  if ((mods & GDK_CONTROL_MASK) == 0)
+    return StoryKey::Pass;
+  const bool shift = (mods & GDK_SHIFT_MASK) != 0;
+  if (keyval == GDK_KEY_z && !shift)
+    return StoryKey::Undo;
+  if (keyval == GDK_KEY_y || (keyval == GDK_KEY_z && shift) || keyval == GDK_KEY_Z)
+    return StoryKey::Redo;
+  return StoryKey::Pass;
+}
+
+std::vector<Gtk::TextView*> MainWindow::find_targets()
+{
+  std::vector<Gtk::TextView*> views;
+  views.push_back(&text_);
+  if (buffer_) {
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      TableSheet* sheet = sheet_from(iter.get_child_anchor());
+      if (!sheet)
+        continue;
+      for (int row = 0; row < kMaxTableRows; ++row) {
+        bool row_has = false;
+        for (int column = 0; column < kMaxTableColumns; ++column) {
+          if (Gtk::TextView* cell = sheet->view_at(row, column)) {
+            views.push_back(cell);
+            row_has = true;
+          }
+        }
+        if (!row_has)
+          break;
+      }
+    }
+  }
+  views.push_back(&header_view_);
+  views.push_back(&footer_view_);
+  views.push_back(&notes_view_);
+  if (note_groups_.size() > 1) {
+    for (size_t i = 0; i + 1 < note_groups_.size() && i < note_bands_.size(); ++i) {
+      if (note_bands_[i])
+        views.push_back(&note_bands_[i]->view);
+    }
+  }
+  return views;
+}
+
 bool MainWindow::on_story_key(GdkEventKey* event)
 {
   if (!event)
     return false;
-  const guint mods = event->state & gtk_accelerator_get_default_mod_mask();
-  if ((mods & GDK_CONTROL_MASK) == 0)
-    return false;
-  const bool shift = (mods & GDK_SHIFT_MASK) != 0;
-  if (event->keyval == GDK_KEY_z && !shift) {
-    undo();
-    return true;
+  switch (story_key(event->keyval, event->state)) {
+    case StoryKey::Undo:
+      undo();
+      return true;
+    case StoryKey::Redo:
+      redo();
+      return true;
+    case StoryKey::Pass:
+      return false;
   }
-  if (event->keyval == GDK_KEY_y || (event->keyval == GDK_KEY_z && shift) ||
-      event->keyval == GDK_KEY_Z) {
-    redo();
-    return true;
-  }
-  if (event->keyval == GDK_KEY_a || event->keyval == GDK_KEY_c || event->keyval == GDK_KEY_v ||
-      event->keyval == GDK_KEY_x || event->keyval == GDK_KEY_A || event->keyval == GDK_KEY_C ||
-      event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_X)
-    return false;
-  return true;
+  return false;
 }
 
 void MainWindow::on_header_footer()
@@ -2925,6 +3059,7 @@ void MainWindow::on_note_view_end(Gtk::TextView& view)
     if (note_groups_.size() <= 1)
       note_groups_.clear();
   }
+  retarget_note_markers(after, before.notes);
   Gtk::Widget* focused = get_focus();
   commit_document(before, after);
   if (focused == &view)
@@ -3182,6 +3317,121 @@ void MainWindow::on_columns()
   }
 }
 
+// Paragraph under a body caret. A table is one anchor character; a caret on
+// that anchor is the first cell, and a caret past it skips the cells. The
+// last paragraph absorbs a caret past the end, which is how a caret after a
+// final table is clamped into the last cell.
+size_t paragraph_at_offset(const std::vector<Paragraph>& paragraphs, int offset)
+{
+  if (paragraphs.empty())
+    return 0;
+  if (offset < 0)
+    offset = 0;
+  size_t i = 0;
+  int pos = 0;
+  while (i < paragraphs.size()) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      size_t j = i + 1;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id)
+        ++j;
+      if (offset <= pos)
+        return i;
+      pos += 1;
+      if (j < paragraphs.size())
+        pos += 1;
+      if (j >= paragraphs.size())
+        return paragraphs.size() - 1;
+      i = j;
+      continue;
+    }
+    const int n = chars_of(paragraphs[i]);
+    if (offset <= pos + n)
+      return i;
+    if (i + 1 >= paragraphs.size())
+      return i;
+    pos += n + 1;
+    ++i;
+  }
+  return paragraphs.size() - 1;
+}
+
+int break_page(Document& doc, int caret_offset)
+{
+  if (doc.paragraphs.empty())
+    doc.paragraphs.emplace_back();
+  if (caret_offset < 0)
+    caret_offset = 0;
+  size_t index = paragraph_at_offset(doc.paragraphs, caret_offset);
+  if (index >= doc.paragraphs.size())
+    index = doc.paragraphs.size() - 1;
+  const int origin = chars_before(doc.paragraphs, index);
+  int into = caret_offset - origin;
+  const int length = chars_of(doc.paragraphs[index]);
+  if (into < 0)
+    into = 0;
+  if (into > length)
+    into = length;
+  // The caret is after the table. Clamping left it in a cell, where a page
+  // break cannot start a sheet, so the break is a new body paragraph.
+  if (doc.paragraphs[index].cell.table != 0 && caret_offset > origin) {
+    Paragraph next = doc.paragraphs[index];
+    next.runs.clear();
+    next.mark.reset();
+    next.page_break = false;
+    next.heading = 0;
+    next.cell = Cell{};
+    doc.paragraphs.push_back(std::move(next));
+    const size_t added = doc.paragraphs.size() - 1;
+    const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+    apply_style(doc, added, added, style);
+    doc.paragraphs[added].page_break = true;
+    return chars_before(doc.paragraphs, added);
+  }
+  int caret = origin;
+  if (into == 0) {
+    if (doc.paragraphs[index].page_break)
+      return -1;
+    doc.paragraphs[index].page_break = true;
+  } else if (into == length && index + 1 == doc.paragraphs.size()) {
+    Paragraph next = doc.paragraphs[index];
+    next.runs.clear();
+    next.mark.reset();
+    next.page_break = false;
+    next.heading = 0;
+    doc.paragraphs.push_back(std::move(next));
+    const size_t added = doc.paragraphs.size() - 1;
+    const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+    apply_style(doc, added, added, style);
+    doc.paragraphs[added].page_break = true;
+    caret = chars_before(doc.paragraphs, added);
+  } else if (into == length) {
+    // The next paragraph is the table's first cell. Flagging the cell does
+    // not start a sheet; an empty body paragraph in front of the table does.
+    if (doc.paragraphs[index].cell.table == 0 && doc.paragraphs[index + 1].cell.table != 0) {
+      Paragraph gap;
+      const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+      doc.paragraphs.insert(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                            std::move(gap));
+      apply_style(doc, index + 1, index + 1, style);
+      doc.paragraphs[index + 1].page_break = true;
+      caret = chars_before(doc.paragraphs, index + 1);
+    } else if (doc.paragraphs[index + 1].page_break) {
+      return -1;
+    } else {
+      doc.paragraphs[index + 1].page_break = true;
+      caret = chars_before(doc.paragraphs, index + 1);
+    }
+  } else {
+    Paragraph right;
+    split_at(doc.paragraphs[index], into, right);
+    doc.paragraphs.insert(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                          std::move(right));
+    caret = chars_before(doc.paragraphs, index + 1);
+  }
+  return caret;
+}
+
 bool MainWindow::caret_in_table() const
 {
   if (!buffer_)
@@ -3211,48 +3461,10 @@ void MainWindow::on_page_break()
   if (before.paragraphs.empty())
     before.paragraphs.emplace_back();
   Document after = before;
-  size_t index = caret_paragraph();
-  if (index >= after.paragraphs.size())
-    index = after.paragraphs.size() - 1;
-  const int origin = chars_before(after.paragraphs, index);
-  int into = cursor_offset() - origin;
-  const int length = chars_of(after.paragraphs[index]);
-  if (into < 0)
-    into = 0;
-  if (into > length)
-    into = length;
-  int caret = origin;
-  if (into == 0) {
-    if (after.paragraphs[index].page_break) {
-      text_.grab_focus();
-      return;
-    }
-    after.paragraphs[index].page_break = true;
-  } else if (into == length && index + 1 == after.paragraphs.size()) {
-    Paragraph next = after.paragraphs[index];
-    next.runs.clear();
-    next.mark.reset();
-    next.page_break = false;
-    next.heading = 0;
-    after.paragraphs.push_back(next);
-    const size_t added = after.paragraphs.size() - 1;
-    const std::string style = next_style(style_sheet(after), after.paragraphs[index].style);
-    apply_style(after, added, added, style);
-    after.paragraphs[added].page_break = true;
-    caret = chars_before(after.paragraphs, added);
-  } else if (into == length) {
-    if (after.paragraphs[index + 1].page_break) {
-      text_.grab_focus();
-      return;
-    }
-    after.paragraphs[index + 1].page_break = true;
-    caret = chars_before(after.paragraphs, index + 1);
-  } else {
-    Paragraph right;
-    split_at(after.paragraphs[index], into, right);
-    after.paragraphs.insert(after.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
-                            right);
-    caret = chars_before(after.paragraphs, index + 1);
+  const int caret = break_page(after, cursor_offset());
+  if (caret < 0) {
+    text_.grab_focus();
+    return;
   }
   commit_document(before, after, caret);
 }

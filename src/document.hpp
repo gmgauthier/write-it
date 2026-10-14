@@ -2,9 +2,15 @@
 
 #pragma once
 
+#include <glibmm/refptr.h>
+
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace Gdk {
+class Pixbuf;
+}
 
 namespace writeit {
 
@@ -410,6 +416,18 @@ int chars_of(const Paragraph& paragraph);
 // another paragraph follows, is a separator. One past the last paragraph
 // counts a newline the last paragraph does not store.
 int chars_before(const std::vector<Paragraph>& paragraphs, size_t index);
+// Body offset of the marker for `note_index` (1-based, as Run::note). A
+// marker in ordinary text is that run's offset. A note whose only marker is
+// inside a table is the table anchor's offset: the cells share it, and the
+// sheet that holds the anchor is the sheet that shows the note. -1 when no
+// run cites the note.
+int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index);
+// Insert > Page Break at a body caret, counted the same way as chars_before().
+// Returns the caret's new offset, or -1 when that point already starts a
+// sheet. A caret past a table's anchor, clamped into a cell, appends a body
+// paragraph. A break at the end of the paragraph before a table inserts an
+// empty body paragraph in front of the table. The cell itself is not flagged.
+int break_page(Document& doc, int caret_offset);
 // Gives one paragraph the style `to`. An attribute whose direct bit is unset
 // takes the style's value and the bit stays unset, even when the old value
 // differed from the paragraph's previous style. A set bit is left alone.
@@ -435,6 +453,12 @@ void adopt_sheet(Document& doc, const std::string& font, double size);
 // document with a sheet, or without headings, is left alone.
 void adopt_heading_styles(Document& doc, const std::string& font, double size);
 
+// A blank line in a note splits it, and the new half has no marker. Markers
+// after the changed notes move by the change in note count. A marker that
+// still names the note that split stays. `doc.notes` is already the edited
+// list; `before_notes` is the list it replaced. The same count changes nothing.
+void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragraph>>& before_notes);
+
 Document blank_document(const std::string& font, double size);
 Document plain_import(const std::string& text, const std::string& font, double size);
 Document markdown_import(const std::string& text, const std::string& font, double size);
@@ -451,5 +475,22 @@ std::string image_type_of(const std::string& data);
 // kMaxImageBytes. Leaves path and alt alone. False when the file is missing
 // or not a picture this slice embeds.
 bool load_image_file(const std::string& path, Image& image);
+// PNG bytes of a pixbuf a paste left in the buffer. Empty when `pix` is
+// null or will not encode. Does not invent width or height.
+Image image_from_pixbuf(const Glib::RefPtr<Gdk::Pixbuf>& pix);
+
+// True when a body rebuild has to be one custom undo step. Either document
+// has a table, or a picture with bytes, including a picture in a cell. A
+// picture with no bytes does not count, and neither does plain text.
+bool document_needs_custom_undo(const Document& before, const Document& after);
+
+// Where each note starts in the joined note text, as character offsets: 0,
+// then just after every blank line. GTK counts characters, not UTF-8 bytes.
+std::vector<int> note_break_offsets(const std::string& utf8);
+
+// A header, footer, or note taking the keyboard leaves the cell that was
+// being edited. The body taking it does not: a file dialog and the Table
+// menu both focus away from the cell and still need it.
+bool story_focus_clears_cell(bool header, bool footer, bool note);
 
 }  // namespace writeit

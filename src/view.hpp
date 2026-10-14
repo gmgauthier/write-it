@@ -83,6 +83,26 @@ PageCount page_count(int text_height, int caret_y, double zoom);
 // `per_page` is page_text_height() for the document's paper.
 PageCount page_count(int text_height, int caret_y, int per_page);
 
+// How much of a sheet a footnote keeps. `page_h` is one page of text. A
+// positive `note_h` is the cut at the foot, and the body keeps
+// max(1, page_h - cut). No note, or a negative height, cuts nothing.
+struct FootnoteRoom {
+  int cut = 0;
+  int room = 1;
+};
+
+FootnoteRoom footnote_room(int page_h, int note_h);
+
+// A line leaves its sheet to make room for a footnote when the line fits in
+// the room the note left (`text_h <= room`). A note at least as tall as the
+// page cannot sit at the foot, so the line leaves even when it is taller
+// than that room. The caller still requires the line to be past the top.
+bool line_moves_for_note(int text_h, int room, int note_h, int page_h);
+
+// How tall a footnote may paint on one sheet. A taller note is clipped to
+// the page; notes do not continue on the next sheet.
+int clamp_note_height(int note_h, int page_text_h);
+
 // "Page 2 of 4".
 std::string page_label(const PageCount& count);
 
@@ -106,6 +126,9 @@ int twips_to_px(int twips, double zoom);
 // separator, and the gap's height in pixels. It is not a paragraph format
 // and it is not written to the file.
 bool is_page_seam(const std::string& name);
+// Draft's short gap above a page break. One tag, no paint. Page view uses
+// the seam instead, and this tag is not applied there.
+bool is_draft_gap(const std::string& name);
 // The height in that name, or 0 when `name` is not a page seam.
 int page_seam_pixels(const std::string& name);
 

@@ -1,3 +1,26 @@
+write-it (1.0.21-1) unstable; urgency=medium
+
+  * A file that uses CR alone keeps that line break.
+  * Markdown export escapes markup that is ordinary text.
+  * An RTF page break at the end of the file is kept.
+  * A footnote marker no longer cuts a number off the previous sentence.
+  * The metafile stored beside an RTF picture is skipped, and the picture is kept.
+  * A table cell's paragraph format is written into the RTF, along with styles and lists from headers, footers, and footnotes.
+  * Find and replace cover cells, headers, footers, and notes, including a match whose casefold is longer than the word.
+  * Replace aimed at the text around a picture keeps the picture.
+  * A pasted picture keeps its bytes, and that rebuild is its own undo step.
+  * Word motion works in a cell, a header, a footer, or a note.
+  * Focusing a header, footer, or note leaves the cell that was being edited.
+  * A footnote that lives only in a cell sits on the sheet that holds its table.
+  * Enter on an empty page-break list item ends the list. Delete on that empty pad clears the page break.
+  * A list label is underlined when the item's first character is underlined.
+  * A page break just before or just after a table starts a new sheet. A page break inside a table is still refused.
+  * Draft counts a footnote in the page count, and a heading that starts a sheet keeps its gap.
+  * A footnote taller than the page is clipped to that page, and the following lines move.
+  * A spell checker that fails to start is treated as not knowing the word.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Wed, 14 Oct 2026 21:20:14 +0100
+
 write-it (1.0.20-1) unstable; urgency=medium
 
   * Selecting the first line of a later page stops at the top of that line.

@@ -116,6 +116,27 @@ PageCount page_count(int text_height, int caret_y, double zoom)
   return page_count(text_height, caret_y, page_text_height(zoom));
 }
 
+FootnoteRoom footnote_room(int page_h, int note_h)
+{
+  FootnoteRoom fit;
+  const int per = page_h > 0 ? page_h : 1;
+  fit.cut = note_h > 0 ? note_h : 0;
+  fit.room = std::max(1, per - fit.cut);
+  return fit;
+}
+
+bool line_moves_for_note(int text_h, int room, int note_h, int page_h)
+{
+  if (page_h > 0 && note_h >= page_h)
+    return true;
+  return text_h <= room;
+}
+
+int clamp_note_height(int note_h, int page_text_h)
+{
+  return std::min(note_h, page_text_h);
+}
+
 std::string page_label(const PageCount& count)
 {
   return "Page " + std::to_string(count.page) + " of " + std::to_string(count.pages);
@@ -143,6 +164,11 @@ bool is_page_seam(const std::string& name)
 {
   const std::string prefix = std::string("page-seam") + '\x1f';
   return name.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool is_draft_gap(const std::string& name)
+{
+  return name == "draft-gap";
 }
 
 int page_seam_pixels(const std::string& name)

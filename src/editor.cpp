@@ -31,6 +31,45 @@ constexpr int kFindReplace = Gtk::RESPONSE_YES;
 // hold. capture() skips it. It is not part of the document or the file.
 constexpr gunichar kPageBreakPad = 0x200B;
 
+// The map wins when it already has bytes (a file picture, possibly scaled on
+// screen). A paste leaves a pixbuf with no entry; keep a PNG of that pixbuf.
+Image remember_shown(std::map<GdkPixbuf*, Image>& images, const Glib::RefPtr<Gdk::Pixbuf>& pix)
+{
+  Image image;
+  if (!pix)
+    return image;
+  const auto found = images.find(pix->gobj());
+  if (found != images.end())
+    image = found->second;
+  if (!image.data.empty())
+    return image;
+  const Image encoded = image_from_pixbuf(pix);
+  if (encoded.data.empty()) {
+    if (image.alt.empty())
+      image.alt = "image";
+    return image;
+  }
+  image.data = encoded.data;
+  image.type = encoded.type;
+  if (image.alt.empty())
+    image.alt = encoded.alt;
+  images[pix->gobj()] = image;
+  return image;
+}
+}  // namespace
+
+bool paragraph_is_blank_item(const Glib::ustring& text)
+{
+  for (auto it = text.begin(); it != text.end(); ++it) {
+    const gunichar ch = *it;
+    if (ch != '\n' && ch != kPageBreakPad)
+      return false;
+  }
+  return true;
+}
+
+namespace {
+
 // Asked about the file a save would really replace, on top of the chooser.
 bool confirm_replace(Gtk::Window& parent, const std::string& path)
 {
@@ -500,7 +539,7 @@ void MainWindow::build_editor()
   // are recomputed after each change and may leave the tag table.
   undo_.attach(buffer_, [](const Glib::RefPtr<Gtk::TextTag>& tag) {
     const std::string name = tag_name(tag);
-    return is_list_shift(name) || is_list_tab(name) || is_page_seam(name);
+    return is_list_shift(name) || is_list_tab(name) || is_page_seam(name) || is_draft_gap(name);
   });
   // Undo attaches before the erase below, and takes the picture bytes here
   // while the pixbuf is still in the buffer. Undo inserts that pixbuf again.
@@ -565,7 +604,7 @@ void MainWindow::build_editor()
       false);
   auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
                                 const Gtk::TextIter& end) {
-    if (seaming_ || is_page_seam(tag_name(tag)))
+    if (seaming_ || is_page_seam(tag_name(tag)) || is_draft_gap(tag_name(tag)))
       return;
     // A range up to the next line's start, as a paragraph's is, leaves that
     // line's first character, and so its layout, untouched.
@@ -599,7 +638,7 @@ void MainWindow::build_editor()
     if (seaming_ || shifting_ || tabbing_)
       return;
     const std::string name = tag_name(tag);
-    if (is_list_shift(name) || is_list_tab(name) || is_page_seam(name))
+    if (is_list_shift(name) || is_list_tab(name) || is_page_seam(name) || is_draft_gap(name))
       return;
     ParaFormat ignored;
     if (parse_para(name, ignored))
@@ -1319,14 +1358,7 @@ Document MainWindow::capture() const
     if (auto pix = iter.get_pixbuf()) {
       flush_run();
       Run image_run;
-      const auto found = image_pix_.find(pix->gobj());
-      if (found != image_pix_.end())
-        image_run.image = found->second;
-      else {
-        Image missing;
-        missing.alt = "image";
-        image_run.image = missing;
-      }
+      image_run.image = remember_shown(image_pix_, pix);
       add_run(paragraph, std::move(image_run));
       continue;
     }
@@ -2138,14 +2170,7 @@ std::vector<Paragraph> MainWindow::read_cell(const Gtk::TextView& view,
     if (auto pix = iter.get_pixbuf()) {
       flush_run();
       Run image_run;
-      const auto found = image_pix_.find(pix->gobj());
-      if (found != image_pix_.end())
-        image_run.image = found->second;
-      else {
-        Image missing;
-        missing.alt = "image";
-        image_run.image = missing;
-      }
+      image_run.image = remember_shown(image_pix_, pix);
       Paragraph holder;
       holder.runs = std::move(line.runs);
       add_run(holder, std::move(image_run));
@@ -2373,6 +2398,106 @@ void MainWindow::tag_cell_paragraph(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
   }
 }
 
+Glib::RefPtr<Gtk::TextTag> MainWindow::draft_gap_tag()
+{
+  const Glib::ustring name = "draft-gap";
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (tag)
+    return tag;
+  tag = Gtk::TextTag::create(name);
+  tag->property_pixels_above_lines() = 18;
+  table->add(tag);
+  raise_headings();
+  return tag;
+}
+
+void MainWindow::raise_draft_gap()
+{
+  if (!buffer_)
+    return;
+  auto tag = buffer_->get_tag_table()->lookup("draft-gap");
+  if (!tag)
+    return;
+  const int top = buffer_->get_tag_table()->get_size() - 1;
+  if (tag->get_priority() < top)
+    tag->set_priority(top);
+}
+
+bool MainWindow::sync_draft_gaps()
+{
+  if (!buffer_)
+    return false;
+  struct Range {
+    int start = 0;
+    int end = 0;
+    bool sheet = false;
+  };
+  std::vector<Range> ranges;
+  const int count = buffer_->get_char_count();
+  int offset = 0;
+  while (offset <= count) {
+    auto iter = buffer_->get_iter_at_offset(offset);
+    int next = -1;
+    for (auto at = iter; !at.is_end(); ++at) {
+      if (at.get_char() == '\n') {
+        auto after = at;
+        after.forward_char();
+        next = after.get_offset();
+        break;
+      }
+    }
+    Range range;
+    range.start = offset;
+    range.end = next < 0 ? count : next;
+    range.sheet = starts_sheet(range.start) && range.start < range.end;
+    ranges.push_back(range);
+    if (next < 0)
+      break;
+    offset = next;
+  }
+  const bool want = view_ == ViewMode::Draft;
+  bool any = false;
+  for (const Range& range : ranges)
+    any = any || range.sheet;
+  auto table = buffer_->get_tag_table();
+  auto gap = table->lookup("draft-gap");
+  if ((!want || !any) && !gap)
+    return false;
+  if (want && any && !gap)
+    gap = draft_gap_tag();
+  bool changed = false;
+  seaming_ = true;
+  for (const Range& range : ranges) {
+    if (!gap)
+      break;
+    auto from = buffer_->get_iter_at_offset(range.start);
+    auto to = buffer_->get_iter_at_offset(range.end);
+    bool applied = false;
+    for (const auto& tag : from.get_tags()) {
+      if (is_draft_gap(tag_name(tag))) {
+        applied = true;
+        break;
+      }
+    }
+    if (want && range.sheet) {
+      if (!applied) {
+        buffer_->apply_tag(gap, from, to);
+        changed = true;
+      }
+    } else if (applied) {
+      buffer_->remove_tag(gap, from, to);
+      changed = true;
+    }
+  }
+  if ((!want || !any) && gap) {
+    table->remove(gap);
+    changed = true;
+  }
+  seaming_ = false;
+  return changed;
+}
+
 void MainWindow::raise_headings()
 {
   // Priorities decide which tags win the indents and margins: lines move.
@@ -2384,7 +2509,9 @@ void MainWindow::raise_headings()
       tag->set_priority(table->get_size() - 1);
   }
   // A seam has to outrank a heading, or the heading's own space wins and the
-  // gap between sheets never opens.
+  // gap between sheets never opens. Draft has no seam. Its gap sits above the
+  // heading and under the seam, and it sets no indent.
+  raise_draft_gap();
   raise_seams();
 }
 
@@ -3349,6 +3476,11 @@ void MainWindow::normalise_paragraphs()
   normalising_ = false;
 }
 
+bool deleting_pad_clears_break(gunichar erased, bool only_char, bool page_break)
+{
+  return only_char && page_break && erased == kPageBreakPad;
+}
+
 void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
                           const Gtk::TextBuffer::iterator& to)
 {
@@ -3370,6 +3502,23 @@ void MainWindow::on_erase(const Gtk::TextBuffer::iterator& from,
     return;
   pending_para_ = para_at(buffer_->get_char_count());
   pending_para_set_ = true;
+  // The seam sat on the pad. Delete removes that character, so the sheet is
+  // gone; keeping the break would save a page the screen no longer shows.
+  // Putting the pad back would make Delete look like it did nothing.
+  bool only_char = false;
+  if (to.get_offset() == from.get_offset() + 1) {
+    only_char = true;
+    const int end = paragraph_end(from.get_offset());
+    for (auto iter = buffer_->get_iter_at_offset(from.get_offset()); iter.get_offset() < end;
+         ++iter) {
+      if (iter.get_offset() == from.get_offset() || iter.get_char() == '\n')
+        continue;
+      only_char = false;
+      break;
+    }
+  }
+  if (deleting_pad_clears_break(from.get_char(), only_char, pending_para_.page_break))
+    pending_para_.page_break = false;
 }
 
 void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
@@ -3653,8 +3802,13 @@ bool MainWindow::on_text_key(GdkEventKey* event)
       }
       if (mods != 0 || !at_start || !in_list)
         return false;
-      const auto here = buffer_->get_iter_at_offset(caret);
-      if (!here.is_end() && here.get_char() != '\n')
+      // The caret sits on a page-break pad in an otherwise empty item. That
+      // pad is not text, so the item is blank and Enter ends the list.
+      const int from = paragraph_start(caret);
+      const int to = paragraph_end(caret);
+      const Glib::ustring item = buffer_->get_slice(buffer_->get_iter_at_offset(from),
+                                                    buffer_->get_iter_at_offset(to), true);
+      if (!paragraph_is_blank_item(item))
         return false;
       toggle_list_kind(para_at(caret).list.kind);
       return true;
@@ -3669,6 +3823,37 @@ bool MainWindow::on_text_key(GdkEventKey* event)
   }
 }
 
+std::string list_label_key(const std::string& text, const std::string& family, int size, bool bold,
+                           bool italic, bool underline)
+{
+  std::string key = text;
+  key += '\n';
+  key += family;
+  key += '\n';
+  key += std::to_string(size);
+  key += bold ? "b" : "";
+  key += italic ? "i" : "";
+  key += underline ? "u" : "";
+  return key;
+}
+
+bool label_underlined(const Run& format)
+{
+  return format.underline;
+}
+
+void apply_label_underline(const Glib::RefPtr<Pango::Layout>& layout, bool underline)
+{
+  if (!layout || !underline)
+    return;
+  Pango::AttrInt mark = Pango::Attribute::create_attr_underline(Pango::UNDERLINE_SINGLE);
+  mark.set_start_index(0);
+  mark.set_end_index(G_MAXUINT);
+  Pango::AttrList attrs;
+  attrs.insert(mark);
+  layout->set_attributes(attrs);
+}
+
 Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& paragraph, int offset,
                                                           int number, int& width, int& gap)
 {
@@ -3680,13 +3865,9 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   const Glib::ustring text = list_label(list, number);
   const std::string family = format.font.empty() ? "Sans" : format.font;
   const int size = static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE);
-  std::string key = text.raw();
-  key += '\n';
-  key += family;
-  key += '\n';
-  key += std::to_string(size);
-  key += format.bold ? "b" : "";
-  key += format.italic ? "i" : "";
+  const bool underline = label_underlined(format);
+  const std::string key =
+      list_label_key(text.raw(), family, size, format.bold, format.italic, underline);
   const auto found = label_layout_cache_.find(key);
   if (found != label_layout_cache_.end()) {
     width = found->second.width;
@@ -3698,10 +3879,11 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   Pango::FontDescription desc;
   desc.set_family(family);
   desc.set_size(size);
-  // Bold and italic too, as Word 97 formats a label from the paragraph mark.
+  // Bold, italic, and underline, as Word 97 formats a label from the paragraph mark.
   desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
   desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
   layout->set_font_description(desc);
+  apply_label_underline(layout, underline);
   int height = 0;
   layout->get_pixel_size(width, height);
   auto space = text_.create_pango_layout(" ");
@@ -4269,7 +4451,9 @@ int MainWindow::natural_line_above(const Gtk::TextIter& iter) const
     if (is_page_seam(name))
       continue;
     int above = -1;
-    if (const int level = heading_level_name(name); level > 0)
+    if (is_draft_gap(name))
+      above = 18;
+    else if (const int level = heading_level_name(name); level > 0)
       above = heading_px;
     else {
       ParaFormat format;
@@ -4406,9 +4590,10 @@ bool MainWindow::has_page_break() const
 
 int MainWindow::sheet_y(int offset) const
 {
-  // The same sheet decisions as update_page_seams(), without footnote room.
-  // Draft draws no seams, so the status bar counts from this instead of from
-  // the gray gaps. A document with no page break stays on the laid-out height.
+  // The same sheet decisions as update_page_seams(). Draft draws no seams and
+  // does not paint the footnote, so the status bar counts from this. A sheet
+  // that holds a marker gives up the same note height Page view would. A
+  // document with no page break and no note stays on the laid-out height.
   if (!buffer_)
     return 0;
   struct Block {
@@ -4462,39 +4647,87 @@ int MainWindow::sheet_y(int offset) const
   }
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
   const int where = std::max(0, std::min(offset, count));
-  int y = 0;
-  int page = 0;
-  int result = 0;
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    const int text_h = blocks[i].text_h;
-    const int box = blocks[i].natural + text_h;
-    while (y >= (page + 1) * per)
-      ++page;
-    const int limit = (page + 1) * per;
-    const int page_edge = limit;
-    const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
-    const bool push = forced || (y > 0 && y + box > limit && text_h <= per);
-    const int visual = page + (push ? 1 : 0);
-    const bool last = i + 1 == blocks.size();
-    const bool inside = where >= blocks[i].start && (where < blocks[i].end || last);
-    if (inside) {
-      int within = 0;
-      if (where > blocks[i].start && where < blocks[i].end) {
-        Gdk::Rectangle loc;
-        text_.get_iter_location(buffer_->get_iter_at_offset(where), loc);
-        const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
-        within = std::max(0, loc.get_y() - blocks[i].top - displayed);
-      } else if (where >= blocks[i].end)
-        within = text_h;
-      result = visual * per + std::min(std::max(0, within), text_h);
+  const int note_px = draft_footnote_px();
+  // A body marker, the same scan Page view uses for a single note column.
+  // A cut of 0 leaves the push test as it was.
+  auto block_has_note = [&](int start, int end) {
+    if (note_px <= 0)
+      return false;
+    const int from = std::max(0, start);
+    const int to = std::max(from, std::min(end, count));
+    for (int at = from; at < to; ++at) {
+      Run run;
+      for (const auto& tag : buffer_->get_iter_at_offset(at).get_tags()) {
+        if (parse_fmt(tag_name(tag), run) && run.note != 0)
+          return true;
+      }
     }
-    if (push) {
-      y = page_edge + text_h;
-      ++page;
-    } else
-      y += box;
+    return false;
+  };
+  // `reserve_page` is the sheet that gives the note its band, or -1.
+  auto paginate = [&](int reserve_page, std::vector<int>* page_of) {
+    int y = 0;
+    int page = 0;
+    int result = 0;
+    if (page_of)
+      page_of->assign(blocks.size(), 0);
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const int text_h = blocks[i].text_h;
+      const int box = blocks[i].natural + text_h;
+      while (y >= (page + 1) * per)
+        ++page;
+      if (page_of)
+        (*page_of)[i] = page;
+      const int cut = reserve_page >= 0 && page == reserve_page ? note_px : 0;
+      const FootnoteRoom fit = footnote_room(per, cut);
+      const int limit = (page + 1) * per - fit.cut;
+      const int page_edge = (page + 1) * per;
+      const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
+      const bool push = forced || (y > 0 && y + box > limit && text_h <= fit.room);
+      const int visual = page + (push ? 1 : 0);
+      const bool last = i + 1 == blocks.size();
+      const bool inside = where >= blocks[i].start && (where < blocks[i].end || last);
+      if (inside) {
+        int within = 0;
+        if (where > blocks[i].start && where < blocks[i].end) {
+          Gdk::Rectangle loc;
+          text_.get_iter_location(buffer_->get_iter_at_offset(where), loc);
+          const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
+          within = std::max(0, loc.get_y() - blocks[i].top - displayed);
+        } else if (where >= blocks[i].end)
+          within = text_h;
+        result = visual * per + std::min(std::max(0, within), text_h);
+      }
+      if (push) {
+        y = page_edge + text_h;
+        ++page;
+      } else
+        y += box;
+    }
+    return result;
+  };
+  if (note_px <= 0)
+    return paginate(-1, nullptr);
+  std::vector<int> first_page;
+  const int plain = paginate(-1, &first_page);
+  int home = -1;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (!block_has_note(blocks[i].start, blocks[i].end))
+      continue;
+    home = first_page[i];
+    break;
   }
-  return result;
+  if (home < 0)
+    return plain;
+  std::vector<int> again;
+  const int reserved = paginate(home, &again);
+  // Keep the reserve when the marker stays on that sheet. A block the note
+  // itself pushes down is the next sheet, and the note stays put.
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (block_has_note(blocks[i].start, blocks[i].end) && again[i] == home)
+      return reserved;
+  }
+  return plain;
 }
 
 int MainWindow::page_content_y(int layout_y, int offset) const
@@ -4504,10 +4737,11 @@ int MainWindow::page_content_y(int layout_y, int offset) const
   const int count = buffer_->get_char_count();
   const int at = std::max(0, std::min(offset, count));
   const int content = layout_y - seam_extra_through(at);
-  // Draft strips the seams. A page break still starts a sheet, and the count
-  // has to match Page view. Ordinary text keeps the laid-out height.
+  // Draft strips the seams. A page break still starts a sheet, and a footnote
+  // still takes its room, so the count matches Page view. Ordinary text with
+  // no note keeps the laid-out height.
   if (view_ != ViewMode::Page)
-    return has_page_break() ? sheet_y(at) : content;
+    return (has_page_break() || !notes_.empty()) ? sheet_y(at) : content;
   // Each gray gap starts a sheet. The line's content y is short of that
   // sheet by whatever room the previous sheet did not fill, so a tall block
   // pushed onto the next page keeps the old page number until the caret has
@@ -4582,8 +4816,50 @@ void MainWindow::hide_extra_notes()
   }
 }
 
+std::vector<int> MainWindow::cell_note_anchors() const
+{
+  std::vector<int> marks;
+  if (closing_ || !buffer_ || notes_.empty())
+    return marks;
+  // A body marker wins, the same rule as note_marker_offset(). The cells are
+  // already on the page, so this does not capture(): a capture from a seam
+  // pass lays the page out again, and one while the window is closing reads
+  // widgets that are going away.
+  std::vector<char> in_body(notes_.size(), 0);
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    if (iter.get_child_anchor())
+      continue;
+    const int note = note_of(iter);
+    if (note > 0 && note <= static_cast<int>(in_body.size()))
+      in_body[static_cast<size_t>(note - 1)] = 1;
+  }
+  std::vector<char> seen(notes_.size(), 0);
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    auto anchor = iter.get_child_anchor();
+    if (!anchor)
+      continue;
+    const int at = iter.get_offset();
+    for (Gtk::Widget* widget : anchor->get_widgets()) {
+      if (!widget)
+        continue;
+      collect_widget_notes(*widget, [&](int note) {
+        if (note <= 0 || note > static_cast<int>(notes_.size()))
+          return;
+        const size_t slot = static_cast<size_t>(note - 1);
+        if (in_body[slot] || seen[slot])
+          return;
+        seen[slot] = 1;
+        marks.push_back(at);
+      });
+    }
+  }
+  return marks;
+}
+
 void MainWindow::place_notes()
 {
+  if (closing_)
+    return;
   if (notes_.empty() || view_ != ViewMode::Page || !buffer_) {
     note_box_.hide();
     hide_extra_notes();
@@ -4603,7 +4879,8 @@ void MainWindow::place_notes()
   note_box_.get_size_request(asked_w, asked_h);
   if (asked_w != width)
     note_box_.set_size_request(width, -1);
-  const int note_h = note_block_px();
+  const int note_h =
+      clamp_note_height(note_block_px(), std::max(1, page_text_height(page_setup_, zoom_factor())));
   int buffer_y = -1;
   int marker_y = -1;
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
@@ -4622,6 +4899,20 @@ void MainWindow::place_notes()
     text_.get_line_yrange(iter, top, height);
     marker_y = top;
     break;
+  }
+  // A marker that lives only in a cell is not a body tag. The table anchor
+  // is that marker's place, so the note uses the anchor's sheet.
+  if (marker_y < 0) {
+    const std::vector<int> anchors = cell_note_anchors();
+    if (!anchors.empty()) {
+      int at = anchors.front();
+      for (int mark : anchors)
+        at = std::min(at, mark);
+      int top = 0;
+      int height = 0;
+      text_.get_line_yrange(buffer_->get_iter_at_offset(at), top, height);
+      marker_y = top;
+    }
   }
   if (marker_y >= 0) {
     auto iter = buffer_->begin();
@@ -4698,12 +4989,14 @@ void MainWindow::place_split_notes()
       std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
   const int left = sheet.margin_left;
   const int count = static_cast<int>(note_groups_.size());
+  const int page_h = std::max(1, page_text_height(page_setup_, zoom_factor()));
   std::vector<int> height(static_cast<size_t>(count), 1);
   std::vector<int> marker(static_cast<size_t>(count), -1);
   int pages = 0;
   for (int i = 0; i < count; ++i) {
     const NoteGroup& group = note_groups_[static_cast<size_t>(i)];
-    height[static_cast<size_t>(i)] = std::max(1, measure_note_group(group));
+    height[static_cast<size_t>(i)] =
+        std::max(1, clamp_note_height(measure_note_group(group), page_h));
     pages = std::max(pages, group.page + 1);
     auto want = [&](int note) {
       return std::find(group.indexes.begin(), group.indexes.end(), note - 1) != group.indexes.end();
@@ -4876,27 +5169,36 @@ void MainWindow::place_split_notes()
 
 void MainWindow::update_page_seams()
 {
-  if (seaming_ || !buffer_)
+  if (closing_ || seaming_ || !buffer_)
     return;
-  // Draft is one column. The gaps belong to Page only.
+  // Draft is one column. The sheet seams belong to Page only. A page break
+  // still opens the short gap, including on a heading: the heading's own
+  // space would win, and the gap would never show.
   if (view_ != ViewMode::Page) {
     std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
     buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
       if (is_page_seam(tag_name(tag)))
         drop.push_back(tag);
     });
-    if (drop.empty())
-      return;
-    seaming_ = true;
-    for (const auto& tag : drop)
-      buffer_->remove_tag(tag, buffer_->begin(), buffer_->end());
-    for (const auto& tag : drop)
-      buffer_->get_tag_table()->remove(tag);
-    seaming_ = false;
-    grow_page_ = true;
-    queue_page_size();
+    bool changed = false;
+    if (!drop.empty()) {
+      seaming_ = true;
+      for (const auto& tag : drop)
+        buffer_->remove_tag(tag, buffer_->begin(), buffer_->end());
+      for (const auto& tag : drop)
+        buffer_->get_tag_table()->remove(tag);
+      seaming_ = false;
+      changed = true;
+    }
+    if (sync_draft_gaps())
+      changed = true;
+    if (changed) {
+      grow_page_ = true;
+      queue_page_size();
+    }
     return;
   }
+  sync_draft_gaps();
   if (text_.get_allocated_width() <= 1)
     return;
 
@@ -4954,6 +5256,7 @@ void MainWindow::update_page_seams()
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
   const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
   const int reserve_px = note_block_px();
+  const std::vector<int> cell_marks = cell_note_anchors();
   auto has_note = [&](int start, int end) {
     const int from = std::max(0, start);
     const int to = std::max(from, std::min(end, count));
@@ -4963,6 +5266,18 @@ void MainWindow::update_page_seams()
         if (parse_fmt(tag_name(tag), run) && run.note != 0)
           return true;
       }
+    }
+    return false;
+  };
+  // The body scan above is the shipped test for a body marker. A cell note
+  // has no body tag; the anchor offset is the marker, and only when the body
+  // has none.
+  auto has_cell_note = [&](int start, int end) {
+    const int from = std::max(0, start);
+    const int to = std::max(from, std::min(end, count));
+    for (int at : cell_marks) {
+      if (at >= from && at < to)
+        return true;
     }
     return false;
   };
@@ -4987,12 +5302,14 @@ void MainWindow::update_page_seams()
       const int room = std::max(1, per - cut);
       const int page_edge = (page + 1) * per;
       // A paragraph that does not fit in the room left on this sheet starts
-      // the next one. One taller than a sheet stays put and crosses the edge.
-      // A page break starts a sheet even at the top of one, and even when the
-      // paragraph is taller than the sheet. An empty block has no character
-      // for the seam, so it is not forced here.
+      // the next one. One taller than that room stays put and crosses the
+      // edge, unless the note itself is taller than the sheet. A page break
+      // starts a sheet even at the top of one, and even when the paragraph
+      // is taller than the sheet. An empty block has no character for the
+      // seam, so it is not forced here.
       const bool forced = blocks[i].page_break && blocks[i].start < blocks[i].end;
-      if (forced || (y > 0 && y + box > limit && text_h <= room)) {
+      const bool moves = line_moves_for_note(text_h, room, cut, per);
+      if (forced || (y > 0 && y + box > limit && moves)) {
         placed[i] = std::max(0, page_edge - y) + chrome;
         y = page_edge + text_h;
         ++page;
@@ -5083,11 +5400,21 @@ void MainWindow::update_page_seams()
     note_groups_.clear();
     if (reserve_px > 0) {
       int home = -1;
+      bool cell_home = false;
       for (size_t i = 0; i < blocks.size(); ++i) {
         if (!has_note(blocks[i].start, blocks[i].end))
           continue;
         home = page_of[i];
         break;
+      }
+      if (home < 0) {
+        for (size_t i = 0; i < blocks.size(); ++i) {
+          if (!has_cell_note(blocks[i].start, blocks[i].end))
+            continue;
+          home = page_of[i];
+          cell_home = true;
+          break;
+        }
       }
       if (home >= 0) {
         std::vector<int> reserve(static_cast<size_t>(home) + 1, 0);
@@ -5096,9 +5423,12 @@ void MainWindow::update_page_seams()
         const std::vector<int> reserved = place(reserve, again);
         // Keep the break when the marker stays on that sheet. A block that the
         // note itself pushes down is the next sheet, and the note stays put.
+        // A body marker uses the body scan. A cell note uses the anchor.
         bool stayed = false;
         for (size_t i = 0; i < blocks.size(); ++i) {
-          if (has_note(blocks[i].start, blocks[i].end) && again[i] == home) {
+          const bool here = cell_home ? has_cell_note(blocks[i].start, blocks[i].end)
+                                      : has_note(blocks[i].start, blocks[i].end);
+          if (here && again[i] == home) {
             stayed = true;
             break;
           }
@@ -5665,6 +5995,135 @@ void MainWindow::present_find(bool replace)
     find_entry_->grab_focus();
 }
 
+namespace {
+
+struct FoldedText {
+  Glib::ustring text;
+  std::vector<int> origin;
+};
+
+FoldedText fold_chars(const Glib::ustring& text)
+{
+  FoldedText folded;
+  const int count = static_cast<int>(text.length());
+  for (int i = 0; i < count; ++i) {
+    const Glib::ustring part = Glib::ustring(1, text[i]).casefold();
+    const int part_count = static_cast<int>(part.length());
+    for (int k = 0; k < part_count; ++k)
+      folded.origin.push_back(i);
+    folded.text.append(part);
+  }
+  return folded;
+}
+
+int folded_end(const FoldedText& folded, int begin, int end)
+{
+  int last = folded.origin[static_cast<size_t>(begin)];
+  for (int i = begin; i < end; ++i)
+    last = std::max(last, folded.origin[static_cast<size_t>(i)]);
+  return last + 1;
+}
+
+}  // namespace
+
+FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
+                     bool match_case, bool wrap)
+{
+  FindHit miss;
+  if (needle.empty())
+    return miss;
+  const int count = static_cast<int>(doc.length());
+  if (origin < 0)
+    origin = 0;
+  if (origin > count)
+    origin = count;
+  if (match_case) {
+    const int width = static_cast<int>(needle.length());
+    if (width <= 0 || width > count)
+      return miss;
+    auto matches = [&](int index) {
+      return doc.substr(static_cast<Glib::ustring::size_type>(index),
+                        static_cast<Glib::ustring::size_type>(width)) == needle;
+    };
+    for (int i = origin; i + width <= count; ++i) {
+      if (matches(i))
+        return FindHit{i, width};
+    }
+    if (wrap) {
+      for (int i = 0; i < std::min(origin, count); ++i) {
+        if (matches(i))
+          return FindHit{i, width};
+      }
+    }
+    return miss;
+  }
+  const FoldedText hay = fold_chars(doc);
+  const Glib::ustring want = needle.casefold();
+  const int folded_count = static_cast<int>(hay.text.length());
+  const int width = static_cast<int>(want.length());
+  if (width <= 0 || width > folded_count)
+    return miss;
+  int from = 0;
+  while (from < folded_count && hay.origin[static_cast<size_t>(from)] < origin)
+    ++from;
+  auto hit_at = [&](int folded_index) {
+    const int index = hay.origin[static_cast<size_t>(folded_index)];
+    return FindHit{index, folded_end(hay, folded_index, folded_index + width) - index};
+  };
+  for (int i = from; i + width <= folded_count; ++i) {
+    if (hay.text.substr(static_cast<Glib::ustring::size_type>(i),
+                        static_cast<Glib::ustring::size_type>(width)) == want)
+      return hit_at(i);
+  }
+  if (wrap) {
+    for (int i = 0; i < std::min(from, folded_count); ++i) {
+      if (hay.text.substr(static_cast<Glib::ustring::size_type>(i),
+                          static_cast<Glib::ustring::size_type>(width)) == want)
+        return hit_at(i);
+    }
+  }
+  return miss;
+}
+
+PieceHit find_in_pieces(const std::vector<FindPiece>& pieces, const Glib::ustring& needle,
+                        int start_id, int origin, bool match_case)
+{
+  PieceHit miss;
+  if (needle.empty() || pieces.empty())
+    return miss;
+  int start = 0;
+  for (int i = 0; i < static_cast<int>(pieces.size()); ++i) {
+    if (pieces[static_cast<size_t>(i)].id == start_id) {
+      start = i;
+      break;
+    }
+  }
+  auto take = [&](int piece, const FindHit& found) {
+    return PieceHit{pieces[static_cast<size_t>(piece)].id, found.index, found.length};
+  };
+  const FindHit in_start =
+      find_in_text(pieces[static_cast<size_t>(start)].text, needle, origin, match_case, false);
+  if (in_start.index >= 0)
+    return take(start, in_start);
+  for (int piece = start + 1; piece < static_cast<int>(pieces.size()); ++piece) {
+    const FindHit found =
+        find_in_text(pieces[static_cast<size_t>(piece)].text, needle, 0, match_case, false);
+    if (found.index >= 0)
+      return take(piece, found);
+  }
+  for (int piece = 0; piece < start; ++piece) {
+    const FindHit found =
+        find_in_text(pieces[static_cast<size_t>(piece)].text, needle, 0, match_case, false);
+    if (found.index >= 0)
+      return take(piece, found);
+  }
+  const FindHit wrapped =
+      find_in_text(pieces[static_cast<size_t>(start)].text, needle, 0, match_case, false);
+  if (wrapped.index >= 0 && wrapped.index < origin)
+    return take(start, wrapped);
+  return miss;
+}
+
 void MainWindow::find_next()
 {
   if (!find_entry_ || !buffer_)
@@ -5672,49 +6131,67 @@ void MainWindow::find_next()
   const Glib::ustring needle = find_entry_->get_text();
   if (needle.empty())
     return;
-  const Glib::ustring doc = buffer_->get_text();
   const bool match_case = match_case_ && match_case_->get_active();
-  const Glib::ustring folded = match_case ? needle : needle.casefold();
-  const int count = static_cast<int>(doc.length());
-  const int width = static_cast<int>(needle.length());
-  int origin = cursor_offset();
-  Gtk::TextBuffer::iterator sel_start;
-  Gtk::TextBuffer::iterator sel_end;
-  if (buffer_->get_selection_bounds(sel_start, sel_end))
-    origin = sel_end.get_offset();
-  auto matches = [&](int index) {
-    if (index < 0 || index + width > count)
-      return false;
-    const Glib::ustring slice = doc.substr(static_cast<Glib::ustring::size_type>(index),
-                                           static_cast<Glib::ustring::size_type>(width));
-    if (match_case)
-      return slice == needle;
-    return slice.casefold() == folded;
-  };
-  int found = -1;
-  for (int i = origin; i + width <= count; ++i) {
-    if (matches(i)) {
-      found = i;
-      break;
+  const std::vector<Gtk::TextView*> views = find_targets();
+  std::vector<FindPiece> pieces;
+  pieces.reserve(views.size());
+  int start = 0;
+  Gtk::Widget* const focused = get_focus();
+  for (int i = 0; i < static_cast<int>(views.size()); ++i) {
+    Gtk::TextView* view = views[static_cast<size_t>(i)];
+    Glib::ustring text;
+    if (view && view->get_buffer()) {
+      auto buffer = view->get_buffer();
+      // get_text() drops pictures and table anchors. The slice keeps them as
+      // U+FFFC, so a match after one is at the buffer offset Find selects.
+      text = buffer->get_slice(buffer->begin(), buffer->end(), true);
     }
+    pieces.push_back(FindPiece{i, text});
+    if (view == focused)
+      start = i;
   }
-  if (found < 0) {
-    const int limit = std::min(origin, count);
-    for (int i = 0; i < limit; ++i) {
-      if (matches(i)) {
-        found = i;
-        break;
-      }
-    }
+  int origin = 0;
+  if (start >= 0 && start < static_cast<int>(views.size()) && views[static_cast<size_t>(start)] &&
+      views[static_cast<size_t>(start)]->get_buffer()) {
+    auto buffer = views[static_cast<size_t>(start)]->get_buffer();
+    Gtk::TextBuffer::iterator sel_start;
+    Gtk::TextBuffer::iterator sel_end;
+    if (buffer->get_selection_bounds(sel_start, sel_end))
+      origin = sel_end.get_offset();
+    else
+      origin = buffer->get_insert()->get_iter().get_offset();
   }
-  if (found < 0) {
+  const PieceHit hit = find_in_pieces(pieces, needle, start, origin, match_case);
+  if (hit.id < 0 || hit.id >= static_cast<int>(views.size())) {
     message_.set_text("No matches.");
     return;
   }
-  auto start = buffer_->get_iter_at_offset(found);
-  auto end = buffer_->get_iter_at_offset(found + width);
-  buffer_->select_range(start, end);
-  text_.scroll_to(start);
+  Gtk::TextView* const target = views[static_cast<size_t>(hit.id)];
+  if (!target || !target->get_buffer()) {
+    message_.set_text("No matches.");
+    return;
+  }
+  for (Gtk::TextView* other : views) {
+    if (!other || other == target || !other->get_buffer())
+      continue;
+    other->get_buffer()->place_cursor(other->get_buffer()->get_insert()->get_iter());
+  }
+  auto start_iter = target->get_buffer()->get_iter_at_offset(hit.index);
+  auto end_iter = target->get_buffer()->get_iter_at_offset(hit.index + hit.length);
+  target->get_buffer()->select_range(start_iter, end_iter);
+  target->grab_focus();
+  target->scroll_to(start_iter);
+  if (message_.get_text() == "No matches.")
+    message_.set_text("");
+}
+
+bool selection_matches(const Glib::ustring& selected, const Glib::ustring& needle, bool match_case)
+{
+  if (needle.empty())
+    return false;
+  if (match_case)
+    return selected == needle;
+  return selected.casefold() == needle.casefold();
 }
 
 void MainWindow::replace_once()
@@ -5726,12 +6203,28 @@ void MainWindow::replace_once()
     return;
   const Glib::ustring replacement = replace_entry_->get_text();
   const bool match_case = match_case_ && match_case_->get_active();
+  Gtk::TextView* view = nullptr;
   Gtk::TextBuffer::iterator start;
   Gtk::TextBuffer::iterator end;
-  if (buffer_->get_selection_bounds(start, end)) {
-    const Glib::ustring selected = buffer_->get_text(start, end);
-    const bool same = match_case ? selected == needle : selected.casefold() == needle.casefold();
-    if (same) {
+  for (Gtk::TextView* candidate : find_targets()) {
+    if (!candidate || !candidate->get_buffer())
+      continue;
+    Gtk::TextBuffer::iterator from;
+    Gtk::TextBuffer::iterator to;
+    if (!candidate->get_buffer()->get_selection_bounds(from, to))
+      continue;
+    auto candidate_buffer = candidate->get_buffer();
+    const Glib::ustring selected = candidate_buffer->get_slice(from, to, true);
+    if (!selection_matches(selected, needle, match_case))
+      continue;
+    view = candidate;
+    start = from;
+    end = to;
+    break;
+  }
+  if (view && view->get_buffer()) {
+    auto buffer = view->get_buffer();
+    if (view == &text_) {
       const Run format = format_of(start);
       const int heading = heading_of(start);
       const int at = start.get_offset();
@@ -5752,6 +6245,16 @@ void MainWindow::replace_once()
           buffer_->apply_tag(heading_tag(heading), from, to);
       }
       buffer_->end_user_action();
+    } else {
+      const int at = start.get_offset();
+      const int len = static_cast<int>(replacement.length());
+      buffer->begin_user_action();
+      buffer->erase(start, end);
+      if (len > 0) {
+        auto iter = buffer->get_iter_at_offset(at);
+        buffer->insert(iter, replacement);
+      }
+      buffer->end_user_action();
     }
   }
   find_next();

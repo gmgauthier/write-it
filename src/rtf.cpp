@@ -307,10 +307,16 @@ struct State {
   // Inside a font entry, a group that is not the name: \*\panose, \falt.
   bool font_skip = false;
   bool pending_dest = false;
+  // {\nonshppict} is the metafile fallback beside a real picture. A \pict
+  // inside it is not a second image. {\*\shppict} does not set this.
+  bool skip_pict = false;
   int uc = 1;
   Story story = Story::Body;
   // \intbl, cleared by \pard. Row tracking itself lives on the reader.
   bool intbl = false;
+  // \chftn is the automatic reference. The digits already in the sentence
+  // are not that reference.
+  bool auto_note = false;
 };
 
 // One {\s...} entry of the style sheet as read: only what it sets.
@@ -563,7 +569,19 @@ class Reader {
       if (list_destination(word))
         return;
       if (word == "pict") {
+        // The fallback group copies skip_pict into this group. Leave the
+        // hex ignored. The real picture's group does not set the flag, so
+        // its \pict is still read.
+        if (state_.skip_pict) {
+          state_.ignore = true;
+          return;
+        }
         enter_pict();
+        return;
+      }
+      if (word == "nonshppict") {
+        state_.skip_pict = true;
+        state_.ignore = true;
         return;
       }
       if (word == "header") {
@@ -633,6 +651,10 @@ class Reader {
         pict_w_ = param;
       else if (word == "pichgoal" && has_param)
         pict_h_ = param;
+      return;
+    }
+    if (word == "chftn") {
+      state_.auto_note = true;
       return;
     }
     if (word == "par" || word == "line") {
@@ -1576,10 +1598,21 @@ class Reader {
     if (index <= 0)
       return;
     const std::string label = std::to_string(index);
-    if (take_note(paragraph_.runs, index, label))
+    const bool automatic = state_.auto_note;
+    state_.auto_note = false;
+    // \chftn is the reference. Do not cut the same digits out of the sentence.
+    if (!automatic && take_note(paragraph_.runs, index, label))
       return;
-    if (!paragraphs_.empty() && take_note(paragraphs_.back().runs, index, label))
-      return;
+    // A footnote that follows a finished paragraph used to cut a trailing
+    // number off that paragraph, so "Chapter 1" lost its 1. Only a run that
+    // is the marker and nothing else still belongs to the note.
+    if (!automatic && !paragraphs_.empty() && !paragraphs_.back().runs.empty()) {
+      Run& run = paragraphs_.back().runs.back();
+      if (!run.image && run.note == 0 && run.text == label) {
+        run.note = index;
+        return;
+      }
+    }
     Run run = char_run();
     run.text = label;
     run.note = index;
@@ -1676,7 +1709,10 @@ class Reader {
       paragraph_.cell.row = table_row_;
       paragraph_.cell.column = table_col_;
     }
-    if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty())
+    // A file that ends on \page has already closed the paragraph before it.
+    // The empty paragraph carries the break. Dropping it left the break out
+    // of the document. \page\par still arrives here with from_par set.
+    if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty() && !paragraph_.page_break)
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
       return;
@@ -2089,6 +2125,50 @@ std::string rtf_export(const Document& doc)
     numbered = std::max(numbered, ids[i]);
     overrides[i] = ids[i] + 1;
   }
+  // A header, footer, or footnote list is its own list. Bullets stay on \ls1
+  // with the body. Numbered lists take ids past the body's, so Word does not
+  // keep counting a story on from the text.
+  struct StoryStart {
+    int id = 0;
+    int level = 0;
+    int start = 1;
+  };
+  std::vector<StoryStart> story_starts;
+  std::vector<std::array<bool, kListLevels>> story_seen;
+  auto collect_story = [&](const std::vector<Paragraph>& paragraphs) {
+    std::vector<int> ls(paragraphs.size(), 0);
+    const std::vector<int> story_ids = list_ids(paragraphs);
+    int local_max = 0;
+    const int base = numbered;
+    for (size_t i = 0; i < paragraphs.size(); ++i) {
+      const ListFormat list = clamp_list(paragraphs[i].list);
+      if (list.kind == ListKind::None)
+        continue;
+      any_list = true;
+      if (list.kind == ListKind::Bullet) {
+        ls[i] = 1;
+        continue;
+      }
+      local_max = std::max(local_max, story_ids[i]);
+      const int global = base + story_ids[i];
+      ls[i] = global + 1;
+      if (story_seen.size() <= static_cast<size_t>(global))
+        story_seen.resize(static_cast<size_t>(global) + 1);
+      const size_t level = static_cast<size_t>(list.level);
+      if (!story_seen[static_cast<size_t>(global)][level]) {
+        story_seen[static_cast<size_t>(global)][level] = true;
+        story_starts.push_back(StoryStart{global, list.level, list.start});
+      }
+    }
+    numbered += local_max;
+    return ls;
+  };
+  const std::vector<int> header_ls = collect_story(doc.header);
+  const std::vector<int> footer_ls = collect_story(doc.footer);
+  std::vector<std::vector<int>> note_ls;
+  note_ls.reserve(doc.notes.size());
+  for (const std::vector<Paragraph>& note : doc.notes)
+    note_ls.push_back(collect_story(note));
   // Each list level's start, its first item's, as list_numbers() counts.
   std::array<int, kListLevels> ones{};
   ones.fill(1);
@@ -2104,6 +2184,16 @@ std::string rtf_export(const Document& doc)
       started[id][level] = true;
       starts[id][level] = lists[i].start;
     }
+  }
+  for (const StoryStart& extra : story_starts) {
+    if (extra.id <= 0 || static_cast<size_t>(extra.id) >= starts.size())
+      continue;
+    const size_t id = static_cast<size_t>(extra.id);
+    const size_t level = static_cast<size_t>(extra.level);
+    if (level >= static_cast<size_t>(kListLevels) || started[id][level])
+      continue;
+    started[id][level] = true;
+    starts[id][level] = extra.start;
   }
   const std::vector<int> numbers = list_numbers(doc.paragraphs);
 
@@ -2198,7 +2288,7 @@ std::string rtf_export(const Document& doc)
 
   // Headers, footers, and footnote bodies. The body loop below keeps the
   // bytes a document without them has always written.
-  std::function<void(const Paragraph&)> write_plain;
+  std::function<void(const Paragraph&, int)> write_plain;
   auto emit_runs = [&](const Paragraph& paragraph) {
     for (const Run& run : paragraph.runs) {
       if (run.image && !run.image->data.empty()) {
@@ -2221,8 +2311,12 @@ std::string rtf_export(const Document& doc)
         if (note.empty())
           out << "\\pard\\par";
         else
-          for (const Paragraph& item : note)
-            write_plain(item);
+          for (size_t n = 0; n < note.size(); ++n) {
+            const size_t which = static_cast<size_t>(run.note - 1);
+            const int item_ls =
+                which < note_ls.size() && n < note_ls[which].size() ? note_ls[which][n] : 0;
+            write_plain(note[n], item_ls);
+          }
         out << "}}";
         continue;
       }
@@ -2233,10 +2327,13 @@ std::string rtf_export(const Document& doc)
           << (run.underline ? "\\ul" : "\\ulnone") << " " << escape_rtf(run.text);
     }
   };
-  write_plain = [&](const Paragraph& paragraph) {
+  write_plain = [&](const Paragraph& paragraph, int ls) {
     if (paragraph.page_break)
       out << "\\page";
     out << "\\pard";
+    const int style = any_style ? style_index(paragraph.style) : -1;
+    if (style > 0)
+      out << "\\s" << style;
     const Indents indents = clamp_indents(paragraph.indents);
     if (indents.left != 0)
       out << "\\li" << indents.left;
@@ -2250,8 +2347,12 @@ std::string rtf_export(const Document& doc)
       out << "\\qr";
     else if (paragraph.align == Align::Justify)
       out << "\\qj";
+    if (ls > 0)
+      out << "\\ls" << ls << "\\ilvl" << clamp_list(paragraph.list).level;
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
       out << "\\outlinelevel" << (paragraph.heading - 1);
+    else if (style > 0 && sheet[static_cast<size_t>(style)].heading != 0)
+      out << "\\outlinelevel9";
     const bool had_run = [&] {
       for (const Run& run : paragraph.runs)
         if (!run.text.empty() || run.image || run.note != 0)
@@ -2268,16 +2369,17 @@ std::string rtf_export(const Document& doc)
     }
     out << "\\par";
   };
-  auto write_story = [&](const char* destination, const std::vector<Paragraph>& paragraphs) {
+  auto write_story = [&](const char* destination, const std::vector<Paragraph>& paragraphs,
+                         const std::vector<int>& story_ls) {
     if (paragraphs.empty())
       return;
     out << "{\\" << destination << " ";
-    for (const Paragraph& paragraph : paragraphs)
-      write_plain(paragraph);
+    for (size_t i = 0; i < paragraphs.size(); ++i)
+      write_plain(paragraphs[i], i < story_ls.size() ? story_ls[i] : 0);
     out << "}";
   };
-  write_story("header", doc.header);
-  write_story("footer", doc.footer);
+  write_story("header", doc.header, header_ls);
+  write_story("footer", doc.footer, footer_ls);
 
   bool wrote = false;
   for (size_t index = 0; index < doc.paragraphs.size(); ++index) {
@@ -2310,7 +2412,38 @@ std::string rtf_export(const Document& doc)
         }
       }
       out << "\\pard\\intbl";
+      // The same paragraph words the body writes. A default left cell with
+      // text still starts \pard\intbl and then its runs, as before.
+      const int cell_style = any_style ? style_index(paragraph.style) : -1;
+      if (cell_style > 0)
+        out << "\\s" << cell_style;
+      const Indents cell_indents = clamp_indents(paragraph.indents);
+      if (cell_indents.left != 0)
+        out << "\\li" << cell_indents.left;
+      if (cell_indents.right != 0)
+        out << "\\ri" << cell_indents.right;
+      if (cell_indents.first != 0)
+        out << "\\fi" << cell_indents.first;
+      if (paragraph.align == Align::Center)
+        out << "\\qc";
+      else if (paragraph.align == Align::Right)
+        out << "\\qr";
+      else if (paragraph.align == Align::Justify)
+        out << "\\qj";
+      if (list.kind != ListKind::None)
+        out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
       emit_runs(paragraph);
+      bool cell_text = false;
+      for (const Run& run : paragraph.runs) {
+        if (!run.text.empty() || run.image || run.note != 0)
+          cell_text = true;
+      }
+      if (!cell_text) {
+        if (const Run* mark = mark_of(paragraph))
+          out << "\\f" << index_of(mark->font) << "\\fs" << half_points_of(mark->size)
+              << (mark->bold ? "\\b" : "\\b0") << (mark->italic ? "\\i" : "\\i0")
+              << (mark->underline ? "\\ul" : "\\ulnone");
+      }
       out << (cell_end ? "\\cell" : "\\par");
       if (row_end)
         out << "\\row\n";
@@ -2442,8 +2575,12 @@ std::string rtf_export(const Document& doc)
         if (note.empty())
           out << "\\pard\\par";
         else
-          for (const Paragraph& item : note)
-            write_plain(item);
+          for (size_t n = 0; n < note.size(); ++n) {
+            const size_t which = static_cast<size_t>(run.note - 1);
+            const int item_ls =
+                which < note_ls.size() && n < note_ls[which].size() ? note_ls[which][n] : 0;
+            write_plain(note[n], item_ls);
+          }
         out << "}}";
         continue;
       }

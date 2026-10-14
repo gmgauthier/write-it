@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '1.0.20',
+  version: '1.0.21',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -195,6 +195,180 @@ write_it_document_tests = executable(
   dependencies: [writeit_dep],
 )
 test('document', write_it_document_tests)
+
+write_it_plain_breaks_tests = executable(
+  'write-it-plain-breaks-tests',
+  'tests/test_plain_breaks.cpp',
+  dependencies: [writeit_dep],
+)
+test('plain-breaks', write_it_plain_breaks_tests)
+
+write_it_markdown_escape_tests = executable(
+  'write-it-markdown-escape-tests',
+  'tests/test_markdown_escape.cpp',
+  dependencies: [writeit_dep],
+)
+test('markdown-escape', write_it_markdown_escape_tests)
+
+write_it_rtf_final_page_tests = executable(
+  'write-it-rtf-final-page-tests',
+  'tests/test_rtf_final_page.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-final-page', write_it_rtf_final_page_tests)
+
+write_it_rtf_footnote_marker_tests = executable(
+  'write-it-rtf-footnote-marker-tests',
+  'tests/test_rtf_footnote_marker.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-footnote-marker', write_it_rtf_footnote_marker_tests)
+
+write_it_rtf_metafile_tests = executable(
+  'write-it-rtf-metafile-tests',
+  'tests/test_rtf_metafile.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-metafile', write_it_rtf_metafile_tests)
+
+write_it_rtf_cell_format_tests = executable(
+  'write-it-rtf-cell-format-tests',
+  'tests/test_rtf_cell_format.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-cell-format', write_it_rtf_cell_format_tests)
+
+write_it_rtf_story_format_tests = executable(
+  'write-it-rtf-story-format-tests',
+  'tests/test_rtf_story_format.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-story-format', write_it_rtf_story_format_tests)
+
+write_it_aspell_failure_tests = executable(
+  'write-it-aspell-failure-tests',
+  'tests/test_aspell_failure.cpp',
+  dependencies: [writeit_dep],
+)
+test('aspell-failure', write_it_aspell_failure_tests)
+
+write_it_cell_word_keys_tests = executable(
+  'write-it-cell-word-keys-tests',
+  'tests/test_cell_word_keys.cpp',
+  dependencies: [writeit_dep],
+)
+test('cell-word-keys', write_it_cell_word_keys_tests)
+
+write_it_undo_picture_tests = executable(
+  'write-it-undo-picture-tests',
+  'tests/test_undo_picture.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo-picture', write_it_undo_picture_tests)
+
+write_it_picture_paste_tests = executable(
+  'write-it-picture-paste-tests',
+  'tests/test_picture_paste.cpp',
+  dependencies: [writeit_dep],
+)
+test('picture-paste', with_display, args: [write_it_picture_paste_tests.full_path()], depends: write_it_picture_paste_tests, timeout: 90, suite: 'ui')
+
+write_it_note_retarget_tests = executable(
+  'write-it-note-retarget-tests',
+  'tests/test_note_retarget.cpp',
+  dependencies: [writeit_dep],
+)
+test('note-retarget', write_it_note_retarget_tests)
+write_it_note_measure_chars_tests = executable(
+  'write-it-note-measure-chars-tests',
+  'tests/test_note_measure_chars.cpp',
+  dependencies: [writeit_dep],
+)
+test('note-measure-chars', write_it_note_measure_chars_tests)
+write_it_cell_edit_sticky_tests = executable(
+  'write-it-cell-edit-sticky-tests',
+  'tests/test_cell_edit_sticky.cpp',
+  dependencies: [writeit_dep],
+)
+test('cell-edit-sticky', with_display, args: [write_it_cell_edit_sticky_tests.full_path()], depends: write_it_cell_edit_sticky_tests, timeout: 60, suite: 'ui')
+write_it_cell_footnote_tests = executable(
+  'write-it-cell-footnote-tests',
+  'tests/test_cell_footnote.cpp',
+  dependencies: [writeit_dep],
+)
+test('cell-footnote', write_it_cell_footnote_tests)
+write_it_enter_page_break_tests = executable(
+  'write-it-enter-page-break-tests',
+  'tests/test_enter_page_break.cpp',
+  dependencies: [writeit_dep],
+)
+test('enter-page-break', write_it_enter_page_break_tests)
+write_it_delete_page_break_tests = executable(
+  'write-it-delete-page-break-tests',
+  'tests/test_delete_page_break.cpp',
+  dependencies: [writeit_dep],
+)
+test('delete-page-break', write_it_delete_page_break_tests)
+write_it_list_label_underline_tests = executable(
+  'write-it-list-label-underline-tests',
+  'tests/test_list_label_underline.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-label-underline', with_display, args: [write_it_list_label_underline_tests.full_path()], depends: write_it_list_label_underline_tests, timeout: 90, suite: 'ui')
+write_it_page_break_after_table_tests = executable(
+  'write-it-page-break-after-table-tests',
+  'tests/test_page_break_after_table.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-break-after-table', write_it_page_break_after_table_tests)
+write_it_page_break_before_table_tests = executable(
+  'write-it-page-break-before-table-tests',
+  'tests/test_page_break_before_table.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-break-before-table', write_it_page_break_before_table_tests)
+write_it_find_casefold_tests = executable(
+  'write-it-find-casefold-tests',
+  'tests/test_find_casefold.cpp',
+  dependencies: [writeit_dep],
+)
+test('find-casefold', write_it_find_casefold_tests)
+write_it_find_embedded_tests = executable(
+  'write-it-find-embedded-tests',
+  'tests/test_find_embedded.cpp',
+  dependencies: [writeit_dep],
+)
+test('find-embedded', write_it_find_embedded_tests)
+write_it_replace_picture_tests = executable(
+  'write-it-replace-picture-tests',
+  'tests/test_replace_picture.cpp',
+  dependencies: [writeit_dep],
+)
+test('replace-picture', write_it_replace_picture_tests)
+write_it_find_stories_tests = executable(
+  'write-it-find-stories-tests',
+  'tests/test_find_stories.cpp',
+  dependencies: [writeit_dep],
+)
+test('find-stories', write_it_find_stories_tests)
+write_it_draft_note_count_tests = executable(
+  'write-it-draft-note-count-tests',
+  'tests/test_draft_note_count.cpp',
+  dependencies: [writeit_dep],
+)
+test('draft-note-count', with_display, args: [write_it_draft_note_count_tests.full_path()], depends: write_it_draft_note_count_tests, timeout: 90, suite: 'ui')
+write_it_draft_heading_gap_tests = executable(
+  'write-it-draft-heading-gap-tests',
+  'tests/test_draft_heading_gap.cpp',
+  dependencies: [writeit_dep],
+)
+test('draft-heading-gap', with_display, args: [write_it_draft_heading_gap_tests.full_path()], depends: write_it_draft_heading_gap_tests, timeout: 90, suite: 'ui')
+write_it_tall_footnote_tests = executable(
+  'write-it-tall-footnote-tests',
+  'tests/test_tall_footnote.cpp',
+  dependencies: [writeit_dep],
+)
+test('tall-footnote', write_it_tall_footnote_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

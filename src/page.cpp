@@ -2,6 +2,8 @@
 
 #include "document.hpp"
 
+#include <gdkmm/pixbuf.h>
+
 #include <algorithm>
 #include <fstream>
 #include <utility>
@@ -117,6 +119,29 @@ bool load_image_file(const std::string& path, Image& image)
   image.data = std::move(bytes);
   image.type = type;
   return true;
+}
+
+Image image_from_pixbuf(const Glib::RefPtr<Gdk::Pixbuf>& pix)
+{
+  Image image;
+  if (!pix)
+    return image;
+  gchar* raw = nullptr;
+  gsize size = 0;
+  try {
+    pix->save_to_buffer(raw, size, "png");
+  } catch (const Glib::Error&) {
+    g_free(raw);
+    return image;
+  }
+  if (raw != nullptr && size > 0 && size <= kMaxImageBytes)
+    image.data.assign(raw, raw + size);
+  g_free(raw);
+  if (image_type_of(image.data) != "png")
+    return {};
+  image.type = "png";
+  image.alt = "image";
+  return image;
 }
 
 bool operator==(const PageSetup& a, const PageSetup& b)

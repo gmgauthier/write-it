@@ -17,11 +17,18 @@ namespace {
 
 std::string strip_cr(const std::string& text)
 {
+  // A classic Mac file breaks lines with CR alone. CRLF is one break. A bare
+  // CR used to be deleted, so those lines became one paragraph.
   std::string out;
   out.reserve(text.size());
-  for (char c : text) {
-    if (c != '\r')
-      out.push_back(c);
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] != '\r') {
+      out.push_back(text[i]);
+      continue;
+    }
+    out.push_back('\n');
+    if (i + 1 < text.size() && text[i + 1] == '\n')
+      ++i;
   }
   return out;
 }
@@ -60,6 +67,8 @@ void add_run(Paragraph& paragraph, Run run)
     paragraph.runs.push_back(std::move(run));
 }
 
+bool markdown_escaped(char c);
+
 bool heading_marks(const std::string& line, int& level, std::string& body)
 {
   size_t i = 0;
@@ -93,6 +102,12 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, double
     buf.clear();
   };
   for (size_t i = 0; i < text.size();) {
+    // A backslash keeps the next marker as text: \* is an asterisk, \# is a hash.
+    if (text[i] == '\\' && i + 1 < text.size() && markdown_escaped(text[i + 1])) {
+      buf.push_back(text[i + 1]);
+      i += 2;
+      continue;
+    }
     if (text[i] == '!' && i + 1 < text.size() && text[i + 1] == '[') {
       const size_t alt_end = text.find("](", i + 2);
       const size_t path_end =
@@ -140,6 +155,26 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, double
   return paragraph;
 }
 
+// Characters this importer treats as markup, plus the block markers a leading
+// backslash has to protect. A letter after a backslash stays a backslash.
+bool markdown_escaped(char c)
+{
+  return c == '\\' || c == '*' || c == '_' || c == '`' || c == '[' || c == ']' || c == '#' ||
+         c == '-' || c == '+' || c == '>' || c == '.' || c == ')' || (c >= '0' && c <= '9');
+}
+
+std::string escape_markdown_text(const std::string& text)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (unsigned char c : text) {
+    if (c == '\\' || c == '*' || c == '_' || c == '`' || c == '[' || c == ']')
+      out.push_back('\\');
+    out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
+
 // Emphasis is written where a run differs from its paragraph's style, so a
 // heading whose style is bold is not wrapped in **.
 std::string inline_export(const Paragraph& paragraph, const Run& style)
@@ -166,14 +201,15 @@ std::string inline_export(const Paragraph& paragraph, const Run& style)
     }
     const bool bold = run.bold && !style.bold;
     const bool italic = run.italic && !style.italic;
+    const std::string text = escape_markdown_text(run.text);
     if (bold && italic)
-      out += "***" + run.text + "***";
+      out += "***" + text + "***";
     else if (bold)
-      out += "**" + run.text + "**";
+      out += "**" + text + "**";
     else if (italic)
-      out += "*" + run.text + "*";
+      out += "*" + text + "*";
     else
-      out += run.text;
+      out += text;
   }
   return out;
 }
@@ -1592,6 +1628,16 @@ std::string table_markdown(const Document& doc, const std::vector<Style>& sheet,
   return out;
 }
 
+// A Normal paragraph whose text would import as a heading or a list is escaped.
+// Emphasis such as ***both*** is not a list: the marker needs a following space.
+void shield_markdown_block(std::string& line)
+{
+  int level = 0;
+  std::string body;
+  if (heading_marks(line, level, body) || list_mark(line).ok)
+    line.insert(line.begin(), '\\');
+}
+
 }  // namespace
 
 Document markdown_import(const std::string& text, const std::string& font, double size)
@@ -1715,11 +1761,88 @@ std::string markdown_export(const Document& doc)
         line += " ";
       }
       line += body;
+      if (paragraph.heading == 0)
+        shield_markdown_block(line);
     }
     block(line);
     ++index;
   }
   return out;
+}
+
+namespace {
+
+bool document_has_table(const Document& doc)
+{
+  for (const Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0)
+      return true;
+  }
+  return false;
+}
+
+bool document_has_picture(const Document& doc)
+{
+  for (const Paragraph& paragraph : doc.paragraphs) {
+    for (const Run& run : paragraph.runs) {
+      if (run.image && !run.image->data.empty())
+        return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+bool document_needs_custom_undo(const Document& before, const Document& after)
+{
+  return document_has_table(before) || document_has_table(after) || document_has_picture(before) ||
+         document_has_picture(after);
+}
+
+void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragraph>>& before_notes)
+{
+  const int old_n = static_cast<int>(before_notes.size());
+  const int new_n = static_cast<int>(doc.notes.size());
+  const int delta = new_n - old_n;
+  if (delta == 0)
+    return;
+
+  int prefix = 0;
+  const int share = std::min(old_n, new_n);
+  while (prefix < share &&
+         before_notes[static_cast<size_t>(prefix)] == doc.notes[static_cast<size_t>(prefix)])
+    ++prefix;
+
+  // The tail is the old notes still equal at the end, and not already in the
+  // prefix. after_index is how many old notes are outside that tail.
+  int suffix = 0;
+  while (suffix < old_n - prefix && suffix < new_n - prefix &&
+         before_notes[static_cast<size_t>(old_n - 1 - suffix)] ==
+             doc.notes[static_cast<size_t>(new_n - 1 - suffix)])
+    ++suffix;
+  const int after_index = old_n - suffix;
+
+  auto shift_story = [&](std::vector<Paragraph>& story) {
+    for (Paragraph& paragraph : story) {
+      for (Run& run : paragraph.runs) {
+        if (run.note > after_index)
+          run.note += delta;
+        if (run.note > new_n)
+          run.note = new_n;
+        if (run.note < 0)
+          run.note = 0;
+      }
+    }
+  };
+  shift_story(doc.paragraphs);
+  shift_story(doc.header);
+  shift_story(doc.footer);
+}
+
+bool story_focus_clears_cell(bool header, bool footer, bool note)
+{
+  return header || footer || note;
 }
 
 }  // namespace writeit

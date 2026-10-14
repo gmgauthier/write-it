@@ -24,6 +24,49 @@ namespace writeit {
 
 class TableSheet;
 
+// Ctrl+Z and Ctrl+Y in a cell, header, footer, or note. Every other Ctrl key
+// belongs to the text view: word motion, Ctrl+Backspace, Ctrl+Delete.
+// Accelerators have already run, so passing the key on does not type over them.
+enum class StoryKey { Pass, Undo, Redo };
+
+StoryKey story_key(unsigned keyval, unsigned state);
+// One Find hit. index is -1 when there is none. length is in characters of
+// `doc`, which can differ from the needle when casefolding changes length.
+// `doc` is a buffer slice: pictures and table anchors count as U+FFFC, so the
+// index is a buffer offset.
+struct FindHit {
+  int index = -1;
+  int length = 0;
+};
+
+// Searches `doc` from `origin`, then wraps when `wrap` is set. Match case off
+// compares casefold and maps the folded match back onto the original characters.
+// `wrap` false stops at the end, which a search across several stories needs.
+FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
+                     bool match_case, bool wrap = true);
+// True when `selected` is the Find needle. A picture or table anchor is
+// U+FFFC in the slice, so a selection that only looks like the needle in
+// get_text() does not match and Replace will not delete the object.
+bool selection_matches(const Glib::ustring& selected, const Glib::ustring& needle, bool match_case);
+
+// One place Find can look: the body, a cell, the header, the footer, or a note.
+struct FindPiece {
+  int id = 0;
+  Glib::ustring text;
+};
+
+// id is -1 when nothing matched. index and length are characters of that piece.
+struct PieceHit {
+  int id = -1;
+  int index = -1;
+  int length = 0;
+};
+
+// Searches the pieces in order, from `start_id` at `origin`, then later pieces,
+// then earlier ones, then the start piece before `origin`.
+PieceHit find_in_pieces(const std::vector<FindPiece>& pieces, const Glib::ustring& needle,
+                        int start_id, int origin, bool match_case);
+
 // What a paragraph tag carries: the paragraph's indents, alignment, list,
 // and style.
 struct ParaFormat {
@@ -167,10 +210,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   // fit the room left on a sheet starts the next one, so the gap is the page
   // boundary even while the line's own content y is still short of it.
   // A page break starts a sheet the same way. Draft has no gaps; sheet_y()
-  // counts those sheets so the view does not change the count.
+  // counts those sheets, and the room a footnote would take, so the view
+  // does not change the count.
   int page_content_y(int layout_y, int offset) const;
-  // Sheet coordinate of `offset` when a page break is in the document and the
-  // seams are not drawn. The same rules as the Page view gaps, without notes.
+  // Sheet coordinate of `offset` when the seams are not drawn. The same rules
+  // as the Page view gaps. A footnote reserves the room Page view would give
+  // it, and the note is not painted.
   int sheet_y(int offset) const;
   bool has_page_break() const;
   // A page break on ordinary text. One stored on a table cell does not start
@@ -181,6 +226,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool caret_in_table() const;
   Glib::RefPtr<Gtk::TextTag> page_seam_tag(int pixels);
   void raise_seams();
+  // pixels-above 18, and nothing else, so it does not take indents or margins.
+  Glib::RefPtr<Gtk::TextTag> draft_gap_tag();
+  void raise_draft_gap();
+  // Apply that tag in Draft on body page breaks, and take it off otherwise.
+  bool sync_draft_gaps();
   void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
@@ -396,6 +446,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // marker on a later sheet gets that note at the foot of its own sheet.
   void place_notes();
   void place_split_notes();
+  // Body offsets of table anchors that hold a footnote the body does not.
+  // A body marker is left out, so its sheet stays the one it has always used.
+  std::vector<int> cell_note_anchors() const;
   void hide_extra_notes();
   // Scroll that column into the pasteboard.
   void reveal_note_view();
@@ -405,6 +458,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   void reveal_story_caret(Gtk::TextView& view);
   // The height the body of one sheet gives up to the notes, or 0.
   int note_block_px() const;
+  // That height while Draft is showing. Page view keeps note_block_px().
+  // Draft does not paint the note; the count still gives its sheet the room.
+  int draft_footnote_px() const;
   // The height `group` needs at the foot of its sheet.
   int measure_note_group(const NoteGroup& group);
   std::string note_group_text(const NoteGroup& group) const;
@@ -496,6 +552,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // A menu or the style list can focus the body without the caret leaving the
   // cell. A click or a key in the body is what leaves it.
   void leave_cell_edit();
+  // Header, footer, and note focus. Not a body click: the caret stays put.
+  void clear_cell_edit_on_story(bool header, bool footer, bool note);
   // Each cell is its own buffer, so a highlight there stays up when the caret
   // is placed in another cell or in the body. Drop every selection but `keep`.
   void release_other_selections(const Gtk::TextView* keep);
@@ -532,6 +590,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Ctrl+Z in a header, footer, or note undoes the document. Other Ctrl keys
   // that would format the body are swallowed; the story is plain text.
   bool on_story_key(GdkEventKey* event);
+  // Body, then each cell, then the header, the footer, and the notes.
+  std::vector<Gtk::TextView*> find_targets();
   Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image);
   // commit_document()'s retagging when the text is the same and no picture
   // has to be placed. False otherwise.
@@ -648,6 +708,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void tell(const std::string& sentence);
 
   Settings settings_;
+  // Set in the destructor, before the widgets go. A story that loses focus
+  // while the window closes must not lay the page out again. Declared before
+  // the widgets so it is still alive when they emit that focus-out.
+  bool closing_ = false;
   // The size, while not maximised, and the maximised state, saved on close.
   WindowMemory window_memory_;
   Glib::RefPtr<Gtk::AccelGroup> accel_;
@@ -953,8 +1017,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<Paragraph> footer_;
   std::vector<std::vector<Paragraph>> notes_;
   // Pictures in the body, keyed by the pixbuf the buffer is showing. The
-  // value is the file's bytes; the pixbuf may be a scaled copy.
-  std::map<GdkPixbuf*, Image> image_pix_;
+  // value is the file's bytes; the pixbuf may be a scaled copy. Mutable so
+  // capture() and read_cell() can register a pasted pixbuf that was never
+  // inserted through Insert > Picture. Bytes already stored are not replaced.
+  mutable std::map<GdkPixbuf*, Image> image_pix_;
   // The document as a cell edit began, so that edit is one undo step.
   Document cell_before_;
   bool cell_step_ = false;
@@ -1028,5 +1094,23 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::Entry* replace_entry_ = nullptr;
   Gtk::CheckButton* match_case_ = nullptr;
 };
+
+// True when `text` is an empty list item: nothing, a newline, or only
+// page-break pads (U+200B). Real text, including "a" and "a\n", is not.
+bool paragraph_is_blank_item(const Glib::ustring& text);
+// True when deleting this character should also clear the paragraph's page
+// break: it is the page-break pad, it is the paragraph's only character, and
+// the break is set. A letter, a pad that is not alone, or no break, does not.
+bool deleting_pad_clears_break(gunichar erased, bool only_char, bool page_break);
+// The label cache key. Underline is part of it, so a plain label is not reused
+// for an underlined one. The other fields are the ones the layout already
+// varied on: text, family, size, bold, and italic.
+std::string list_label_key(const std::string& text, const std::string& family, int size, bool bold,
+                           bool italic, bool underline);
+// The item's first character is underlined, so the label is too.
+bool label_underlined(const Run& format);
+// Underline is not a font field. When `underline` is set, the layout carries
+// a single underline attribute over the whole label.
+void apply_label_underline(const Glib::RefPtr<Pango::Layout>& layout, bool underline);
 
 }  // namespace writeit
