@@ -2125,6 +2125,50 @@ std::string rtf_export(const Document& doc)
     numbered = std::max(numbered, ids[i]);
     overrides[i] = ids[i] + 1;
   }
+  // A header, footer, or footnote list is its own list. Bullets stay on \ls1
+  // with the body. Numbered lists take ids past the body's, so Word does not
+  // keep counting a story on from the text.
+  struct StoryStart {
+    int id = 0;
+    int level = 0;
+    int start = 1;
+  };
+  std::vector<StoryStart> story_starts;
+  std::vector<std::array<bool, kListLevels>> story_seen;
+  auto collect_story = [&](const std::vector<Paragraph>& paragraphs) {
+    std::vector<int> ls(paragraphs.size(), 0);
+    const std::vector<int> story_ids = list_ids(paragraphs);
+    int local_max = 0;
+    const int base = numbered;
+    for (size_t i = 0; i < paragraphs.size(); ++i) {
+      const ListFormat list = clamp_list(paragraphs[i].list);
+      if (list.kind == ListKind::None)
+        continue;
+      any_list = true;
+      if (list.kind == ListKind::Bullet) {
+        ls[i] = 1;
+        continue;
+      }
+      local_max = std::max(local_max, story_ids[i]);
+      const int global = base + story_ids[i];
+      ls[i] = global + 1;
+      if (story_seen.size() <= static_cast<size_t>(global))
+        story_seen.resize(static_cast<size_t>(global) + 1);
+      const size_t level = static_cast<size_t>(list.level);
+      if (!story_seen[static_cast<size_t>(global)][level]) {
+        story_seen[static_cast<size_t>(global)][level] = true;
+        story_starts.push_back(StoryStart{global, list.level, list.start});
+      }
+    }
+    numbered += local_max;
+    return ls;
+  };
+  const std::vector<int> header_ls = collect_story(doc.header);
+  const std::vector<int> footer_ls = collect_story(doc.footer);
+  std::vector<std::vector<int>> note_ls;
+  note_ls.reserve(doc.notes.size());
+  for (const std::vector<Paragraph>& note : doc.notes)
+    note_ls.push_back(collect_story(note));
   // Each list level's start, its first item's, as list_numbers() counts.
   std::array<int, kListLevels> ones{};
   ones.fill(1);
@@ -2140,6 +2184,16 @@ std::string rtf_export(const Document& doc)
       started[id][level] = true;
       starts[id][level] = lists[i].start;
     }
+  }
+  for (const StoryStart& extra : story_starts) {
+    if (extra.id <= 0 || static_cast<size_t>(extra.id) >= starts.size())
+      continue;
+    const size_t id = static_cast<size_t>(extra.id);
+    const size_t level = static_cast<size_t>(extra.level);
+    if (level >= static_cast<size_t>(kListLevels) || started[id][level])
+      continue;
+    started[id][level] = true;
+    starts[id][level] = extra.start;
   }
   const std::vector<int> numbers = list_numbers(doc.paragraphs);
 
@@ -2234,7 +2288,7 @@ std::string rtf_export(const Document& doc)
 
   // Headers, footers, and footnote bodies. The body loop below keeps the
   // bytes a document without them has always written.
-  std::function<void(const Paragraph&)> write_plain;
+  std::function<void(const Paragraph&, int)> write_plain;
   auto emit_runs = [&](const Paragraph& paragraph) {
     for (const Run& run : paragraph.runs) {
       if (run.image && !run.image->data.empty()) {
@@ -2257,8 +2311,12 @@ std::string rtf_export(const Document& doc)
         if (note.empty())
           out << "\\pard\\par";
         else
-          for (const Paragraph& item : note)
-            write_plain(item);
+          for (size_t n = 0; n < note.size(); ++n) {
+            const size_t which = static_cast<size_t>(run.note - 1);
+            const int item_ls =
+                which < note_ls.size() && n < note_ls[which].size() ? note_ls[which][n] : 0;
+            write_plain(note[n], item_ls);
+          }
         out << "}}";
         continue;
       }
@@ -2269,10 +2327,13 @@ std::string rtf_export(const Document& doc)
           << (run.underline ? "\\ul" : "\\ulnone") << " " << escape_rtf(run.text);
     }
   };
-  write_plain = [&](const Paragraph& paragraph) {
+  write_plain = [&](const Paragraph& paragraph, int ls) {
     if (paragraph.page_break)
       out << "\\page";
     out << "\\pard";
+    const int style = any_style ? style_index(paragraph.style) : -1;
+    if (style > 0)
+      out << "\\s" << style;
     const Indents indents = clamp_indents(paragraph.indents);
     if (indents.left != 0)
       out << "\\li" << indents.left;
@@ -2286,8 +2347,12 @@ std::string rtf_export(const Document& doc)
       out << "\\qr";
     else if (paragraph.align == Align::Justify)
       out << "\\qj";
+    if (ls > 0)
+      out << "\\ls" << ls << "\\ilvl" << clamp_list(paragraph.list).level;
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
       out << "\\outlinelevel" << (paragraph.heading - 1);
+    else if (style > 0 && sheet[static_cast<size_t>(style)].heading != 0)
+      out << "\\outlinelevel9";
     const bool had_run = [&] {
       for (const Run& run : paragraph.runs)
         if (!run.text.empty() || run.image || run.note != 0)
@@ -2304,16 +2369,17 @@ std::string rtf_export(const Document& doc)
     }
     out << "\\par";
   };
-  auto write_story = [&](const char* destination, const std::vector<Paragraph>& paragraphs) {
+  auto write_story = [&](const char* destination, const std::vector<Paragraph>& paragraphs,
+                         const std::vector<int>& story_ls) {
     if (paragraphs.empty())
       return;
     out << "{\\" << destination << " ";
-    for (const Paragraph& paragraph : paragraphs)
-      write_plain(paragraph);
+    for (size_t i = 0; i < paragraphs.size(); ++i)
+      write_plain(paragraphs[i], i < story_ls.size() ? story_ls[i] : 0);
     out << "}";
   };
-  write_story("header", doc.header);
-  write_story("footer", doc.footer);
+  write_story("header", doc.header, header_ls);
+  write_story("footer", doc.footer, footer_ls);
 
   bool wrote = false;
   for (size_t index = 0; index < doc.paragraphs.size(); ++index) {
@@ -2509,8 +2575,12 @@ std::string rtf_export(const Document& doc)
         if (note.empty())
           out << "\\pard\\par";
         else
-          for (const Paragraph& item : note)
-            write_plain(item);
+          for (size_t n = 0; n < note.size(); ++n) {
+            const size_t which = static_cast<size_t>(run.note - 1);
+            const int item_ls =
+                which < note_ls.size() && n < note_ls[which].size() ? note_ls[which][n] : 0;
+            write_plain(note[n], item_ls);
+          }
         out << "}}";
         continue;
       }

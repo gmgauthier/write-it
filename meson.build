@@ -237,6 +237,13 @@ write_it_rtf_cell_format_tests = executable(
   dependencies: [writeit_dep],
 )
 test('rtf-cell-format', write_it_rtf_cell_format_tests)
+||||||| parent of 479ed1d (Write styles and lists from headers, footers, and footnotes.)
+write_it_rtf_story_format_tests = executable(
+  'write-it-rtf-story-format-tests',
+  'tests/test_rtf_story_format.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-story-format', write_it_rtf_story_format_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
