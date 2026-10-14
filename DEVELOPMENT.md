@@ -6,7 +6,7 @@ Display name: **Write-It**
 Binary / repo / package: `write-it`  
 APP_ID: `org.gmgauthier.WriteIt`  
 License: The Unlicense (`UNLICENSE`)  
-Repos: https://github.com/gmgauthier/write-it is the source of truth, where PRs, reviews, and CI run. https://gitea.scriptorium/gmgauthier/write-it and the working copy on plato are downstream mirrors: SysAdmin pushes `master`, milestone branches, and tags from GitHub to them, never the other way.
+Repos: https://github.com/gmgauthier/write-it is the source of truth, where pull requests and CI run. https://gitea.scriptorium/gmgauthier/write-it and the working copy on plato are downstream mirrors. `master`, milestone branches, and tags are pushed from GitHub to them, never the other way.
 
 ## Status
 
@@ -87,14 +87,13 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - A test that opens a window is marked `is_parallel: false` in `meson.build`, so window tests never share the X display at the same time.
 - Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
 - Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag.
-- Bug Basher reviews every PR on GitHub with a comment that starts `Bug Basher: <commit>: approved.` and names the commit. The project has one GitHub account, so a comment review is the gate. An approval covers only the commit it names and never carries over: every new head, including a clean merge, needs its own review naming that commit before it merges. He reads the code, runs its suites under ASan and UBSan, and tries whatever the PR adds in a live window for a few minutes.
-- Bug Basher does not change product code. Defects go back to the PR's owner as a task with the failing case, and the owner fixes them on the same PR.
-- SysAdmin merges a PR into the milestone branch once its head is approved and lint passes. Lint is the only required check. The Debian trixie and Devuan Excalibur jobs, and ASan and UBSan on Debian, still compile and run the unit tests on the pull request. The desktop suite stays local. A PR does not have to be up to date with the milestone branch, so one merge does not send the others back for review. If a PR conflicts, its owner fixes the conflict, and Bug Basher's review of the new head looks at the conflicted files.
-- A draft PR from the milestone branch into `master` stays open while the milestone is under way, so CI tests the combined branch after every merge.
-- Coordinator owns the queue: the order PRs merge in and who holds each one. If nothing moves for 15 minutes, Watcher asks the room for a status, and goes to Greg only if the same PR is still stuck after a second ask.
-- When every feature is in, Bug Basher does one full live pass on the milestone branch head. Defects go back as small fix PRs into the milestone branch. Then SysAdmin merges the milestone branch into `master` once, deletes the branch, and tags.
+- One Grok session does the work with Greg. It writes the change, runs the tests, opens the pull requests, and pushes the Gitea mirror. It merges only when Greg says to.
+- The session reads the code and runs the unit tests. The desktop suite runs locally, under Xvfb or `tests/ui-docker.sh`. Greg tries the change in a live window.
+- A pull request into a milestone branch merges once Greg says so and lint passes. Lint is the only required check. The Debian trixie and Devuan Excalibur jobs, and ASan and UBSan on Debian, still compile and run the unit tests on the pull request. The desktop suite stays local. A pull request does not have to be up to date with the milestone branch. If a pull request conflicts, the session fixes the conflict on that pull request.
+- A draft pull request from the milestone branch into `master` stays open while the milestone is under way, so CI tests the combined branch after every merge.
+- When every feature is in, Greg does one full live pass on the milestone branch head. Defects go back as small fix pull requests into the milestone branch. Then the milestone branch merges into `master` once, the branch is deleted, and it is tagged.
 - `master` is protected: a PR merges only when it is up to date with `master` and lint passes. Lint is the only required check. The two build-and-test jobs still compile and run the unit tests on the pull request. The desktop suite is suite `ui`. Run it on a machine with a display, under Xvfb, or in a local container with `tests/ui-docker.sh`. Milestone branches matching `m[0-9]*` and `milestone-*` are protected too. Their only required check is lint. Creating the branch does not wait on lint, and a pull request into one does not have to be up to date. Nobody bypasses either rule. Force-pushes are blocked on both. `master` also blocks deletion. Branches are updated by merging, not by rebasing.
-- Every commit, PR description, and GitHub comment starts with its author's name, for example `Coordinator:` or `Scribe:`.
+- Commits and pull request descriptions start with `Grok Bot:`. The git author is Greg Gauthier.
 - Each finished milestone gets an annotated tag (`m2`, `m3`, …) and no GitHub release. `v1.0.0` is the 1.0 release, with the `.deb`, the AppImage, and the source tarball. A bug fix after that is a patch tag (`v1.0.1`, …) with the same three artifacts. Pushing that tag runs `.gitea/workflows/release.yml` on Gitea Actions. The job builds the three files with `scripts/release.sh` and attaches them to the Gitea release and the GitHub release. It does not run the suite again.
 
 ## 4. Window
