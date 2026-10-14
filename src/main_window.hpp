@@ -1043,4 +1043,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::CheckButton* match_case_ = nullptr;
 };
 
+// True when `text` is an empty list item: nothing, a newline, or only
+// page-break pads (U+200B). Real text, including "a" and "a\n", is not.
+bool paragraph_is_blank_item(const Glib::ustring& text);
+
 }  // namespace writeit

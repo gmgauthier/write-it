@@ -297,6 +297,12 @@ write_it_cell_footnote_tests = executable(
   dependencies: [writeit_dep],
 )
 test('cell-footnote', write_it_cell_footnote_tests)
+write_it_enter_page_break_tests = executable(
+  'write-it-enter-page-break-tests',
+  'tests/test_enter_page_break.cpp',
+  dependencies: [writeit_dep],
+)
+test('enter-page-break', write_it_enter_page_break_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

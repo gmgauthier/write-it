@@ -56,6 +56,19 @@ Image remember_shown(std::map<GdkPixbuf*, Image>& images, const Glib::RefPtr<Gdk
   images[pix->gobj()] = image;
   return image;
 }
+}  // namespace
+
+bool paragraph_is_blank_item(const Glib::ustring& text)
+{
+  for (auto it = text.begin(); it != text.end(); ++it) {
+    const gunichar ch = *it;
+    if (ch != '\n' && ch != kPageBreakPad)
+      return false;
+  }
+  return true;
+}
+
+namespace {
 
 // Asked about the file a save would really replace, on top of the chooser.
 bool confirm_replace(Gtk::Window& parent, const std::string& path)
@@ -3665,8 +3678,13 @@ bool MainWindow::on_text_key(GdkEventKey* event)
       }
       if (mods != 0 || !at_start || !in_list)
         return false;
-      const auto here = buffer_->get_iter_at_offset(caret);
-      if (!here.is_end() && here.get_char() != '\n')
+      // The caret sits on a page-break pad in an otherwise empty item. That
+      // pad is not text, so the item is blank and Enter ends the list.
+      const int from = paragraph_start(caret);
+      const int to = paragraph_end(caret);
+      const Glib::ustring item = buffer_->get_slice(buffer_->get_iter_at_offset(from),
+                                                    buffer_->get_iter_at_offset(to), true);
+      if (!paragraph_is_blank_item(item))
         return false;
       toggle_list_kind(para_at(caret).list.kind);
       return true;
