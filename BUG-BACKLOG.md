@@ -6,7 +6,7 @@ Reviewed again on 2026-10-12 against the v1.0.12 sources (`aef5e4c`). This pass 
 
 Measured again on 2026-10-13 against 1.0.16 (`f53ad21`), release build, with `tests/bench_key.cpp`. Both gate lines were over 100 ms. The standing item in Open owns the periodic rerun.
 
-Checked the same day, under Xvfb, on a short document: Insert → Page Break in ordinary text wrote `\page` and left the text on the same sheet. That is fixed in 1.0.17. Insert → Page Break in a table cell is fixed in 1.0.18. A heading on a document that holds a table or a picture bounced the page, and opening a toolbar list jumped to the first page. That is fixed in 1.0.19. The typing-speed item is first in Open.
+Checked the same day, under Xvfb, on a short document: Insert → Page Break in ordinary text wrote `\page` and left the text on the same sheet. That is fixed in 1.0.17. Insert → Page Break in a table cell is fixed in 1.0.18. A heading on a document that holds a table or a picture bounced the page, and opening a toolbar list jumped to the first page. That is fixed in 1.0.19. Selecting the first line of a later page painted the highlight up the previous sheet. That is fixed in 1.0.20. The typing-speed item is first in Open.
 
 `meson test` runs the file and document suites (`document`, `rtf-unicode`, `rtf-unicode-fuzz`, `import-clean`, `page`, `lists`, `styles`, `indents`, `alignment`, `spelling`, `open`, `filename`, `settings`, `units`, `font-sizes`, `view`, `page-count`), the window suites (`page-ui`, `justify-ui`, `status-bar`, `page-width`, `page-sheet`, `list-labels`, `list-tabs`, `list-draw`, `caret-scroll`, `window-width`, `window-memory`, `style-direct`, `style-ui`, `style-size-ui`, `font-size-ui`, `paragraph-dialog`, `capture`, `capture-count`, `paste-format`, `clipboard-paste`, `dirty-state`, `fast-typing`, `toolbar-overflow`, `print`, `template`, `undo`, `undo-fuzz`, `heading-paragraphs`, `open-identity`, `window-lifetime`), `smoke-open`, `desktop-file`, and the `guard-*` checks. The three `guard-*-fails` targets are expected to fail. The package build of this tag reported 50 passed, 3 expected failures, and 0 failures. This review did not re-run the suite. It read the 1.0 sources against the specification.
 
@@ -51,6 +51,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### A selection on the first line of a later page runs up the previous sheet
+
+- Fixed in 1.0.20.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::draw_page_seams`
+- Trigger: Place the caret on the first line of any page after the first and select a block of text on that line.
+- Outcome: The highlight stops at the top of that line. It does not run up the previous sheet, through the gap, or behind a footnote. The selected words stay highlighted. The gap between sheets stays gray.
 
 ### A heading bounces the page, and a toolbar list jumps to the first page
 

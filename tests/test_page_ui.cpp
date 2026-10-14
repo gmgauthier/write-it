@@ -126,6 +126,21 @@ struct MainWindowProbe {
     return v ? v->get_value() : 0.0;
   }
 
+  static Gtk::Widget& board(MainWindow& window)
+  {
+    return window.board_;
+  }
+
+  static ViewGeometry geometry(MainWindow& window)
+  {
+    return window.geometry();
+  }
+
+  static Glib::RefPtr<Gtk::Adjustment> vscroll(MainWindow& window)
+  {
+    return window.paste_.get_vadjustment();
+  }
+
   // The user has scrolled to a later page. The wheel does this too: stop
   // following the body insert, which is still on the first line.
   static void scroll_to_end(MainWindow& window)
@@ -616,6 +631,32 @@ struct MainWindowProbe {
     buffer->insert_at_cursor(text);
     buffer->end_user_action();
   }
+
+  // Pixel of the text window at a buffer point. False when that point is not
+  // on the window.
+  static bool pixel_at(MainWindow& window, int buffer_x, int buffer_y, int& r, int& g, int& b)
+  {
+    auto win = window.text_.get_window(Gtk::TEXT_WINDOW_TEXT);
+    if (!win)
+      return false;
+    int x = 0;
+    int y = 0;
+    window.text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_TEXT, buffer_x, buffer_y, x, y);
+    if (x < 0 || y < 0 || x >= win->get_width() || y >= win->get_height())
+      return false;
+    try {
+      auto pix = Gdk::Pixbuf::create(win, x, y, 1, 1);
+      if (!pix || !pix->get_pixels() || pix->get_n_channels() < 3)
+        return false;
+      const guchar* p = pix->get_pixels();
+      r = p[0];
+      g = p[1];
+      b = p[2];
+      return true;
+    } catch (const Glib::Error&) {
+      return false;
+    }
+  }
 };
 
 }  // namespace writeit
@@ -871,7 +912,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 205;
+constexpr int kChecks = 210;
 
 int main(int argc, char* argv[])
 {
@@ -2093,6 +2134,101 @@ int main(int argc, char* argv[])
     CHECK(text_two_after.find('z') != std::string::npos);
     CHECK(band_two_after > mark_two_after - 40);
     CHECK(writeit::MainWindowProbe::doc(window).paragraphs.size() > 40);
+
+    // Selecting the first line of a later sheet must not paint the highlight
+    // up through the seam. The seam is that line's pixels-above.
+    writeit::Document sheets;
+    writeit::Paragraph opening;
+    writeit::Run opening_run;
+    opening_run.text = "Hello";
+    opening.runs.push_back(opening_run);
+    sheets.paragraphs.push_back(opening);
+    writeit::Paragraph next_sheet;
+    next_sheet.page_break = true;
+    writeit::Run next_run;
+    next_run.text = "Second";
+    next_sheet.runs.push_back(next_run);
+    sheets.paragraphs.push_back(next_sheet);
+    writeit::MainWindowProbe::load(window, sheets);
+    window.resize(800, 500);
+    settle();
+    settle();
+    auto buffer = body->get_buffer();
+    auto seam_iter = buffer->begin();
+    int seam_px = 0;
+    while (!seam_iter.is_end()) {
+      for (const auto& tag : seam_iter.get_tags())
+        seam_px = std::max(seam_px, writeit::page_seam_pixels(tag->property_name().get_value()));
+      if (seam_px > 0)
+        break;
+      bool more = false;
+      while (!seam_iter.is_end()) {
+        if (seam_iter.get_char() == '\n') {
+          seam_iter.forward_char();
+          more = !seam_iter.is_end();
+          break;
+        }
+        seam_iter.forward_char();
+      }
+      if (!more)
+        break;
+    }
+    auto seam_end = seam_iter;
+    if (!seam_end.is_end() && !seam_end.ends_line())
+      seam_end.forward_to_line_end();
+    if (!seam_end.is_end())
+      seam_end.forward_char();
+    buffer->select_range(seam_iter, seam_end);
+    Gdk::Rectangle glyph;
+    body->get_iter_location(seam_iter, glyph);
+    const int glyph_x = glyph.get_x();
+    const int glyph_top = glyph.get_y();
+    const int glyph_height = glyph.get_height();
+    const writeit::ViewGeometry sheet = writeit::MainWindowProbe::geometry(window);
+    int wx = 0;
+    int wy = 0;
+    body->buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, glyph_x, glyph_top, wx, wy);
+    int board_x = 0;
+    int board_y = 0;
+    const bool placed = body->translate_coordinates(writeit::MainWindowProbe::board(window), wx, wy,
+                                                     board_x, board_y);
+    if (placed) {
+      auto v = writeit::MainWindowProbe::vscroll(window);
+      if (v) {
+        const double page = v->get_page_size();
+        const double room = std::max(v->get_lower(), v->get_upper() - std::max(0.0, page));
+        v->set_value(std::max(v->get_lower(), std::min(board_y - page + 70.0, room)));
+      }
+    }
+    settle();
+    const int sample_x = glyph_x + 12;
+    const int on_y = glyph_top + std::max(1, glyph_height / 2);
+    const int edge_y = glyph_top - 3;
+    const int gray_y = glyph_top - sheet.margin_y - sheet.gap;
+    const int above_y = gray_y - 12;
+    int on_r = 0;
+    int on_g = 0;
+    int on_b = 0;
+    int edge_r = 0;
+    int edge_g = 0;
+    int edge_b = 0;
+    int above_r = 0;
+    int above_g = 0;
+    int above_b = 0;
+    const bool on_ok = writeit::MainWindowProbe::pixel_at(window, sample_x, on_y, on_r, on_g, on_b);
+    const bool edge_ok =
+        writeit::MainWindowProbe::pixel_at(window, sample_x, edge_y, edge_r, edge_g, edge_b);
+    const bool above_ok =
+        writeit::MainWindowProbe::pixel_at(window, sample_x, above_y, above_r, above_g, above_b);
+    auto apart = [](int ar, int ag, int ab, int br, int bg, int bb) {
+      return std::abs(ar - br) + std::abs(ag - bg) + std::abs(ab - bb) > 80;
+    };
+    auto page_white = [](int r, int g, int b) { return r > 220 && g > 220 && b > 220; };
+    CHECK(seam_px > 40 && on_ok && edge_ok && above_ok);
+    CHECK(apart(on_r, on_g, on_b, 255, 255, 255));
+    CHECK(page_white(edge_r, edge_g, edge_b) && apart(edge_r, edge_g, edge_b, on_r, on_g, on_b));
+    CHECK(page_white(above_r, above_g, above_b) && apart(above_r, above_g, above_b, on_r, on_g, on_b));
+    CHECK(writeit::MainWindowProbe::page(window) == "Page 2 of 2");
   }
   return suite_test::done("page-ui", kChecks);
 }
