@@ -5230,6 +5230,25 @@ void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
       int top = 0;
       int height = 0;
       text_.get_line_yrange(iter, top, height);
+      // GTK paints a selected first line through its pixels-above. The seam
+      // is that margin, so the highlight runs up the previous sheet and stops
+      // only when it meets the line above. The page is white there. The gray
+      // gap is painted over this.
+      int cover_x = 0;
+      int cover_y = 0;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top, cover_x, cover_y);
+      int text_x = 0;
+      int text_y = 0;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top + seam, text_x, text_y);
+      if (text_y > cover_y && text_y >= view_top && cover_y <= view_bottom) {
+        const int y0 = std::max(cover_y, view_top);
+        const int y1 = std::min(text_y, view_bottom);
+        if (y1 > y0) {
+          cr->set_source_rgb(1, 1, 1);
+          cr->rectangle(0, y0, width, y1 - y0);
+          cr->fill();
+        }
+      }
       // [pad][bottom margin][gray][top margin]. The gray is the pasteboard.
       const int gray_y = top + seam - sheet.gap - sheet.margin_y;
       int window_x = 0;
