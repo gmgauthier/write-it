@@ -309,6 +309,12 @@ write_it_delete_page_break_tests = executable(
   dependencies: [writeit_dep],
 )
 test('delete-page-break', write_it_delete_page_break_tests)
+write_it_list_label_underline_tests = executable(
+  'write-it-list-label-underline-tests',
+  'tests/test_list_label_underline.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-label-underline', with_display, args: [write_it_list_label_underline_tests.full_path()], depends: write_it_list_label_underline_tests, timeout: 90, suite: 'ui')
 
 write_it_page_tests = executable(
   'write-it-page-tests',

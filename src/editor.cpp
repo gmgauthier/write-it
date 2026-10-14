@@ -3721,6 +3721,37 @@ bool MainWindow::on_text_key(GdkEventKey* event)
   }
 }
 
+std::string list_label_key(const std::string& text, const std::string& family, int size, bool bold,
+                           bool italic, bool underline)
+{
+  std::string key = text;
+  key += '\n';
+  key += family;
+  key += '\n';
+  key += std::to_string(size);
+  key += bold ? "b" : "";
+  key += italic ? "i" : "";
+  key += underline ? "u" : "";
+  return key;
+}
+
+bool label_underlined(const Run& format)
+{
+  return format.underline;
+}
+
+void apply_label_underline(const Glib::RefPtr<Pango::Layout>& layout, bool underline)
+{
+  if (!layout || !underline)
+    return;
+  Pango::AttrInt mark = Pango::Attribute::create_attr_underline(Pango::UNDERLINE_SINGLE);
+  mark.set_start_index(0);
+  mark.set_end_index(G_MAXUINT);
+  Pango::AttrList attrs;
+  attrs.insert(mark);
+  layout->set_attributes(attrs);
+}
+
 Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& paragraph, int offset,
                                                           int number, int& width, int& gap)
 {
@@ -3732,13 +3763,9 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   const Glib::ustring text = list_label(list, number);
   const std::string family = format.font.empty() ? "Sans" : format.font;
   const int size = static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE);
-  std::string key = text.raw();
-  key += '\n';
-  key += family;
-  key += '\n';
-  key += std::to_string(size);
-  key += format.bold ? "b" : "";
-  key += format.italic ? "i" : "";
+  const bool underline = label_underlined(format);
+  const std::string key =
+      list_label_key(text.raw(), family, size, format.bold, format.italic, underline);
   const auto found = label_layout_cache_.find(key);
   if (found != label_layout_cache_.end()) {
     width = found->second.width;
@@ -3750,10 +3777,11 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   Pango::FontDescription desc;
   desc.set_family(family);
   desc.set_size(size);
-  // Bold and italic too, as Word 97 formats a label from the paragraph mark.
+  // Bold, italic, and underline, as Word 97 formats a label from the paragraph mark.
   desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
   desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
   layout->set_font_description(desc);
+  apply_label_underline(layout, underline);
   int height = 0;
   layout->get_pixel_size(width, height);
   auto space = text_.create_pango_layout(" ");

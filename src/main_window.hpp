@@ -1050,5 +1050,15 @@ bool paragraph_is_blank_item(const Glib::ustring& text);
 // break: it is the page-break pad, it is the paragraph's only character, and
 // the break is set. A letter, a pad that is not alone, or no break, does not.
 bool deleting_pad_clears_break(gunichar erased, bool only_char, bool page_break);
+// The label cache key. Underline is part of it, so a plain label is not reused
+// for an underlined one. The other fields are the ones the layout already
+// varied on: text, family, size, bold, and italic.
+std::string list_label_key(const std::string& text, const std::string& family, int size, bool bold,
+                           bool italic, bool underline);
+// The item's first character is underlined, so the label is too.
+bool label_underlined(const Run& format);
+// Underline is not a font field. When `underline` is set, the layout carries
+// a single underline attribute over the whole label.
+void apply_label_underline(const Glib::RefPtr<Pango::Layout>& layout, bool underline);
 
 }  // namespace writeit
