@@ -1,3 +1,12 @@
+write-it (1.0.22-1) unstable; urgency=medium
+
+  * Zooming out scales pictures and footnotes with the page.
+  * A picture stays inside the text column, and a picture in a cell stays inside that cell.
+  * Past 100%, pictures and footnote type stay at their 100% size.
+  * Footnote lines wrap inside the sheet.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Wed, 14 Oct 2026 23:31:00 +0100
+
 write-it (1.0.21-1) unstable; urgency=medium
 
   * A file that uses CR alone keeps that line break.
