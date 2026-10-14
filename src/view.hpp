@@ -122,8 +122,9 @@ PageWidths page_widths(ViewMode mode, double zoom);
 // Twips to screen pixels at a zoom, on the screen page's scale.
 int twips_to_px(int twips, double zoom);
 
-// A picture wider than this, at 100%, is drawn at this width. Zoom scales
-// that size, and the height keeps the picture's shape.
+// A picture wider than this, at 100%, is drawn at this width. Zooming out
+// scales that size. Zooming in leaves it, so 150% does not grow the picture
+// past the body text.
 constexpr int kPictureCapPx = 480;
 
 struct PictureSpan {
@@ -132,7 +133,8 @@ struct PictureSpan {
 };
 
 // Screen pixels for a picture of `src_w` by `src_h` at `zoom`. At 1.0 a
-// picture no wider than kPictureCapPx keeps its own pixels.
+// picture no wider than kPictureCapPx keeps its own pixels. Above 1.0 the
+// picture stays at that 100% size.
 PictureSpan picture_display_px(int src_w, int src_h, double zoom);
 
 // A screen-only gap between page sheets. The tag is "page-seam", a unit

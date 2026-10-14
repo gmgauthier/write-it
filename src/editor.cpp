@@ -3090,7 +3090,9 @@ void MainWindow::use_story_css(Gtk::Widget& widget)
 
 void MainWindow::apply_story_zoom()
 {
-  const double zoom = zoom_factor();
+  // The body keeps growing past 100%. Notes, the header, and the footer
+  // stop there: the full factor drew them as large as the zoomed body.
+  const double zoom = std::min(zoom_factor(), 1.0);
   const int margin = std::max(1, static_cast<int>(std::lround(8.0 * zoom)));
   const int mark = std::max(1, static_cast<int>(std::lround(6.0 * zoom)));
   const std::string family_raw = settings_.default_font.empty() ? "Sans" : settings_.default_font;

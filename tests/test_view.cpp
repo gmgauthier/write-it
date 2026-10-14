@@ -166,7 +166,8 @@ void mode_names()
 void picture_span()
 {
   // At 100% a picture no wider than 480 keeps its pixels. Wider ones cap
-  // there, then the zoom scales that size. The cap's division truncates.
+  // there. Zooming out scales that size. Zooming in leaves it. The cap's
+  // division truncates.
   const auto native = writeit::picture_display_px(200, 100, 1);
   CHECK(native.width == 200);
   CHECK(native.height == 100);
@@ -176,13 +177,19 @@ void picture_span()
   const auto half = writeit::picture_display_px(200, 100, 0.5);
   CHECK(half.width == 100);
   CHECK(half.height == 50);
+  const auto zoom_in = writeit::picture_display_px(200, 100, 1.5);
+  CHECK(zoom_in.width == 200);
+  CHECK(zoom_in.height == 100);
   const auto twice = writeit::picture_display_px(200, 100, 2);
-  CHECK(twice.width == 400);
-  CHECK(twice.height == 200);
+  CHECK(twice.width == 200);
+  CHECK(twice.height == 100);
 
   const auto capped = writeit::picture_display_px(800, 400, 1);
   CHECK(capped.width == 480);
   CHECK(capped.height == 240);
+  const auto capped_in = writeit::picture_display_px(800, 400, 1.5);
+  CHECK(capped_in.width == 480);
+  CHECK(capped_in.height == 240);
   const auto capped_75 = writeit::picture_display_px(800, 400, 0.75);
   CHECK(capped_75.width == 360);
   CHECK(capped_75.height == 180);
@@ -211,7 +218,7 @@ void picture_span()
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 342;
+constexpr int kChecks = 346;
 
 int main()
 {

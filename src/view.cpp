@@ -167,9 +167,11 @@ PictureSpan picture_display_px(int src_w, int src_h, double zoom)
     height = std::max(1, height * kPictureCapPx / width);
     width = kPictureCapPx;
   }
+  // Past 100% the body keeps growing. The picture stays at its 100% size.
+  const double factor = std::min(zoom, 1.0);
   PictureSpan span;
-  span.width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * zoom)));
-  span.height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * zoom)));
+  span.width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * factor)));
+  span.height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * factor)));
   return span;
 }
 

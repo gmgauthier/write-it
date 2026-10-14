@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: Unlicense */
 
-// Zoom scales body text already. Pictures are pixbufs, and footnotes, the
-// header, and the footer are separate views, so they have to be scaled too.
-// The file bytes stay the picture that was inserted. Zoom adds no undo step.
+// Zoom scales body text already. Pictures and the notes, header, and footer
+// scale down with it, and stay at their 100% size when the zoom goes past
+// 100%. The file bytes stay the picture that was inserted. Zoom adds no undo step.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -212,7 +212,8 @@ Glib::RefPtr<Gtk::TextBuffer> cell_buffer(writeit::MainWindow& window)
 
 int story_px(int percent)
 {
-  return static_cast<int>(11 * (percent / 100.0) * PANGO_SCALE);
+  const double factor = percent > 100 ? 1.0 : percent / 100.0;
+  return static_cast<int>(11 * factor * PANGO_SCALE);
 }
 
 // 17 checks. A wide picture caps at 480 before the zoom; a small one does not.
@@ -248,8 +249,8 @@ void expect_zoom(writeit::MainWindow& window, int percent, int body_w, int body_
 
 }  // namespace
 
-// 3 setup + 17 * 4 zooms + 3 after the tour + 17 around deleting the picture.
-constexpr int kChecks = 91;
+// 3 setup + 17 * 5 zooms + 3 after the tour + 17 around deleting the picture.
+constexpr int kChecks = 108;
 
 int main(int argc, char* argv[])
 {
@@ -325,6 +326,7 @@ int main(int argc, char* argv[])
   expect_zoom(window, 100, 480, 240, 100, 50, 8, 6);
   expect_zoom(window, 75, 360, 180, 75, 38, 6, 5);
   expect_zoom(window, 50, 240, 120, 50, 25, 4, 3);
+  expect_zoom(window, 150, 480, 240, 100, 50, 8, 6);
   expect_zoom(window, 100, 480, 240, 100, 50, 8, 6);
 
   CHECK(MainWindowProbe::state(window) == saved);
