@@ -209,6 +209,13 @@ write_it_markdown_escape_tests = executable(
   dependencies: [writeit_dep],
 )
 test('markdown-escape', write_it_markdown_escape_tests)
+||||||| parent of 2ab122c (Keep a page break that is the last control word in an RTF file.)
+write_it_rtf_final_page_tests = executable(
+  'write-it-rtf-final-page-tests',
+  'tests/test_rtf_final_page.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-final-page', write_it_rtf_final_page_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

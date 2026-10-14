@@ -1676,7 +1676,10 @@ class Reader {
       paragraph_.cell.row = table_row_;
       paragraph_.cell.column = table_col_;
     }
-    if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty())
+    // A file that ends on \page has already closed the paragraph before it.
+    // The empty paragraph carries the break. Dropping it left the break out
+    // of the document. \page\par still arrives here with from_par set.
+    if (!from_par && paragraph_.runs.empty() && !paragraphs_.empty() && !paragraph_.page_break)
       return;
     if (!from_par && paragraph_.runs.empty() && paragraphs_.empty() && !saw_par_)
       return;
