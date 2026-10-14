@@ -307,6 +307,9 @@ struct State {
   // Inside a font entry, a group that is not the name: \*\panose, \falt.
   bool font_skip = false;
   bool pending_dest = false;
+  // {\nonshppict} is the metafile fallback beside a real picture. A \pict
+  // inside it is not a second image. {\*\shppict} does not set this.
+  bool skip_pict = false;
   int uc = 1;
   Story story = Story::Body;
   // \intbl, cleared by \pard. Row tracking itself lives on the reader.
@@ -566,7 +569,19 @@ class Reader {
       if (list_destination(word))
         return;
       if (word == "pict") {
+        // The fallback group copies skip_pict into this group. Leave the
+        // hex ignored. The real picture's group does not set the flag, so
+        // its \pict is still read.
+        if (state_.skip_pict) {
+          state_.ignore = true;
+          return;
+        }
         enter_pict();
+        return;
+      }
+      if (word == "nonshppict") {
+        state_.skip_pict = true;
+        state_.ignore = true;
         return;
       }
       if (word == "header") {

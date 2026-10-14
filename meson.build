@@ -223,6 +223,13 @@ write_it_rtf_footnote_marker_tests = executable(
   dependencies: [writeit_dep],
 )
 test('rtf-footnote-marker', write_it_rtf_footnote_marker_tests)
+||||||| parent of 3608d81 (Skip the metafile fallback stored beside an RTF picture.)
+write_it_rtf_metafile_tests = executable(
+  'write-it-rtf-metafile-tests',
+  'tests/test_rtf_metafile.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-metafile', write_it_rtf_metafile_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
