@@ -18,7 +18,7 @@ jobs:
       image: public.ecr.aws/docker/library/debian:trixie
     env:
       DEBIAN_FRONTEND: noninteractive
-      # smoke-open and desktop-file must run here, not skip.
+      # desktop-file must run here, not skip. The window suite does not.
       WRITE_IT_SMOKE_REQUIRED: 1
     steps:
       - name: Install build dependencies
@@ -28,8 +28,7 @@ jobs:
             ca-certificates git \
             meson ninja-build g++ pkg-config \
             libgtkmm-3.0-dev \
-            xvfb xauth \
-            x11-utils dbus-daemon desktop-file-utils
+            desktop-file-utils
 
       - uses: actions/checkout@v4
 
@@ -48,10 +47,9 @@ jobs:
       - name: Compile
         run: ninja -C build-asan
 
-      # Every suite except slow. That suite is the long fuzz and the window
-      # tests that took most of an ASan run; Debian and Devuan still run it.
-      # Any ASan or UBSan report, or a leak not in tests/lsan.supp, aborts the
-      # test that hit it. lsan.supp lists system libraries only; see its top.
+      # Unit tests only, under the sanitisers. Suite ui stays on a local
+      # machine. Any ASan or UBSan report, or a leak not in tests/lsan.supp,
+      # aborts the test that hit it. lsan.supp lists system libraries only.
       - name: Test
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:halt_on_error=1
@@ -61,7 +59,7 @@ jobs:
         run: |
           export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/tests/lsan.supp:print_suppressions=0"
           test -r "$GITHUB_WORKSPACE/tests/lsan.supp"
-          xvfb-run -a meson test -C build-asan --print-errorlogs --timeout-multiplier 4 --num-processes 2 --no-suite slow
+          meson test -C build-asan --print-errorlogs --timeout-multiplier 4 --num-processes 2 --no-suite ui
 
       - name: Upload test log
         if: failure()
