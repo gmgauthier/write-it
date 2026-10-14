@@ -226,6 +226,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool caret_in_table() const;
   Glib::RefPtr<Gtk::TextTag> page_seam_tag(int pixels);
   void raise_seams();
+  // pixels-above 18, and nothing else, so it does not take indents or margins.
+  Glib::RefPtr<Gtk::TextTag> draft_gap_tag();
+  void raise_draft_gap();
+  // Apply that tag in Draft on body page breaks, and take it off otherwise.
+  bool sync_draft_gaps();
   void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);

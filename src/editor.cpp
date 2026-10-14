@@ -539,7 +539,7 @@ void MainWindow::build_editor()
   // are recomputed after each change and may leave the tag table.
   undo_.attach(buffer_, [](const Glib::RefPtr<Gtk::TextTag>& tag) {
     const std::string name = tag_name(tag);
-    return is_list_shift(name) || is_list_tab(name) || is_page_seam(name);
+    return is_list_shift(name) || is_list_tab(name) || is_page_seam(name) || is_draft_gap(name);
   });
   // Undo attaches before the erase below, and takes the picture bytes here
   // while the pixbuf is still in the buffer. Undo inserts that pixbuf again.
@@ -604,7 +604,7 @@ void MainWindow::build_editor()
       false);
   auto geometry_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
                                 const Gtk::TextIter& end) {
-    if (seaming_ || is_page_seam(tag_name(tag)))
+    if (seaming_ || is_page_seam(tag_name(tag)) || is_draft_gap(tag_name(tag)))
       return;
     // A range up to the next line's start, as a paragraph's is, leaves that
     // line's first character, and so its layout, untouched.
@@ -638,7 +638,7 @@ void MainWindow::build_editor()
     if (seaming_ || shifting_ || tabbing_)
       return;
     const std::string name = tag_name(tag);
-    if (is_list_shift(name) || is_list_tab(name) || is_page_seam(name))
+    if (is_list_shift(name) || is_list_tab(name) || is_page_seam(name) || is_draft_gap(name))
       return;
     ParaFormat ignored;
     if (parse_para(name, ignored))
@@ -2398,6 +2398,106 @@ void MainWindow::tag_cell_paragraph(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
   }
 }
 
+Glib::RefPtr<Gtk::TextTag> MainWindow::draft_gap_tag()
+{
+  const Glib::ustring name = "draft-gap";
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (tag)
+    return tag;
+  tag = Gtk::TextTag::create(name);
+  tag->property_pixels_above_lines() = 18;
+  table->add(tag);
+  raise_headings();
+  return tag;
+}
+
+void MainWindow::raise_draft_gap()
+{
+  if (!buffer_)
+    return;
+  auto tag = buffer_->get_tag_table()->lookup("draft-gap");
+  if (!tag)
+    return;
+  const int top = buffer_->get_tag_table()->get_size() - 1;
+  if (tag->get_priority() < top)
+    tag->set_priority(top);
+}
+
+bool MainWindow::sync_draft_gaps()
+{
+  if (!buffer_)
+    return false;
+  struct Range {
+    int start = 0;
+    int end = 0;
+    bool sheet = false;
+  };
+  std::vector<Range> ranges;
+  const int count = buffer_->get_char_count();
+  int offset = 0;
+  while (offset <= count) {
+    auto iter = buffer_->get_iter_at_offset(offset);
+    int next = -1;
+    for (auto at = iter; !at.is_end(); ++at) {
+      if (at.get_char() == '\n') {
+        auto after = at;
+        after.forward_char();
+        next = after.get_offset();
+        break;
+      }
+    }
+    Range range;
+    range.start = offset;
+    range.end = next < 0 ? count : next;
+    range.sheet = starts_sheet(range.start) && range.start < range.end;
+    ranges.push_back(range);
+    if (next < 0)
+      break;
+    offset = next;
+  }
+  const bool want = view_ == ViewMode::Draft;
+  bool any = false;
+  for (const Range& range : ranges)
+    any = any || range.sheet;
+  auto table = buffer_->get_tag_table();
+  auto gap = table->lookup("draft-gap");
+  if ((!want || !any) && !gap)
+    return false;
+  if (want && any && !gap)
+    gap = draft_gap_tag();
+  bool changed = false;
+  seaming_ = true;
+  for (const Range& range : ranges) {
+    if (!gap)
+      break;
+    auto from = buffer_->get_iter_at_offset(range.start);
+    auto to = buffer_->get_iter_at_offset(range.end);
+    bool applied = false;
+    for (const auto& tag : from.get_tags()) {
+      if (is_draft_gap(tag_name(tag))) {
+        applied = true;
+        break;
+      }
+    }
+    if (want && range.sheet) {
+      if (!applied) {
+        buffer_->apply_tag(gap, from, to);
+        changed = true;
+      }
+    } else if (applied) {
+      buffer_->remove_tag(gap, from, to);
+      changed = true;
+    }
+  }
+  if ((!want || !any) && gap) {
+    table->remove(gap);
+    changed = true;
+  }
+  seaming_ = false;
+  return changed;
+}
+
 void MainWindow::raise_headings()
 {
   // Priorities decide which tags win the indents and margins: lines move.
@@ -2409,7 +2509,9 @@ void MainWindow::raise_headings()
       tag->set_priority(table->get_size() - 1);
   }
   // A seam has to outrank a heading, or the heading's own space wins and the
-  // gap between sheets never opens.
+  // gap between sheets never opens. Draft has no seam. Its gap sits above the
+  // heading and under the seam, and it sets no indent.
+  raise_draft_gap();
   raise_seams();
 }
 
@@ -4349,7 +4451,9 @@ int MainWindow::natural_line_above(const Gtk::TextIter& iter) const
     if (is_page_seam(name))
       continue;
     int above = -1;
-    if (const int level = heading_level_name(name); level > 0)
+    if (is_draft_gap(name))
+      above = 18;
+    else if (const int level = heading_level_name(name); level > 0)
       above = heading_px;
     else {
       ParaFormat format;
@@ -5064,25 +5168,34 @@ void MainWindow::update_page_seams()
 {
   if (closing_ || seaming_ || !buffer_)
     return;
-  // Draft is one column. The gaps belong to Page only.
+  // Draft is one column. The sheet seams belong to Page only. A page break
+  // still opens the short gap, including on a heading: the heading's own
+  // space would win, and the gap would never show.
   if (view_ != ViewMode::Page) {
     std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
     buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
       if (is_page_seam(tag_name(tag)))
         drop.push_back(tag);
     });
-    if (drop.empty())
-      return;
-    seaming_ = true;
-    for (const auto& tag : drop)
-      buffer_->remove_tag(tag, buffer_->begin(), buffer_->end());
-    for (const auto& tag : drop)
-      buffer_->get_tag_table()->remove(tag);
-    seaming_ = false;
-    grow_page_ = true;
-    queue_page_size();
+    bool changed = false;
+    if (!drop.empty()) {
+      seaming_ = true;
+      for (const auto& tag : drop)
+        buffer_->remove_tag(tag, buffer_->begin(), buffer_->end());
+      for (const auto& tag : drop)
+        buffer_->get_tag_table()->remove(tag);
+      seaming_ = false;
+      changed = true;
+    }
+    if (sync_draft_gaps())
+      changed = true;
+    if (changed) {
+      grow_page_ = true;
+      queue_page_size();
+    }
     return;
   }
+  sync_draft_gaps();
   if (text_.get_allocated_width() <= 1)
     return;
 

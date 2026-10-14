@@ -154,6 +154,11 @@ bool is_page_seam(const std::string& name)
   return name.compare(0, prefix.size(), prefix) == 0;
 }
 
+bool is_draft_gap(const std::string& name)
+{
+  return name == "draft-gap";
+}
+
 int page_seam_pixels(const std::string& name)
 {
   const std::string prefix = std::string("page-seam") + '\x1f';

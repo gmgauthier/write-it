@@ -357,6 +357,12 @@ write_it_draft_note_count_tests = executable(
   dependencies: [writeit_dep],
 )
 test('draft-note-count', with_display, args: [write_it_draft_note_count_tests.full_path()], depends: write_it_draft_note_count_tests, timeout: 90, suite: 'ui')
+write_it_draft_heading_gap_tests = executable(
+  'write-it-draft-heading-gap-tests',
+  'tests/test_draft_heading_gap.cpp',
+  dependencies: [writeit_dep],
+)
+test('draft-heading-gap', with_display, args: [write_it_draft_heading_gap_tests.full_path()], depends: write_it_draft_heading_gap_tests, timeout: 90, suite: 'ui')
 
 write_it_page_tests = executable(
   'write-it-page-tests',

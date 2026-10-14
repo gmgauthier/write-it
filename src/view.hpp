@@ -116,6 +116,9 @@ int twips_to_px(int twips, double zoom);
 // separator, and the gap's height in pixels. It is not a paragraph format
 // and it is not written to the file.
 bool is_page_seam(const std::string& name);
+// Draft's short gap above a page break. One tag, no paint. Page view uses
+// the seam instead, and this tag is not applied there.
+bool is_draft_gap(const std::string& name);
 // The height in that name, or 0 when `name` is not a page seam.
 int page_seam_pixels(const std::string& name);
 
