@@ -416,6 +416,12 @@ int chars_of(const Paragraph& paragraph);
 // another paragraph follows, is a separator. One past the last paragraph
 // counts a newline the last paragraph does not store.
 int chars_before(const std::vector<Paragraph>& paragraphs, size_t index);
+// Body offset of the marker for `note_index` (1-based, as Run::note). A
+// marker in ordinary text is that run's offset. A note whose only marker is
+// inside a table is the table anchor's offset: the cells share it, and the
+// sheet that holds the anchor is the sheet that shows the note. -1 when no
+// run cites the note.
+int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index);
 // Gives one paragraph the style `to`. An attribute whose direct bit is unset
 // takes the style's value and the bit stays unset, even when the old value
 // differed from the paragraph's previous style. A set bit is left alone.

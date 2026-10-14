@@ -67,6 +67,52 @@ int chars_before(const std::vector<Paragraph>& paragraphs, size_t index)
   return offset;
 }
 
+int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index)
+{
+  if (note_index <= 0)
+    return -1;
+  // A body marker wins, even when a cell also cites the note. The sheet of a
+  // body marker is the shipped placement; the anchor is only the stand-in
+  // when the cell is the only marker.
+  int body_at = -1;
+  int cell_at = -1;
+  size_t i = 0;
+  while (i < paragraphs.size()) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      const int anchor = chars_before(paragraphs, i);
+      size_t j = i;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id) {
+        if (cell_at < 0) {
+          for (const Run& run : paragraphs[j].runs) {
+            if (run.note == note_index) {
+              cell_at = anchor;
+              break;
+            }
+          }
+        }
+        ++j;
+      }
+      i = j;
+      continue;
+    }
+    if (body_at < 0) {
+      int offset = chars_before(paragraphs, i);
+      for (const Run& run : paragraphs[i].runs) {
+        if (run.note == note_index) {
+          body_at = offset;
+          break;
+        }
+        offset += chars_of(run);
+      }
+    }
+    ++i;
+  }
+  if (body_at >= 0)
+    return body_at;
+  return cell_at;
+}
+
 namespace {
 
 constexpr int kPicturePx = 480;

@@ -403,6 +403,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // marker on a later sheet gets that note at the foot of its own sheet.
   void place_notes();
   void place_split_notes();
+  // Body offsets of table anchors that hold a footnote the body does not.
+  // A body marker is left out, so its sheet stays the one it has always used.
+  std::vector<int> cell_note_anchors() const;
   void hide_extra_notes();
   // Scroll that column into the pasteboard.
   void reveal_note_view();

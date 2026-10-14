@@ -4594,6 +4594,27 @@ void MainWindow::hide_extra_notes()
   }
 }
 
+std::vector<int> MainWindow::cell_note_anchors() const
+{
+  std::vector<int> marks;
+  if (!buffer_ || notes_.empty())
+    return marks;
+  // Counting captures would make a seam pass look like an edit.
+  const long saved = captures_;
+  const std::vector<Paragraph> paragraphs = capture().paragraphs;
+  captures_ = saved;
+  const int count = buffer_->get_char_count();
+  for (int n = 1; n <= static_cast<int>(notes_.size()); ++n) {
+    const int at = note_marker_offset(paragraphs, n);
+    if (at < 0 || at >= count)
+      continue;
+    if (!buffer_->get_iter_at_offset(at).get_child_anchor())
+      continue;
+    marks.push_back(at);
+  }
+  return marks;
+}
+
 void MainWindow::place_notes()
 {
   if (notes_.empty() || view_ != ViewMode::Page || !buffer_) {
@@ -4634,6 +4655,20 @@ void MainWindow::place_notes()
     text_.get_line_yrange(iter, top, height);
     marker_y = top;
     break;
+  }
+  // A marker that lives only in a cell is not a body tag. The table anchor
+  // is that marker's place, so the note uses the anchor's sheet.
+  if (marker_y < 0) {
+    const std::vector<int> anchors = cell_note_anchors();
+    if (!anchors.empty()) {
+      int at = anchors.front();
+      for (int mark : anchors)
+        at = std::min(at, mark);
+      int top = 0;
+      int height = 0;
+      text_.get_line_yrange(buffer_->get_iter_at_offset(at), top, height);
+      marker_y = top;
+    }
   }
   if (marker_y >= 0) {
     auto iter = buffer_->begin();
@@ -4966,6 +5001,7 @@ void MainWindow::update_page_seams()
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
   const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
   const int reserve_px = note_block_px();
+  const std::vector<int> cell_marks = cell_note_anchors();
   auto has_note = [&](int start, int end) {
     const int from = std::max(0, start);
     const int to = std::max(from, std::min(end, count));
@@ -4975,6 +5011,18 @@ void MainWindow::update_page_seams()
         if (parse_fmt(tag_name(tag), run) && run.note != 0)
           return true;
       }
+    }
+    return false;
+  };
+  // The body scan above is the shipped test for a body marker. A cell note
+  // has no body tag; the anchor offset is the marker, and only when the body
+  // has none.
+  auto has_cell_note = [&](int start, int end) {
+    const int from = std::max(0, start);
+    const int to = std::max(from, std::min(end, count));
+    for (int at : cell_marks) {
+      if (at >= from && at < to)
+        return true;
     }
     return false;
   };
@@ -5095,11 +5143,21 @@ void MainWindow::update_page_seams()
     note_groups_.clear();
     if (reserve_px > 0) {
       int home = -1;
+      bool cell_home = false;
       for (size_t i = 0; i < blocks.size(); ++i) {
         if (!has_note(blocks[i].start, blocks[i].end))
           continue;
         home = page_of[i];
         break;
+      }
+      if (home < 0) {
+        for (size_t i = 0; i < blocks.size(); ++i) {
+          if (!has_cell_note(blocks[i].start, blocks[i].end))
+            continue;
+          home = page_of[i];
+          cell_home = true;
+          break;
+        }
       }
       if (home >= 0) {
         std::vector<int> reserve(static_cast<size_t>(home) + 1, 0);
@@ -5108,9 +5166,12 @@ void MainWindow::update_page_seams()
         const std::vector<int> reserved = place(reserve, again);
         // Keep the break when the marker stays on that sheet. A block that the
         // note itself pushes down is the next sheet, and the note stays put.
+        // A body marker uses the body scan. A cell note uses the anchor.
         bool stayed = false;
         for (size_t i = 0; i < blocks.size(); ++i) {
-          if (has_note(blocks[i].start, blocks[i].end) && again[i] == home) {
+          const bool here = cell_home ? has_cell_note(blocks[i].start, blocks[i].end)
+                                      : has_note(blocks[i].start, blocks[i].end);
+          if (here && again[i] == home) {
             stayed = true;
             break;
           }

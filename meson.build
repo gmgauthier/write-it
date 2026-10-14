@@ -291,6 +291,12 @@ write_it_cell_edit_sticky_tests = executable(
   dependencies: [writeit_dep],
 )
 test('cell-edit-sticky', with_display, args: [write_it_cell_edit_sticky_tests.full_path()], depends: write_it_cell_edit_sticky_tests, timeout: 60, suite: 'ui')
+write_it_cell_footnote_tests = executable(
+  'write-it-cell-footnote-tests',
+  'tests/test_cell_footnote.cpp',
+  dependencies: [writeit_dep],
+)
+test('cell-footnote', write_it_cell_footnote_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',
