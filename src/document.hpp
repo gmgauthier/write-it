@@ -472,4 +472,8 @@ Image image_from_pixbuf(const Glib::RefPtr<Gdk::Pixbuf>& pix);
 // picture with no bytes does not count, and neither does plain text.
 bool document_needs_custom_undo(const Document& before, const Document& after);
 
+// Where each note starts in the joined note text, as character offsets: 0,
+// then just after every blank line. GTK counts characters, not UTF-8 bytes.
+std::vector<int> note_break_offsets(const std::string& utf8);
+
 }  // namespace writeit

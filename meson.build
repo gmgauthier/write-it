@@ -279,6 +279,12 @@ write_it_note_retarget_tests = executable(
   dependencies: [writeit_dep],
 )
 test('note-retarget', write_it_note_retarget_tests)
+write_it_note_measure_chars_tests = executable(
+  'write-it-note-measure-chars-tests',
+  'tests/test_note_measure_chars.cpp',
+  dependencies: [writeit_dep],
+)
+test('note-measure-chars', write_it_note_measure_chars_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

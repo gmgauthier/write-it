@@ -2414,6 +2414,20 @@ int note_line_y(Gtk::TextView& view, const Glib::RefPtr<Gtk::TextBuffer>& buffer
 
 }  // namespace
 
+std::vector<int> note_break_offsets(const std::string& utf8)
+{
+  const Glib::ustring text(utf8);
+  std::vector<int> starts;
+  starts.push_back(0);
+  for (int i = 0; i + 1 < static_cast<int>(text.size()); ++i) {
+    if (text[static_cast<size_t>(i)] != '\n' || text[static_cast<size_t>(i + 1)] != '\n')
+      continue;
+    starts.push_back(i + 2);
+    ++i;
+  }
+  return starts;
+}
+
 int MainWindow::measure_note_group(const NoteGroup& group)
 {
   if (group.indexes.empty())
@@ -2421,13 +2435,11 @@ int MainWindow::measure_note_group(const NoteGroup& group)
   auto buffer = notes_view_.get_buffer();
   const std::string full = notes_text(notes_);
   if (buffer && buffer->get_text().raw() == full) {
+    const std::vector<int> breaks = note_break_offsets(full);
     std::vector<int> starts;
-    starts.push_back(0);
-    for (int i = 0; i + 1 < static_cast<int>(full.size()); ++i) {
-      if (full[static_cast<size_t>(i)] != '\n' || full[static_cast<size_t>(i + 1)] != '\n')
-        continue;
-      starts.push_back(i + 2);
-      ++i;
+    starts.push_back(breaks.empty() ? 0 : breaks.front());
+    for (size_t i = 1; i < breaks.size(); ++i) {
+      starts.push_back(breaks[i]);
       if (starts.size() >= notes_.size())
         break;
     }
