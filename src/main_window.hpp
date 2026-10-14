@@ -32,6 +32,8 @@ enum class StoryKey { Pass, Undo, Redo };
 StoryKey story_key(unsigned keyval, unsigned state);
 // One Find hit. index is -1 when there is none. length is in characters of
 // `doc`, which can differ from the needle when casefolding changes length.
+// `doc` is a buffer slice: pictures and table anchors count as U+FFFC, so the
+// index is a buffer offset.
 struct FindHit {
   int index = -1;
   int length = 0;

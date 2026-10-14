@@ -333,6 +333,12 @@ write_it_find_casefold_tests = executable(
   dependencies: [writeit_dep],
 )
 test('find-casefold', write_it_find_casefold_tests)
+write_it_find_embedded_tests = executable(
+  'write-it-find-embedded-tests',
+  'tests/test_find_embedded.cpp',
+  dependencies: [writeit_dep],
+)
+test('find-embedded', write_it_find_embedded_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

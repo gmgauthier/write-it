@@ -5806,6 +5806,7 @@ void MainWindow::present_find(bool replace)
     find_entry_->grab_focus();
 }
 
+<<<<<<< HEAD
 namespace {
 
 struct FoldedText {
@@ -5893,13 +5894,99 @@ FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int 
 }
 
 void MainWindow::find_next()
+||||||| parent of 35f7ae5 (Count pictures and table anchors while finding text.)
+void MainWindow::find_next()
+=======
+FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
+                     bool match_case)
+>>>>>>> 35f7ae5 (Count pictures and table anchors while finding text.)
+{
+  FindHit miss;
+  if (needle.empty())
+<<<<<<< HEAD
+    return;
+  const Glib::ustring doc = buffer_->get_text();
+||||||| parent of 35f7ae5 (Count pictures and table anchors while finding text.)
+    return;
+  const Glib::ustring doc = buffer_->get_text();
+  const bool match_case = match_case_ && match_case_->get_active();
+  const Glib::ustring folded = match_case ? needle : needle.casefold();
+  const int count = static_cast<int>(doc.length());
+  const int width = static_cast<int>(needle.length());
+  int origin = cursor_offset();
+  Gtk::TextBuffer::iterator sel_start;
+  Gtk::TextBuffer::iterator sel_end;
+  if (buffer_->get_selection_bounds(sel_start, sel_end))
+    origin = sel_end.get_offset();
+  auto matches = [&](int index) {
+    if (index < 0 || index + width > count)
+      return false;
+    const Glib::ustring slice = doc.substr(static_cast<Glib::ustring::size_type>(index),
+                                           static_cast<Glib::ustring::size_type>(width));
+    if (match_case)
+      return slice == needle;
+    return slice.casefold() == folded;
+  };
+  int found = -1;
+  for (int i = origin; i + width <= count; ++i) {
+    if (matches(i)) {
+      found = i;
+      break;
+    }
+  }
+  if (found < 0) {
+    const int limit = std::min(origin, count);
+    for (int i = 0; i < limit; ++i) {
+      if (matches(i)) {
+        found = i;
+        break;
+      }
+    }
+  }
+  if (found < 0) {
+=======
+    return miss;
+  const Glib::ustring folded = match_case ? needle : needle.casefold();
+  const int count = static_cast<int>(doc.length());
+  const int width = static_cast<int>(needle.length());
+  if (width <= 0 || width > count)
+    return miss;
+  if (origin < 0)
+    origin = 0;
+  if (origin > count)
+    origin = count;
+  auto matches = [&](int index) {
+    if (index < 0 || index + width > count)
+      return false;
+    const Glib::ustring slice = doc.substr(static_cast<Glib::ustring::size_type>(index),
+                                           static_cast<Glib::ustring::size_type>(width));
+    if (match_case)
+      return slice == needle;
+    return slice.casefold() == folded;
+  };
+  for (int i = origin; i + width <= count; ++i) {
+    if (matches(i))
+      return FindHit{i, width};
+  }
+  const int limit = std::min(origin, count);
+  for (int i = 0; i < limit; ++i) {
+    if (matches(i))
+      return FindHit{i, width};
+  }
+  return miss;
+}
+
+void MainWindow::find_next()
 {
   if (!find_entry_ || !buffer_)
     return;
   const Glib::ustring needle = find_entry_->get_text();
   if (needle.empty())
     return;
-  const Glib::ustring doc = buffer_->get_text();
+  // get_text() drops pictures and table anchors, so a later match is short
+  // by one character per object and the selection lands on the object.
+  const Glib::ustring doc = buffer_->get_slice(buffer_->begin(), buffer_->end(), true);
+>>>>>>> 35f7ae5 (Count pictures and table anchors while finding text.)
   const bool match_case = match_case_ && match_case_->get_active();
   int origin = cursor_offset();
   Gtk::TextBuffer::iterator sel_start;
