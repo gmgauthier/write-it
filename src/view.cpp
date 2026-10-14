@@ -157,7 +157,7 @@ int twips_to_px(int twips, double zoom)
   return static_cast<int>(std::lround(px));
 }
 
-PictureSpan picture_display_px(int src_w, int src_h, double zoom)
+PictureSpan picture_display_px(int src_w, int src_h, double zoom, int limit)
 {
   if (src_w <= 0 || src_h <= 0 || !(zoom > 0))
     return {1, 1};
@@ -167,11 +167,20 @@ PictureSpan picture_display_px(int src_w, int src_h, double zoom)
     height = std::max(1, height * kPictureCapPx / width);
     width = kPictureCapPx;
   }
-  // Past 100% the body keeps growing. The picture stays at its 100% size.
+  // Past 100% the body keeps growing. The picture stays at its 100% size:
+  // the full factor drew it larger than the text around it.
   const double factor = std::min(zoom, 1.0);
   PictureSpan span;
   span.width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * factor)));
   span.height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * factor)));
+  // The cap is wider than the text column, and a cell is narrower still.
+  // A picture does not wrap, so this keeps it inside that width.
+  if (limit > 0 && span.width > limit) {
+    const double scale = static_cast<double>(limit) / static_cast<double>(span.width);
+    span.height =
+        std::max(1, static_cast<int>(std::lround(static_cast<double>(span.height) * scale)));
+    span.width = limit;
+  }
   return span;
 }
 

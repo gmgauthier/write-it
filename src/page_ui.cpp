@@ -481,6 +481,11 @@ class CellFrame : public Gtk::Frame {
     queue_resize();
   }
 
+  int column_px() const
+  {
+    return width_;
+  }
+
  protected:
   Gtk::SizeRequestMode get_request_mode_vfunc() const override
   {
@@ -2455,7 +2460,7 @@ int MainWindow::draft_footnote_px() const
   int nat_h = 0;
   note_box_.get_preferred_height_for_width(width, min_h, nat_h);
   if (nat_h <= 1) {
-    const int inner = std::max(40, width - 36);
+    const int inner = note_view_width(width, note_marks_);
     notes_view_.get_preferred_height_for_width(inner, min_h, nat_h);
   }
   if (note_editing_ && note_h_ > 1 && nat_h < note_h_)
@@ -2600,10 +2605,9 @@ int MainWindow::measure_note_group(const NoteGroup& group)
   const std::string text = note_group_text(group);
   auto layout =
       notes_view_.create_pango_layout(text.empty() ? Glib::ustring(" ") : Glib::ustring(text));
-  const ViewGeometry sheet = geometry();
-  const int width =
-      std::max(40, text_.get_allocated_width() - sheet.margin_left - sheet.margin_right);
-  const int inner = std::max(40, width - 36);
+  const int view_w = note_view_width(note_column_width(), note_marks_);
+  const int chrome = notes_view_.get_left_margin() + notes_view_.get_right_margin();
+  const int inner = std::max(40, view_w - chrome);
   layout->set_width(inner * PANGO_SCALE);
   layout->set_wrap(Pango::WRAP_WORD_CHAR);
   int layout_w = 0;
@@ -4070,12 +4074,13 @@ void MainWindow::insert_picture(Image image)
   commit_document(before, after, origin + into + 1);
 }
 
-Glib::RefPtr<Gdk::Pixbuf> MainWindow::pixbuf_for(const Image& image)
+Glib::RefPtr<Gdk::Pixbuf> MainWindow::pixbuf_for(const Image& image, int limit)
 {
-  auto fit = [this](const Glib::RefPtr<Gdk::Pixbuf>& pix) {
+  auto fit = [this, limit](const Glib::RefPtr<Gdk::Pixbuf>& pix) {
     if (!pix || pix->get_width() <= 0 || pix->get_height() <= 0)
       return pix;
-    const PictureSpan span = picture_display_px(pix->get_width(), pix->get_height(), zoom_factor());
+    const PictureSpan span =
+        picture_display_px(pix->get_width(), pix->get_height(), zoom_factor(), limit);
     if (pix->get_width() == span.width && pix->get_height() == span.height)
       return pix;
     return pix->scale_simple(span.width, span.height, Gdk::INTERP_BILINEAR);
@@ -4087,7 +4092,7 @@ Glib::RefPtr<Gdk::Pixbuf> MainWindow::pixbuf_for(const Image& image)
   return fit(placeholder_pixbuf());
 }
 
-void MainWindow::rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
+void MainWindow::rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int limit)
 {
   if (!buffer)
     return;
@@ -4118,7 +4123,8 @@ void MainWindow::rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buf
       source = placeholder_pixbuf();
     if (!source || source->get_width() <= 0 || source->get_height() <= 0)
       continue;
-    const PictureSpan span = picture_display_px(source->get_width(), source->get_height(), zoom);
+    const PictureSpan span =
+        picture_display_px(source->get_width(), source->get_height(), zoom, limit);
     auto at = buffer->get_iter_at_offset(slot->offset);
     const auto shown = at.get_pixbuf();
     if (!shown || (shown->get_width() == span.width && shown->get_height() == span.height))
@@ -4187,11 +4193,16 @@ void MainWindow::rescale_pictures()
     if (TableSheet* sheet = sheet_from(iter.get_child_anchor()))
       sheets.push_back(sheet);
   }
-  rescale_picture_buffer(buffer_);
+  rescale_picture_buffer(buffer_, picture_column_limit());
   for (TableSheet* sheet : sheets) {
     if (!sheet)
       continue;
-    sheet->each_view([this](Gtk::TextView& view) { rescale_picture_buffer(view.get_buffer()); });
+    sheet->each_view([this](Gtk::TextView& view) {
+      int limit = picture_column_limit();
+      if (auto* frame = dynamic_cast<CellFrame*>(view.get_parent()))
+        limit = picture_cell_limit(frame->column_px());
+      rescale_picture_buffer(view.get_buffer(), limit);
+    });
   }
 }
 

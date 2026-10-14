@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: Unlicense */
 
-// Zoom scales body text already. Pictures and the notes, header, and footer
-// scale down with it, and stay at their 100% size when the zoom goes past
-// 100%. The file bytes stay the picture that was inserted. Zoom adds no undo step.
+// Zoom scales body text already. Pictures scale down with it and stay inside
+// the text column or the cell. Past 100% a picture stays at its 100% size.
+// Notes, the header, and the footer do the same for their type, and a note
+// wraps inside the column. The file bytes stay the picture that was inserted.
+// Zoom adds no undo step.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -52,6 +54,11 @@ struct MainWindowProbe {
   static Gtk::TextView& notes(MainWindow& window)
   {
     return window.notes_view_;
+  }
+
+  static int note_layout(MainWindow& window)
+  {
+    return window.notes_view_.layout_width();
   }
 
   static Gtk::TextView& header(MainWindow& window)
@@ -216,7 +223,8 @@ int story_px(int percent)
   return static_cast<int>(11 * factor * PANGO_SCALE);
 }
 
-// 17 checks. A wide picture caps at 480 before the zoom; a small one does not.
+// 19 checks. A wide picture caps at 480 before the zoom, then to the text
+// column. A small one does not. The note view's width stays inside that column.
 void expect_zoom(writeit::MainWindow& window, int percent, int body_w, int body_h, int cell_w,
                  int cell_h, int margin, int mark)
 {
@@ -241,6 +249,12 @@ void expect_zoom(writeit::MainWindow& window, int percent, int body_w, int body_
   CHECK(MainWindowProbe::header(window).get_left_margin() == margin);
   CHECK(MainWindowProbe::notes(window).get_left_margin() == margin);
   CHECK(MainWindowProbe::note_marks(window).get_margin_right() == mark);
+  const int layout = MainWindowProbe::note_layout(window);
+  const int wrap = writeit::page_widths(writeit::ViewMode::Page, percent / 100.0).wrap;
+  if (layout <= 0 || layout > wrap)
+    std::cerr << "note layout " << layout << " column " << wrap << "\n";
+  CHECK(layout > 0);
+  CHECK(layout <= wrap);
   CHECK(label == "Page 1 of 1");
   CHECK(MainWindowProbe::steps(window) == 0);
   CHECK(!MainWindowProbe::dirty(window));
@@ -249,8 +263,8 @@ void expect_zoom(writeit::MainWindow& window, int percent, int body_w, int body_
 
 }  // namespace
 
-// 3 setup + 17 * 5 zooms + 3 after the tour + 17 around deleting the picture.
-constexpr int kChecks = 108;
+// 3 setup + 19 * 5 zooms + 3 after the tour + 17 around deleting the picture.
+constexpr int kChecks = 118;
 
 int main(int argc, char* argv[])
 {
@@ -323,11 +337,11 @@ int main(int argc, char* argv[])
   MainWindowProbe::load(window, doc);
   const std::uint64_t saved = MainWindowProbe::state(window);
 
-  expect_zoom(window, 100, 480, 240, 100, 50, 8, 6);
-  expect_zoom(window, 75, 360, 180, 75, 38, 6, 5);
-  expect_zoom(window, 50, 240, 120, 50, 25, 4, 3);
+  expect_zoom(window, 100, 456, 228, 100, 50, 8, 6);
+  expect_zoom(window, 75, 341, 171, 75, 38, 6, 5);
+  expect_zoom(window, 50, 228, 114, 50, 25, 4, 3);
   expect_zoom(window, 150, 480, 240, 100, 50, 8, 6);
-  expect_zoom(window, 100, 480, 240, 100, 50, 8, 6);
+  expect_zoom(window, 100, 456, 228, 100, 50, 8, 6);
 
   CHECK(MainWindowProbe::state(window) == saved);
   const Document shown = MainWindowProbe::doc(window);
@@ -366,8 +380,8 @@ int main(int argc, char* argv[])
   const Px back = first_pixbuf(MainWindowProbe::buffer(window));
   const Px cell_back = first_pixbuf(cell_buffer(window));
   CHECK(back.found);
-  CHECK(back.w == 240);
-  CHECK(back.h == 120);
+  CHECK(back.w == 228);
+  CHECK(back.h == 114);
   CHECK(cell_back.w == 50);
   CHECK(cell_back.h == 25);
   const Document restored = MainWindowProbe::doc(window);

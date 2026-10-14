@@ -597,11 +597,25 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool on_story_key(GdkEventKey* event);
   // Body, then each cell, then the header, the footer, and the notes.
   std::vector<Gtk::TextView*> find_targets();
-  Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image);
+  // The notes column: the page width minus the page margins. Page view uses
+  // the sheet on screen. Draft measures the page column the note would use.
+  int note_column_width() const;
+  // `column` minus the number gutter (the marks' own width and margins).
+  int note_view_width(int column, const Gtk::Widget& marks) const;
+  // Notes are a plain text view unless told otherwise, and that view keeps
+  // the width of the widest line it last laid out. Pin it to the column.
+  void fit_note_views();
+  // The body text column. A picture is not drawn wider than this.
+  int picture_column_limit() const;
+  // A cell picture stays inside the frame: 1px of border and 4px of margin
+  // on each side. `column_px` is the frame's width.
+  int picture_cell_limit(int column_px) const;
+  Glib::RefPtr<Gdk::Pixbuf> pixbuf_for(const Image& image, int limit = 0);
   // Pictures are pixbufs in the buffer, so a tag restyle cannot resize them.
-  // Drawn again from the file bytes at the current zoom.
+  // Drawn again from the file bytes at the current zoom. `limit` is
+  // picture_column_limit() or picture_cell_limit().
   void rescale_pictures();
-  void rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer);
+  void rescale_picture_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int limit);
   // commit_document()'s retagging when the text is the same and no picture
   // has to be placed. False otherwise.
   bool retag_paragraphs(const Document& before, const Document& after);
@@ -757,14 +771,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Disconnected in the destructor. The idle outlives a window that closes
   // before the next loop turn, and the clipboard test closes one that way.
   sigc::connection note_numbers_idle_;
-  Gtk::TextView notes_view_;
+  // The body's PageText: a GtkTextView keeps its widest line, so zooming
+  // out would leave the note running off the sheet.
+  PageText notes_view_;
   // A sheet after the first one that has a marker. The first sheet keeps
   // note_box_. Destroyed before the overlay, while it can still unparent.
   struct NoteBand {
     Gtk::Box box{Gtk::ORIENTATION_HORIZONTAL};
     Gtk::Fixed marks;
     Gtk::Label label;
-    Gtk::TextView view;
+    PageText view;
     std::vector<Gtk::Label*> numbers;
     std::vector<int> number_y;
     sigc::connection size_conn;

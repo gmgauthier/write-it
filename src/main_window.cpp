@@ -1163,6 +1163,7 @@ void MainWindow::apply_page_size()
   const int width = geometry().page_width;
   text_.set_layout_width(width);
   apply_margins();
+  fit_note_views();
   // Paragraph tags carry the text inset in their margins, so they are
   // restyled when the zoom or the view changes it.
   if (z != styled_zoom_ || view_ != styled_view_) {

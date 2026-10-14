@@ -213,12 +213,27 @@ void picture_span()
   const auto bad_zoom = writeit::picture_display_px(10, 10, 0);
   CHECK(bad_zoom.width == 1);
   CHECK(bad_zoom.height == 1);
+
+  // 0 leaves the zoomed size. A positive limit is the column or the cell,
+  // applied after the zoom, and the height follows. 180 * 341 / 360 is 170.5.
+  const auto open = writeit::picture_display_px(800, 400, 0.75, 0);
+  CHECK(open.width == 360);
+  CHECK(open.height == 180);
+  const auto limited = writeit::picture_display_px(800, 400, 0.75, 341);
+  CHECK(limited.width == 341);
+  CHECK(limited.height == 171);
+  const auto limited_in = writeit::picture_display_px(800, 400, 1.5, 400);
+  CHECK(limited_in.width == 400);
+  CHECK(limited_in.height == 200);
+  const auto under = writeit::picture_display_px(200, 100, 1.0, 456);
+  CHECK(under.width == 200);
+  CHECK(under.height == 100);
 }
 
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 346;
+constexpr int kChecks = 354;
 
 int main()
 {
