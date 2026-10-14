@@ -5919,6 +5919,15 @@ void MainWindow::find_next()
   text_.scroll_to(start);
 }
 
+bool selection_matches(const Glib::ustring& selected, const Glib::ustring& needle, bool match_case)
+{
+  if (needle.empty())
+    return false;
+  if (match_case)
+    return selected == needle;
+  return selected.casefold() == needle.casefold();
+}
+
 void MainWindow::replace_once()
 {
   if (!find_entry_ || !replace_entry_ || !buffer_)
@@ -5931,9 +5940,8 @@ void MainWindow::replace_once()
   Gtk::TextBuffer::iterator start;
   Gtk::TextBuffer::iterator end;
   if (buffer_->get_selection_bounds(start, end)) {
-    const Glib::ustring selected = buffer_->get_text(start, end);
-    const bool same = match_case ? selected == needle : selected.casefold() == needle.casefold();
-    if (same) {
+    const Glib::ustring selected = buffer_->get_slice(start, end, true);
+    if (selection_matches(selected, needle, match_case)) {
       const Run format = format_of(start);
       const int heading = heading_of(start);
       const int at = start.get_offset();

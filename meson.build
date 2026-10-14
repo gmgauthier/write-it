@@ -339,6 +339,12 @@ write_it_find_embedded_tests = executable(
   dependencies: [writeit_dep],
 )
 test('find-embedded', write_it_find_embedded_tests)
+write_it_replace_picture_tests = executable(
+  'write-it-replace-picture-tests',
+  'tests/test_replace_picture.cpp',
+  dependencies: [writeit_dep],
+)
+test('replace-picture', write_it_replace_picture_tests)
 
 write_it_page_tests = executable(
   'write-it-page-tests',

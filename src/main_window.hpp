@@ -43,6 +43,10 @@ struct FindHit {
 // and maps the folded match back onto the original characters.
 FindHit find_in_text(const Glib::ustring& doc, const Glib::ustring& needle, int origin,
                      bool match_case);
+// True when `selected` is the Find needle. A picture or table anchor is
+// U+FFFC in the slice, so a selection that only looks like the needle in
+// get_text() does not match and Replace will not delete the object.
+bool selection_matches(const Glib::ustring& selected, const Glib::ustring& needle, bool match_case);
 
 // What a paragraph tag carries: the paragraph's indents, alignment, list,
 // and style.
