@@ -10,7 +10,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where pull
 
 ## Status
 
-**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands.
+**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands. **`v2.0.0` is 2.0 M1.** Font colour, highlight, strikethrough, superscript, and subscript are in that release.
 
 | M2 item | State |
 |---|---|
@@ -86,15 +86,15 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - Everything in `src/` except `main.cpp` builds once as the `writeit_core` static library, which the app and every test link. A new `src/*.cpp` file goes in that one list in `meson.build`, never in a test target's own sources.
 - A test that opens a window is marked `is_parallel: false` in `meson.build`, so window tests never share the X display at the same time.
 - Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
-- Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag. That is the 1.0 shape, where each of M0–M5 was the branch. From 2.0 on, the branch is the release (`milestone-2`, `milestone-3`, …) and the milestones in section 9 are the order of work on it.
+- Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag. That is the 1.0 shape, where each of M0–M5 was the branch. From 2.0 on, the branch is the line (`milestone-2`, `milestone-3`, …) and the milestones in section 9 are the releases on it, in that order.
 - One Grok session does the work with Greg. It writes the change, runs the tests, opens the pull requests, and pushes the Gitea mirror. It merges only when Greg says to.
 - The session reads the code and runs the unit tests. The desktop suite runs locally, under Xvfb or `tests/ui-docker.sh`. Greg tries the change in a live window.
 - A pull request into a milestone branch merges once Greg says so and lint passes. Lint is the only required check. The Debian trixie and Devuan Excalibur jobs, and ASan and UBSan on Debian, still compile and run the unit tests on the pull request. The desktop suite stays local. A pull request does not have to be up to date with the milestone branch. If a pull request conflicts, the session fixes the conflict on that pull request.
 - A draft pull request from the milestone branch into `master` stays open while the milestone is under way, so CI tests the combined branch after every merge.
-- When every feature is in, Greg does one full live pass on the milestone branch head. Defects go back as small fix pull requests into the milestone branch. Then the milestone branch merges into `master` once, the branch is deleted, and it is tagged.
+- When Greg says a milestone is ready, he does a live pass on that head. Defects go back as small fix pull requests into the milestone branch. Then the branch merges into `master` and the milestone is tagged. The branch stays for the next minor, and the merge does not delete it. It is deleted when the next major is cut.
 - `master` is protected: a PR merges only when it is up to date with `master` and lint passes. Lint is the only required check. The two build-and-test jobs still compile and run the unit tests on the pull request. The desktop suite is suite `ui`. Run it on a machine with a display, under Xvfb, or in a local container with `tests/ui-docker.sh`. Milestone branches matching `m[0-9]*` and `milestone-*` are protected too. Their only required check is lint. Creating the branch does not wait on lint, and a pull request into one does not have to be up to date. Nobody bypasses either rule. Force-pushes are blocked on both. `master` also blocks deletion. Branches are updated by merging, not by rebasing.
 - Commits, pull request descriptions, and comments carry no role prefix. The git author is Greg Gauthier.
-- Each finished milestone gets an annotated tag (`m2`, `m3`, …) and no GitHub release. `v1.0.0` is the 1.0 release, with the `.deb`, the AppImage, and the source tarball. A bug fix after that is a patch tag (`v1.0.1`, …) with the same three artifacts. Pushing that tag runs `.gitea/workflows/release.yml` on Gitea Actions. The job builds the three files with `scripts/release.sh` and attaches them to the Gitea release and the GitHub release. It does not run the suite again.
+- 1.0's finished milestones got an annotated tag (`m2`, `m3`, …) and no GitHub release. `v1.0.0` is the 1.0 release, with the `.deb`, the AppImage, and the source tarball, and a bug fix on that line is a patch tag (`v1.0.1`, …) with the same three artifacts. From 2.0 on, the first milestone of a major is `vX.0.0` and each milestone after it is the next minor (`v2.1.0`, `v2.2.0`). A fix to a release already out is a patch (`v2.0.1`). Pushing a `v*` tag runs `.gitea/workflows/release.yml` on Gitea Actions. The job builds the three files with `scripts/release.sh` and attaches them to the Gitea release and the GitHub release. It does not run the suite again.
 
 ## 4. Window
 
@@ -175,7 +175,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
 
-**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline. No colour in v1.
+**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline, colour, strikethrough, superscript, and subscript. Superscript and subscript do not apply together. The colour list is Word 97's, including Automatic.
 
 The font list and the size list match the other two apps. The size box lists 8, 9, 10, 11, 12, 14, 16, 18, 24, 36 and is editable: a typed size applies on Enter, to the selection. The font and the size apply inside a table cell as well: a selection changes, and with only the caret the next character typed there takes that face or size. Sizes are half points, so 10.5 and 8.5 are accepted and shown, and other fractions such as 10.3 are refused, as in Word 97. Spaces around a typed size are trimmed and leading zeros ignored, so “  12 ” and “00012” are 12. A refused entry shows one of these messages (“This is not a valid number.”, “The number must be between 1 and 1638.” or “Font sizes must be whole numbers or end in .5.”), and the box goes back to the text’s size, selected to type over. Sizes are clamped to 1–1638 pt. A new document starts at Sans 11.
 
@@ -193,7 +193,7 @@ The only keyboard is the Word 97 map in the menus above. WordPerfect 5.1’s fun
 
 The standard toolbar never grows an app-specific button. Groups, left to right: New Open Save, Print, Cut Copy Paste, Undo Redo.
 
-The format toolbar: font, size, bold, italic, underline, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering.
+The format toolbar: font, size, bold, italic, underline, font colour, highlight, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering. Font colour and highlight sit together after underline, which is where Word 97 puts the highlight next to the font colour.
 
 View → Side by side is on by default, so the two toolbars share one row. Turning it off stacks them, with the standard toolbar above the format toolbar.
 
@@ -343,9 +343,9 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 ## 9. Roadmap
 
-The end zone is Word 97 as Office 97 Standard shipped it on 16 January 1997. 1.0 is not that. Each row after 1.0 is one major release, tagged `vX.0.0`, and it starts after Pay-It 1.0 has been lived with, in the rotation in the suite note. A patch release does not add the next row. VBA stays out. Save keeps writing RTF.
+The end zone is Word 97 as Office 97 Standard shipped it on 16 January 1997. 1.0 is not that. Each row after 1.0 is one major line. Its first milestone is tagged `vX.0.0`, and the line starts after Pay-It 1.0 has been lived with, in the rotation in the suite note. A patch release does not add the next row. VBA stays out. Save keeps writing RTF.
 
-A major is one branch, cut from `master` when that release starts: `milestone-2`, then `milestone-3`, and so on. Its milestones are the order of feature pull requests into that branch. One milestone is one job, with a headless offline test for the slice. Word 97 decides the behaviour the table does not spell out, and the pull request writes that detail back into this file. The branch merges once, after the last milestone and a live pass, and that merge is the release tag. A milestone inside a major is not its own GitHub release.
+A major is one branch, cut from `master` when that line starts: `milestone-2`, then `milestone-3`, and so on. Its milestones are the order of feature pull requests into that branch. One milestone is one job, with a headless offline test for the slice. Word 97 decides the behaviour the table does not spell out, and the pull request writes that detail back into this file. The first milestone is that line's `.0.0` release, so 2.0 M1 is `v2.0.0` and 3.0 M1 is `v3.0.0`. Each milestone after it is the next minor, so 2.0 M2 is `v2.1.0` and 2.0 M3 is `v2.2.0`. A fix to a release that is already out is a patch, such as `v2.0.1`. Greg tags a milestone when he says it is ready. That tag is the release, with the `.deb`, the source tarball, and the AppImage. The branch stays open for the next minor.
 
 Names below are `2.0 M1`, `3.0 M1`, and so on, so they are not 1.0's M0–M5.
 
@@ -373,7 +373,11 @@ The rest of the Format menu a letter uses, and two table jobs 1.0 does not do. 1
 | **2.0 M6 — Row and column colour** | A selected row or column takes one background colour, and that colour round-trips. |
 | **2.0 M7 — Painter** | The format painter copies the format of M1–M4, and a cell's shading from M3 and M6. |
 
-**2.0 M1 — Character.** Format → Font… gains colour, strikethrough, superscript, and subscript. Highlight is the toolbar control Word 97 puts next to the font colour. Superscript and subscript do not apply together. The colour lists are Word 97's, including automatic. A run stores one of each. RTF round-trips them.
+**2.0 M1 — Character.** Format → Font… sets the font, the size, bold, italic, underline, the font colour, strikethrough, superscript, and subscript. The dialog shows the format at the start of the selection, or the format typing would use when nothing is selected. Its size box is the same half-point list as the toolbar. The format toolbar's font colour and highlight sit together after underline, which is where Word 97 puts the highlight next to the font colour. The font-colour button starts on Red and the highlight button starts on Yellow. A click uses the colour last chosen from that button, and moving the caret does not change the choice. Superscript and subscript do not apply together: turning one on turns the other off. A run stores one font colour, one highlight, strikethrough on or off, and one of superscript, subscript, or neither.
+
+The lists are Word 97's sixteen colours, in Word's order. The font colour list starts with Automatic. The highlight list starts with None. The sixteen are Black, Blue, Turquoise, Bright Green, Pink, Red, Yellow, White, Dark Blue, Teal, Green, Violet, Dark Red, Dark Yellow, Gray-50%, and Gray-25%. Their red, green, and blue values are the ones in Word's default colour table: 0 0 0, 0 0 255, 0 255 255, 0 255 0, 255 0 255, 255 0 0, 255 255 0, 255 255 255, 0 0 128, 0 128 128, 0 128 0, 128 0 128, 128 0 0, 128 128 0, 128 128 128, and 192 192 192.
+
+A file stores the font colour as `\cfN` into a colour table this program writes, with an empty first entry so 0 is automatic and 1 is black. Highlight is `\highlightN` with that same index, not a colour-table index. Strikethrough is `\strike` and `\strike0`. Superscript and subscript are `\super`, `\sub`, and `\nosupersub`. A colour this program does not list is read as the nearest of the sixteen. A footnote marker is still drawn raised, and the `\super` around it is not stored as superscript. A style carries the same attributes, and a value set on the run stays when the style changes.
 
 **2.0 M2 — Spacing.** Format → Paragraph… gains space before, space after, and line spacing. Line spacing is Word 97's list: single, 1.5, double, at least, exactly, and multiple. Before and after use the units from Tools → Options…. The screen and the page count follow the spacing. RTF round-trips it.
 

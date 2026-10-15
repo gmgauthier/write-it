@@ -1,3 +1,11 @@
+write-it (2.0.0-1) unstable; urgency=medium
+
+  * Format → Font… sets the font colour, strikethrough, superscript, and subscript.
+  * The format toolbar sets the font colour and the highlight.
+  * A footnote number stays beside its own note.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Thu, 15 Oct 2026 20:30:00 +0100
+
 write-it (1.0.23-1) unstable; urgency=medium
 
   * Typing in a long document measures the page by paragraph.

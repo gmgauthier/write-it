@@ -144,6 +144,35 @@ void proxy_combo(Gtk::ToolItem& tool, Gtk::ComboBoxText& combo, const char* labe
   attach_proxy(tool, *item, fill);
 }
 
+// Font colour or highlight in the overflow menu: a submenu of the palette,
+// the current one ticked. Choosing one applies it, as the button's arrow does.
+void proxy_ink(Gtk::MenuToolButton& button, const char* label, bool highlight,
+               const std::function<Ink()>& current, const std::function<void(Ink)>& apply)
+{
+  auto* item = Gtk::manage(new Gtk::MenuItem(label, true));
+  auto* menu = Gtk::manage(new Gtk::Menu());
+  item->set_submenu(*menu);
+  auto fill = [&button, item, menu, highlight, current, apply] {
+    item->set_sensitive(button.get_sensitive());
+    for (Gtk::Widget* child : menu->get_children())
+      delete child;
+    const Ink active = current();
+    for (int i = 0; i <= 16; ++i) {
+      const Ink ink = static_cast<Ink>(i);
+      auto* entry = Gtk::manage(new Gtk::CheckMenuItem(ink_name(ink, highlight)));
+      entry->set_draw_as_radio(true);
+      entry->set_active(ink == active);
+      entry->signal_toggled().connect([entry, ink, current, apply] {
+        if (entry->get_active() && current() != ink)
+          apply(ink);
+      });
+      menu->append(*entry);
+    }
+    menu->show_all();
+  };
+  attach_proxy(button, *item, fill);
+}
+
 // GTK shows a toolbar's overflow arrow partway through laying the toolbar
 // out and lays the arrow itself out only on a later pass, which narrowing
 // the window does not always bring: the arrow stayed 1 px at -1, with nothing
@@ -466,7 +495,7 @@ void MainWindow::build_menus()
   footnote_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_footnote));
 
   auto* format_menu = add_menu("F_ormat");
-  add_item(*format_menu, "_Font…", false);
+  font_item_ = add_item(*format_menu, "_Font…", true);
   bold_item_ = add_item(*format_menu, "_Bold", true, GDK_KEY_b, Gdk::CONTROL_MASK);
   italic_item_ = add_item(*format_menu, "_Italic", true, GDK_KEY_i, Gdk::CONTROL_MASK);
   underline_item_ = add_item(*format_menu, "_Underline", true, GDK_KEY_u, Gdk::CONTROL_MASK);
@@ -619,6 +648,39 @@ void MainWindow::build_toolbars()
   bold_toggle_ = toggle("format-text-bold", "Bold", false, true);
   italic_toggle_ = toggle("format-text-italic", "Italic", false, true);
   underline_toggle_ = toggle("format-text-underline", "Underline", false, true);
+  auto ink_button = [this](const char* tip, bool highlight) {
+    auto* button = Gtk::manage(new Gtk::MenuToolButton());
+    button->set_tooltip_text(tip);
+    auto* image = Gtk::manage(new Gtk::Image());
+    image->show();
+    button->set_icon_widget(*image);
+    auto* menu = Gtk::manage(new Gtk::Menu());
+    for (int i = 0; i <= 16; ++i) {
+      const Ink ink = static_cast<Ink>(i);
+      auto* item = Gtk::manage(new Gtk::MenuItem(ink_name(ink, highlight)));
+      item->signal_activate().connect([this, ink, highlight] {
+        if (highlight)
+          apply_highlight(ink);
+        else
+          apply_font_color(ink);
+      });
+      menu->append(*item);
+    }
+    menu->show_all();
+    button->set_menu(*menu);
+    button->signal_clicked().connect([this, highlight] {
+      if (highlight)
+        apply_highlight(highlight_ink_);
+      else
+        apply_font_color(font_ink_);
+    });
+    format_bar_.append(*button);
+    return button;
+  };
+  font_color_button_ = ink_button("Font Color", false);
+  highlight_button_ = ink_button("Highlight", true);
+  paint_ink(font_color_button_, font_ink_);
+  paint_ink(highlight_button_, highlight_ink_);
   format_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   align_left_toggle_ = toggle("format-justify-left", "Align Left", true, true);
   align_center_toggle_ = toggle("format-justify-center", "Center", false, true);
@@ -646,6 +708,14 @@ void MainWindow::build_toolbars()
   proxy_toggle(*bold_toggle_, "_Bold");
   proxy_toggle(*italic_toggle_, "_Italic");
   proxy_toggle(*underline_toggle_, "_Underline");
+  if (font_color_button_)
+    proxy_ink(
+        *font_color_button_, "Font _Color", false, [this] { return font_ink_; },
+        [this](Ink ink) { apply_font_color(ink); });
+  if (highlight_button_)
+    proxy_ink(
+        *highlight_button_, "_Highlight", true, [this] { return highlight_ink_; },
+        [this](Ink ink) { apply_highlight(ink); });
   Gtk::RadioMenuItem::Group align_group;
   proxy_align(*align_left_toggle_, "Align _Left", align_group);
   proxy_align(*align_center_toggle_, "_Center", align_group);
