@@ -10,7 +10,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where pull
 
 ## Status
 
-**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands. **`v2.0.0` is 2.0 M1.** Font colour, highlight, strikethrough, superscript, and subscript are in that release.
+**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands. **`v2.0.0` is 2.0 M1.** Font colour, highlight, strikethrough, superscript, and subscript are in that release. **`v2.1.0` is 2.0 M2.** Space before, space after, and line spacing are in that release.
 
 | M2 item | State |
 |---|---|
