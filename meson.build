@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '2.0.0',
+  version: '2.1.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -202,6 +202,21 @@ write_it_character_tests = executable(
   dependencies: [writeit_dep],
 )
 test('character', write_it_character_tests)
+
+write_it_spacing_tests = executable(
+  'write-it-spacing-tests',
+  'tests/test_spacing.cpp',
+  dependencies: [writeit_dep],
+)
+test('spacing', write_it_spacing_tests)
+
+# Enter twice after a page break must not start another sheet.
+write_it_double_return_tests = executable(
+  'write-it-double-return-tests',
+  'tests/test_double_return.cpp',
+  dependencies: [writeit_dep],
+)
+test('double-return', with_display, args: [write_it_double_return_tests.full_path()], depends: write_it_double_return_tests, timeout: 60, suite: 'ui')
 
 write_it_plain_breaks_tests = executable(
   'write-it-plain-breaks-tests',

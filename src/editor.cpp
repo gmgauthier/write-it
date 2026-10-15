@@ -242,6 +242,22 @@ void append_field(std::string& name, int value)
   name += std::to_string(value);
 }
 
+void append_spacing(std::string& name, const ParaFormat& format)
+{
+  append_field(name, format.spacing.before);
+  append_field(name, format.spacing.after);
+  append_field(name, static_cast<int>(format.spacing.rule));
+  append_field(name, format.spacing.value);
+  append_field(name, format.basis);
+}
+
+// Single with no space keeps the tag this program has always written. Anything
+// else adds before, after, the line rule, its value, and the basis size.
+bool spacing_in_tag(const ParaFormat& format)
+{
+  return !(format.spacing == Spacing{});
+}
+
 std::string para_name(const ParaFormat& format)
 {
   const Indents& indents = format.indents;
@@ -254,7 +270,13 @@ std::string para_name(const ParaFormat& format)
     append_field(name, value);
   // A plain paragraph keeps the fourteen-part tag it has always had.
   const bool plain = !format.page_break && format.cell.table == 0 && format.cell.widths.empty();
+  if (plain && !spacing_in_tag(format)) {
+    name += '\x1f';
+    name += format.style;
+    return name;
+  }
   if (plain) {
+    append_spacing(name, format);
     name += '\x1f';
     name += format.style;
     return name;
@@ -268,6 +290,8 @@ std::string para_name(const ParaFormat& format)
   append_field(name, static_cast<int>(format.cell.widths.size()));
   for (int width : format.cell.widths)
     append_field(name, width);
+  if (spacing_in_tag(format))
+    append_spacing(name, format);
   name += '\x1f';
   name += format.style;
   return name;
@@ -288,11 +312,14 @@ bool parse_para(const std::string& name, ParaFormat& format)
       current.push_back(name[i]);
     }
   }
-  // Thirteen numbers, then the style's name. A page break or a table cell
-  // adds its own numbers before the style.
+  // Thirteen numbers, then the style's name. Spacing adds five numbers before
+  // the style. A page break or a table cell adds its own numbers, and spacing
+  // after the column widths. A tag from before spacing still parses.
   const bool legacy = parts.size() == 14;
+  const bool spaced_plain = parts.size() == 19;
   int nwidths = 0;
-  if (!legacy) {
+  bool spaced_cell = false;
+  if (!legacy && !spaced_plain) {
     if (parts.size() < 21)
       return false;
     try {
@@ -300,11 +327,18 @@ bool parse_para(const std::string& name, ParaFormat& format)
     } catch (const std::exception&) {
       return false;
     }
-    if (nwidths < 0 || nwidths > kMaxTableColumns ||
-        parts.size() != static_cast<size_t>(21 + nwidths))
+    if (nwidths < 0 || nwidths > kMaxTableColumns)
+      return false;
+    if (parts.size() == static_cast<size_t>(21 + nwidths))
+      spaced_cell = false;
+    else if (parts.size() == static_cast<size_t>(26 + nwidths))
+      spaced_cell = true;
+    else
       return false;
   }
-  const size_t numbers = legacy ? 13 : static_cast<size_t>(20 + nwidths);
+  const size_t numbers = legacy         ? 13
+                         : spaced_plain ? 18
+                                        : static_cast<size_t>(20 + nwidths + (spaced_cell ? 5 : 0));
   std::vector<int> values;
   try {
     for (size_t i = 0; i < numbers; ++i)
@@ -329,7 +363,18 @@ bool parse_para(const std::string& name, ParaFormat& format)
   format.direct = static_cast<unsigned>(values[12]);
   format.page_break = false;
   format.cell = Cell{};
-  if (!legacy) {
+  format.spacing = Spacing{};
+  format.basis = 22;
+  if (spaced_plain) {
+    if (values[15] < 0 || values[15] > static_cast<int>(LineRule::Multiple))
+      return false;
+    format.spacing.before = values[13];
+    format.spacing.after = values[14];
+    format.spacing.rule = static_cast<LineRule>(values[15]);
+    format.spacing.value = values[16];
+    format.basis = values[17];
+    format.spacing = clamp_spacing(format.spacing);
+  } else if (!legacy) {
     format.page_break = values[13] != 0;
     format.cell.table = values[14];
     format.cell.row = values[15];
@@ -338,6 +383,17 @@ bool parse_para(const std::string& name, ParaFormat& format)
     format.cell.columns = values[18];
     for (int i = 0; i < nwidths; ++i)
       format.cell.widths.push_back(values[static_cast<size_t>(20 + i)]);
+    if (spaced_cell) {
+      const size_t at = static_cast<size_t>(20 + nwidths);
+      if (values[at + 2] < 0 || values[at + 2] > static_cast<int>(LineRule::Multiple))
+        return false;
+      format.spacing.before = values[at];
+      format.spacing.after = values[at + 1];
+      format.spacing.rule = static_cast<LineRule>(values[at + 2]);
+      format.spacing.value = values[at + 3];
+      format.basis = values[at + 4];
+      format.spacing = clamp_spacing(format.spacing);
+    }
   }
   format.style = parts.back();
   return true;
@@ -357,19 +413,30 @@ int heading_level_name(const std::string& name)
   return 0;
 }
 
-// A cell's own paragraph tag: indents and alignment only. The body's para
-// tag carries the page margins, so a cell does not use it.
-std::string cpara_name(const Indents& indents, Align align)
+// A cell's own paragraph tag: indents and alignment, and spacing when the
+// paragraph has any. The body's para tag carries the page margins, so a cell
+// does not use it. Four numbers is a cell from before spacing.
+std::string cpara_name(const Indents& indents, Align align, const Spacing& spacing, int basis,
+                       int heading)
 {
   std::string name = "cpara";
   append_field(name, indents.left);
   append_field(name, indents.right);
   append_field(name, indents.first);
   append_field(name, static_cast<int>(align));
+  if (spacing == Spacing{})
+    return name;
+  append_field(name, spacing.before);
+  append_field(name, spacing.after);
+  append_field(name, static_cast<int>(spacing.rule));
+  append_field(name, spacing.value);
+  append_field(name, basis);
+  append_field(name, heading);
   return name;
 }
 
-bool parse_cpara(const std::string& name, Indents& indents, Align& align)
+bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacing& spacing,
+                 int& basis, int& heading)
 {
   const std::string prefix = std::string("cpara") + '\x1f';
   if (name.compare(0, prefix.size(), prefix) != 0)
@@ -392,12 +459,27 @@ bool parse_cpara(const std::string& name, Indents& indents, Align& align)
       current.push_back(name[i]);
     }
   }
-  if (values.size() != 4 || values[3] < 0 || values[3] > static_cast<int>(Align::Justify))
+  if ((values.size() != 4 && values.size() != 10) || values[3] < 0 ||
+      values[3] > static_cast<int>(Align::Justify))
     return false;
   indents.left = values[0];
   indents.right = values[1];
   indents.first = values[2];
   align = static_cast<Align>(values[3]);
+  spacing = Spacing{};
+  basis = 22;
+  heading = 0;
+  if (values.size() == 10) {
+    if (values[6] < 0 || values[6] > static_cast<int>(LineRule::Multiple))
+      return false;
+    spacing.before = values[4];
+    spacing.after = values[5];
+    spacing.rule = static_cast<LineRule>(values[6]);
+    spacing.value = values[7];
+    basis = values[8];
+    heading = values[9];
+    spacing = clamp_spacing(spacing);
+  }
   return true;
 }
 
@@ -1310,6 +1392,8 @@ Document MainWindow::capture() const
         paragraph.direct = pending_para_.direct;
         paragraph.page_break = pending_para_.page_break;
         paragraph.cell = pending_para_.cell;
+        paragraph.spacing = pending_para_.spacing;
+        paragraph.basis = pending_para_.basis;
       } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
         paragraph.align = doc.paragraphs.back().align;
@@ -1318,7 +1402,10 @@ Document MainWindow::capture() const
         paragraph.direct = doc.paragraphs.back().direct;
         // A new paragraph in a cell stays in that cell. A page break belongs
         // to the paragraph that has it, and is not copied onto the next one.
+        // Spacing does follow, the way the indents do.
         paragraph.cell = doc.paragraphs.back().cell;
+        paragraph.spacing = doc.paragraphs.back().spacing;
+        paragraph.basis = doc.paragraphs.back().basis;
       }
     }
     // The outline level belongs to the paragraph's style. A heading tag on
@@ -1375,6 +1462,8 @@ Document MainWindow::capture() const
           paragraph.direct = format.direct;
           paragraph.page_break = format.page_break;
           paragraph.cell = format.cell;
+          paragraph.spacing = format.spacing;
+          paragraph.basis = format.basis;
           have_para = true;
         }
       }
@@ -1510,6 +1599,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       pending_para_ = para_format(paragraph);
       pending_para_.indents = clamp_indents(paragraph.indents);
       pending_para_.list = clamp_list(paragraph.list);
+      pending_para_.spacing = clamp_spacing(paragraph.spacing);
       pending_para_set_ = true;
       if (paragraph.mark) {
         pending_mark_ = *paragraph.mark;
@@ -1537,6 +1627,9 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   // to the body insert here would send a cell on a later page back to the top.
   if (!hold_scroll_)
     text_.scroll_to(buffer_->get_insert());
+  // Spaced paragraph tags were added at the top of the table. Headings, the
+  // draft gap, and the seams go back above them.
+  raise_headings();
   loading_ = false;
   list_lines_valid_ = false;
   refresh_stories();
@@ -2299,8 +2392,13 @@ void MainWindow::restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
     }
     Indents indents;
     Align align = Align::Left;
-    if (parse_cpara(tag_name(tag), indents, align))
-      style_cell_para(tag, indents, align);
+    Spacing spacing;
+    int basis = 22;
+    int heading = 0;
+    if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading)) {
+      std::string font = "Sans";
+      style_cell_para(tag, indents, align, spacing, basis, heading, font);
+    }
   });
 }
 
@@ -2386,8 +2484,104 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::heading_tag(int level)
   return heading_tag_on(buffer_, level);
 }
 
+namespace {
+
+// The font's line, in pixels, at this zoom. Line spacing adds to this. It
+// does not use the page's twip scale: that scale and Pango's do not match,
+// and the gap has to match the line GTK draws.
+int line_box_px(const Glib::RefPtr<Pango::Context>& context, double zoom, int basis,
+                const std::string& font)
+{
+  const int half = basis >= 2 ? basis : 22;
+  const double factor = zoom > 0 ? zoom : 1.0;
+  const double points = (half / 2.0) * factor;
+  Pango::FontDescription desc;
+  desc.set_family(font.empty() ? "Sans" : font);
+  desc.set_size(static_cast<int>(std::lround(points * PANGO_SCALE)));
+  if (!context)
+    return std::max(1, static_cast<int>(std::lround(points * 96.0 / 72.0)));
+  const Pango::FontMetrics metrics = context->get_metrics(desc);
+  return std::max(1, (metrics.get_ascent() + metrics.get_descent()) / PANGO_SCALE);
+}
+
+}  // namespace
+
+void MainWindow::apply_spacing_pixels(const Glib::RefPtr<Gtk::TextTag>& tag, const Spacing& spacing,
+                                      int basis, const std::string& font, int heading,
+                                      bool page_break) const
+{
+  if (!tag)
+    return;
+  const Spacing clamped = clamp_spacing(spacing);
+  const double zoom = std::max(0.5, zoom_factor());
+  // get_pango_context() is not const. The metrics do not change the page.
+  auto context = const_cast<PageText&>(text_).get_pango_context();
+  const int box = line_box_px(context, zoom_factor(), basis, font);
+  int extra = 0;
+  switch (clamped.rule) {
+    case LineRule::OneHalf:
+      extra = std::max(0, (box + 1) / 2);
+      break;
+    case LineRule::Double:
+      extra = box;
+      break;
+    case LineRule::AtLeast:
+    case LineRule::Exactly:
+      // GtkTextView cannot draw a line shorter than the font. A tighter
+      // Exactly, or a multiple below one line, is stored and shown at the
+      // font's own line.
+      extra = std::max(0, indent_px(clamped.value) - box);
+      break;
+    case LineRule::Multiple:
+      if (clamped.value > 240)
+        extra = static_cast<int>(std::lround((clamped.value - 240) / 240.0 * box));
+      break;
+    case LineRule::Single:
+      break;
+  }
+  extra = std::max(0, extra);
+
+  // A page break's 18 replaces the heading's 8. Space before adds to
+  // whichever of those is in force. With neither, leave the property unset
+  // so a heading tag under this one can still open its own gap.
+  const int heading_above = heading > 0 ? static_cast<int>(8 * zoom) : 0;
+  int above = 0;
+  bool set_above = false;
+  if (page_break) {
+    above = 18;
+    set_above = true;
+  }
+  if (clamped.before > 0) {
+    above += indent_px(clamped.before);
+    if (heading > 0 && !page_break)
+      above += heading_above;
+    set_above = true;
+  }
+  if (set_above)
+    tag->property_pixels_above_lines() = above;
+  else
+    tag->property_pixels_above_lines_set() = false;
+
+  const int after_px = clamped.after > 0 ? indent_px(clamped.after) : 0;
+  if (extra > 0 || after_px > 0) {
+    int below = extra + after_px;
+    // This tag is raised over the heading, so it has to keep the heading's
+    // gap under the paragraph or that gap disappears.
+    if (heading > 0)
+      below += static_cast<int>(4 * zoom);
+    tag->property_pixels_below_lines() = below;
+  } else {
+    tag->property_pixels_below_lines_set() = false;
+  }
+  if (extra > 0)
+    tag->property_pixels_inside_wrap() = extra;
+  else
+    tag->property_pixels_inside_wrap_set() = false;
+}
+
 void MainWindow::style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents,
-                                 Align align) const
+                                 Align align, const Spacing& spacing, int basis, int heading,
+                                 const std::string& font) const
 {
   if (!tag)
     return;
@@ -2401,25 +2595,32 @@ void MainWindow::style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const In
     tag->property_justification() = Gtk::JUSTIFY_LEFT;
   // No indent leaves the cell view's own padding in charge. A tag margin
   // replaces that padding, the way a body paragraph tag replaces the page's.
-  if (indents == Indents{})
-    return;
-  const int hang = std::min(0, indents.first);
-  tag->property_left_margin() = std::max(0, indent_px(indents.left + hang));
-  tag->property_right_margin() = std::max(0, indent_px(indents.right));
-  tag->property_indent() = indent_px(indents.first);
+  // Spacing still applies when the indents are zero.
+  if (indents != Indents{}) {
+    const int hang = std::min(0, indents.first);
+    tag->property_left_margin() = std::max(0, indent_px(indents.left + hang));
+    tag->property_right_margin() = std::max(0, indent_px(indents.right));
+    tag->property_indent() = indent_px(indents.first);
+  }
+  apply_spacing_pixels(tag, spacing, basis, font, heading, false);
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
-                                                     const Indents& indents, Align align)
+                                                     const Paragraph& paragraph)
 {
   if (!buffer)
     return {};
-  const Glib::ustring name = cpara_name(indents, align);
+  const int basis = basis_half_points(paragraph);
+  const Glib::ustring name =
+      cpara_name(paragraph.indents, paragraph.align, paragraph.spacing, basis, paragraph.heading);
   auto table = buffer->get_tag_table();
   auto tag = table->lookup(name);
   if (!tag) {
     tag = Gtk::TextTag::create(name);
-    style_cell_para(tag, indents, align);
+    // Restyle passes Sans. Using the style's font here would make a zoom
+    // restyle jump to a different line.
+    style_cell_para(tag, paragraph.indents, paragraph.align, paragraph.spacing, basis,
+                    paragraph.heading, "Sans");
     table->add(tag);
   }
   return tag;
@@ -2430,25 +2631,31 @@ void MainWindow::tag_cell_paragraph(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
 {
   if (!buffer || from >= to)
     return;
-  if (auto tag = cell_para_tag(buffer, paragraph.indents, paragraph.align)) {
+  Glib::RefPtr<Gtk::TextTag> para;
+  if (auto tag = cell_para_tag(buffer, paragraph)) {
     buffer->apply_tag(tag, buffer->get_iter_at_offset(from), buffer->get_iter_at_offset(to));
+    para = tag;
   }
-  if (paragraph.heading < 1 || paragraph.heading > 6)
-    return;
-  auto heading = heading_tag_on(buffer, paragraph.heading);
-  if (!heading)
-    return;
-  for (int i = from; i < to;) {
-    if (buffer->get_iter_at_offset(i).get_char() == '\n') {
-      ++i;
-      continue;
+  if (paragraph.heading >= 1 && paragraph.heading <= 6) {
+    auto heading = heading_tag_on(buffer, paragraph.heading);
+    if (heading) {
+      for (int i = from; i < to;) {
+        if (buffer->get_iter_at_offset(i).get_char() == '\n') {
+          ++i;
+          continue;
+        }
+        int j = i + 1;
+        while (j < to && buffer->get_iter_at_offset(j).get_char() != '\n')
+          ++j;
+        buffer->apply_tag(heading, buffer->get_iter_at_offset(i), buffer->get_iter_at_offset(j));
+        i = j;
+      }
     }
-    int j = i + 1;
-    while (j < to && buffer->get_iter_at_offset(j).get_char() != '\n')
-      ++j;
-    buffer->apply_tag(heading, buffer->get_iter_at_offset(i), buffer->get_iter_at_offset(j));
-    i = j;
   }
+  // A new heading tag is added at the top. Spacing has to win those pixels,
+  // and it sets no weight, so the heading's look stays.
+  if (para && !(paragraph.spacing == Spacing{}))
+    para->set_priority(buffer->get_tag_table()->get_size() - 1);
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::draft_gap_tag()
@@ -2561,9 +2768,25 @@ void MainWindow::raise_headings()
     if (tag)
       tag->set_priority(table->get_size() - 1);
   }
+  // A paragraph's own spacing sits above its heading, or the heading's gap
+  // hides the space before. A page break alone is not raised: its 18 stays
+  // under the heading. List items are not raised either: their shift tag has
+  // to stay above the paragraph's margin, and a tag's priority is one number.
+  std::vector<Glib::RefPtr<Gtk::TextTag>> spaced;
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    ParaFormat format;
+    if (!parse_para(tag_name(tag), format))
+      return;
+    if (format.list.kind != ListKind::None || format.spacing == Spacing{})
+      return;
+    spaced.push_back(tag);
+  });
+  for (const auto& tag : spaced)
+    tag->set_priority(table->get_size() - 1);
   // A seam has to outrank a heading, or the heading's own space wins and the
   // gap between sheets never opens. Draft has no seam. Its gap sits above the
-  // heading and under the seam, and it sets no indent.
+  // heading and under the seam, and it sets no indent. Spacing stays under
+  // that gap, so a sheet's top still suppresses space before.
   raise_draft_gap();
   raise_seams();
 }
@@ -3483,6 +3706,8 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
   format.direct = raw.direct;
   format.page_break = raw.page_break;
   format.cell = raw.cell;
+  format.spacing = clamp_spacing(raw.spacing);
+  format.basis = raw.basis >= 2 ? raw.basis : 22;
   const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
@@ -3490,6 +3715,10 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
     tag = Gtk::TextTag::create(name);
     style_para_tag(tag, format);
     table->add(tag);
+    // A new tag sits at the top. Raise it under the draft gap once the
+    // document is on screen. Loading raises every tag together at the end.
+    if (!loading_ && format.list.kind == ListKind::None && !(format.spacing == Spacing{}))
+      raise_headings();
   }
   return tag;
 }
@@ -3499,13 +3728,6 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
 {
   if (format.cell.table != 0)
     tag->property_paragraph_background() = "#f4f4f4";
-  // Draft keeps this gap above a page break. Page view replaces it with the
-  // sheet seam. GTK's pixels-above is that gap, not space on every wrapped
-  // line. A plain paragraph leaves it unset.
-  // A page break on a cell paragraph is kept in the file and does not open a
-  // gap. The sheet break belongs to ordinary text.
-  if (format.page_break && format.cell.table == 0)
-    tag->property_pixels_above_lines() = 18;
   if (format.align == Align::Center)
     tag->property_justification() = Gtk::JUSTIFY_CENTER;
   else if (format.align == Align::Right)
@@ -3519,18 +3741,31 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
     tag->property_left_margin() = std::max(0, margin_left() + indent_px(indents.left));
     tag->property_right_margin() = margin_right() + indent_px(indents.right);
     tag->property_indent() = indent_px(list_text_start(indents)) - indent_px(indents.left);
-    return;
+  } else if (!(indents == Indents{})) {
+    // No indent leaves the view's page margins in charge. A tag's margin
+    // replaces the view's, so the page margin is added here. GTK hangs a
+    // negative indent from the first line; Word hangs the first line out
+    // from the rest. Moving the margin left by the hang lines them up.
+    const int hang = std::min(0, indents.first);
+    tag->property_left_margin() = std::max(0, margin_left() + indent_px(indents.left + hang));
+    tag->property_right_margin() = margin_right() + indent_px(indents.right);
+    tag->property_indent() = indent_px(indents.first);
   }
-  // No indent leaves the view's page margins in charge.
-  if (indents == Indents{})
-    return;
-  // A tag's margin replaces the view's, so the page margin is added here.
-  // GTK hangs a negative indent from the first line; Word hangs the first
-  // line out from the rest. Moving the margin left by the hang lines them up.
-  const int hang = std::min(0, indents.first);
-  tag->property_left_margin() = std::max(0, margin_left() + indent_px(indents.left + hang));
-  tag->property_right_margin() = margin_right() + indent_px(indents.right);
-  tag->property_indent() = indent_px(indents.first);
+  // Spacing still applies when the indents are zero, and on a list item.
+  // The list's shift tag does not set these pixels, so the gap shows. A
+  // heading that is also a list item can still hide space before.
+  int heading = 0;
+  std::string font = "Sans";
+  if (const Style* style = find_style(styles_, format.style)) {
+    if (style->heading >= 1 && style->heading <= 6)
+      heading = style->heading;
+    if (!style->format.font.empty())
+      font = style->format.font;
+  }
+  // A page break on a cell paragraph is kept in the file and does not open a
+  // gap. The sheet break belongs to ordinary text.
+  const bool page_break = format.page_break && format.cell.table == 0;
+  apply_spacing_pixels(tag, format.spacing, format.basis, font, heading, page_break);
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag_at(Gtk::TextIter iter) const
@@ -3655,6 +3890,29 @@ ParaFormat MainWindow::para_at(int offset) const
   return ParaFormat{};
 }
 
+int MainWindow::basis_half_at(int offset) const
+{
+  if (!buffer_)
+    return 22;
+  const int start = paragraph_start(offset);
+  const int end = paragraph_end(offset);
+  for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < end;
+       ++iter) {
+    const gunichar ch = iter.get_char();
+    if (ch == '\n' || ch == kPageBreakPad)
+      continue;
+    if (has_fmt(iter))
+      return half_points_of(format_of(iter).size);
+  }
+  if (end > start) {
+    auto nl = buffer_->get_iter_at_offset(end);
+    if (nl.backward_char() && nl.get_char() == '\n' && has_fmt(nl))
+      return half_points_of(format_of(nl).size);
+  }
+  const int tagged = para_at(offset).basis;
+  return tagged >= 2 ? tagged : 22;
+}
+
 Indents MainWindow::indents_at(int offset) const
 {
   return para_at(offset).indents;
@@ -3743,6 +4001,20 @@ void MainWindow::normalise_paragraphs()
       keeper = paragraph_start(newline_at);
   }
   const bool keeper_break = keeper >= 0 && para_at(keeper).page_break;
+  // Enter at the end of a sheet copies that break onto the new line. The
+  // line's previous character is the sheet's own newline, so the landing
+  // format still says page break, and the empty tail reports none: it is
+  // not a paragraph that had the break. The new line does not start a sheet.
+  // A break that lives only on the tail (no character of its own) is the
+  // keeper, and the line in front of it is what loses the copy.
+  const bool strip_new_end = newline_at >= 0 && newline_at + 1 >= count &&
+                             paragraph_start(newline_at) == newline_at && !keeper_break;
+  // Pending still names the paragraph that was empty, pad included. The tail
+  // after a trailing newline is a new paragraph and must not take that break.
+  // A break with no character stays pending: that tail is the sheet.
+  if (newline_at >= 0 && newline_at + 1 >= count && pending_para_set_ &&
+      paragraph_start(newline_at) != newline_at)
+    pending_para_.page_break = false;
   normalising_ = true;
   while (begin < count && begin <= last) {
     Glib::RefPtr<Gtk::TextTag> chosen;
@@ -3773,7 +4045,7 @@ void MainWindow::normalise_paragraphs()
       }
       uniform = false;
     }
-    if (keeper_break && begin != keeper && chosen) {
+    if (chosen && ((keeper_break && begin != keeper) || (strip_new_end && begin == newline_at))) {
       ParaFormat format;
       if (parse_para(tag_name(chosen), format) && format.page_break) {
         format.page_break = false;
@@ -3857,9 +4129,17 @@ void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
         format.direct |= kDirectFirst;
       if (format.align != paragraph.align || chose_align_)
         format.direct |= kDirectAlign;
+      if (format.spacing.before != paragraph.spacing.before)
+        format.direct |= kDirectBefore;
+      if (format.spacing.after != paragraph.spacing.after)
+        format.direct |= kDirectAfter;
+      if (!same_spacing_line(format.spacing, paragraph.spacing))
+        format.direct |= kDirectLine;
       paragraph.indents = format.indents;
       paragraph.align = format.align;
       paragraph.list = format.list;
+      paragraph.spacing = format.spacing;
+      paragraph.basis = format.basis;
       paragraph.direct = format.direct;
     }
   });
@@ -3895,6 +4175,10 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     paragraph.direct = format.direct;
     paragraph.page_break = format.page_break;
     paragraph.cell = format.cell;
+    paragraph.spacing = format.spacing;
+    // No runs here. The line's size comes from the buffer, or a 20 pt
+    // paragraph would be drawn as 11 pt after OK.
+    paragraph.basis = basis_half_at(at);
     paragraphs.push_back(paragraph);
   }
   edit(paragraphs);
@@ -3925,6 +4209,9 @@ void MainWindow::tag_paragraph(int start, const ParaFormat& format)
     pending_para_ = format;
     pending_para_.indents = clamp_indents(format.indents);
     pending_para_.list = clamp_list(format.list);
+    pending_para_.spacing = clamp_spacing(format.spacing);
+    if (pending_para_.basis < 2)
+      pending_para_.basis = 22;
     pending_para_set_ = true;
     return;
   }
@@ -4813,6 +5100,8 @@ Paragraph MainWindow::label_paragraph(size_t index, int offset) const
   paragraph.list = format.list;
   paragraph.style = format.style;
   paragraph.direct = format.direct;
+  paragraph.spacing = format.spacing;
+  paragraph.basis = format.basis;
   // What capture() would give list_label_layout(): the first run's format,
   // an empty paragraph's mark, or neither.
   const auto iter = buffer_->get_iter_at_offset(offset);
@@ -4830,28 +5119,20 @@ Paragraph MainWindow::label_paragraph(size_t index, int offset) const
 
 int MainWindow::natural_line_above(const Gtk::TextIter& iter) const
 {
-  // What sits above this paragraph when no page seam replaces it: a heading's
-  // space, or a page break's. The higher priority tag wins, as GTK draws it.
-  const int heading_px = static_cast<int>(8 * std::max(0.5, zoom_factor()));
+  // The gap GTK draws when no page seam replaces it: the highest tag that
+  // sets pixels above, other than a seam. Default spacing leaves a heading
+  // at its own gap and a draft sheet start at 18. A paragraph's space wins
+  // when that tag was raised.
   int best = -1;
   int pixels = 0;
   for (const auto& tag : iter.get_tags()) {
-    const std::string name = tag_name(tag);
-    if (is_page_seam(name))
+    if (is_page_seam(tag_name(tag)))
       continue;
-    int above = -1;
-    if (is_draft_gap(name))
-      above = 18;
-    else if (const int level = heading_level_name(name); level > 0)
-      above = heading_px;
-    else {
-      ParaFormat format;
-      if (parse_para(name, format) && format.page_break)
-        above = 18;
-    }
-    if (above >= 0 && tag->get_priority() >= best) {
+    if (!tag->property_pixels_above_lines_set())
+      continue;
+    if (tag->get_priority() >= best) {
       best = tag->get_priority();
-      pixels = above;
+      pixels = tag->property_pixels_above_lines();
     }
   }
   return pixels;
@@ -6170,11 +6451,15 @@ void MainWindow::sync_list_controls()
 
 void MainWindow::on_paragraph()
 {
-  // Word 97's Format > Paragraph alignment and indentation, in the unit
-  // Tools > Options... chose. Spacing waits for 2.0.
+  // Word 97's Format > Paragraph: alignment, indentation, and spacing, in
+  // the unit Tools > Options... chose.
   const Units units = settings_.units;
-  const Indents current = indents_at(cursor_offset());
-  const Align current_align = para_at(cursor_offset()).align;
+  const int caret = cursor_offset();
+  const ParaFormat current_para = para_at(caret);
+  const Indents current = current_para.indents;
+  const Align current_align = current_para.align;
+  const Spacing current_spacing = current_para.spacing;
+  const double font_pt = std::min(1584.0, size_from_half_points(basis_half_at(caret)));
   Gtk::Dialog dialog("Paragraph", *this, true);
   dialog.set_resizable(false);
   dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
@@ -6307,12 +6592,197 @@ void MainWindow::on_paragraph()
 
   frame->add(*grid);
   dialog.get_content_area()->pack_start(*frame, Gtk::PACK_SHRINK);
+
+  // Spacing. Before and after use the Options unit. At least and Exactly
+  // take a point size. Multiple takes a number of lines. Single, 1.5 and
+  // Double leave At alone.
+  auto* spacing_frame = Gtk::manage(new Gtk::Frame("Spacing"));
+  auto* sgrid = Gtk::manage(new Gtk::Grid());
+  sgrid->set_row_spacing(8);
+  sgrid->set_column_spacing(12);
+  sgrid->set_margin_top(8);
+  sgrid->set_margin_bottom(12);
+  sgrid->set_margin_start(12);
+  sgrid->set_margin_end(12);
+  spacing_frame->set_margin_bottom(12);
+  spacing_frame->set_margin_start(12);
+  spacing_frame->set_margin_end(12);
+  auto* before = spin(current_spacing.before);
+  auto* after = spin(current_spacing.after);
+  const double before_shown = before->get_value();
+  const double after_shown = after->get_value();
+  auto* line = Gtk::manage(new Gtk::ComboBoxText());
+  line->append("Single");
+  line->append("1.5 lines");
+  line->append("Double");
+  line->append("At least");
+  line->append("Exactly");
+  line->append("Multiple");
+  const int initial_rule = static_cast<int>(current_spacing.rule);
+  line->set_active(initial_rule);
+  auto at_points = [](int row) {
+    return row == static_cast<int>(LineRule::AtLeast) || row == static_cast<int>(LineRule::Exactly);
+  };
+  auto uses_at = [at_points](int row) {
+    return at_points(row) || row == static_cast<int>(LineRule::Multiple);
+  };
+  double initial_at = font_pt;
+  if (at_points(initial_rule))
+    initial_at = current_spacing.value / 20.0;
+  else if (initial_rule == static_cast<int>(LineRule::Multiple))
+    initial_at = current_spacing.value / 240.0;
+  auto* at = Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(0, 0, 1584, 1, 6), 1, 2));
+  at->set_numeric(false);
+  at->set_update_policy(Gtk::UPDATE_IF_VALID);
+  at->set_width_chars(8);
+  at->set_activates_default(true);
+  struct AtTyped {
+    bool bad = false;
+    double kept = 0;
+  };
+  auto at_typed = std::make_shared<AtTyped>();
+  auto format_at = [](double value, bool points) {
+    const int scaled = static_cast<int>(std::lround(std::max(0.0, value) * 100.0));
+    const int whole = scaled / 100;
+    const int frac = scaled % 100;
+    std::string text = std::to_string(whole);
+    if (frac != 0) {
+      text.push_back('.');
+      text.push_back(static_cast<char>('0' + frac / 10));
+      if (frac % 10 != 0)
+        text.push_back(static_cast<char>('0' + frac % 10));
+    }
+    if (points)
+      text += " pt";
+    return text;
+  };
+  auto accept_at = [](const std::string& text, bool points, double& number) {
+    size_t i = 0;
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+      ++i;
+    const size_t from = i;
+    if (i < text.size() && (text[i] == '+' || text[i] == '-'))
+      ++i;
+    bool dot = false;
+    size_t digits = 0;
+    for (; i < text.size(); ++i) {
+      const unsigned char c = static_cast<unsigned char>(text[i]);
+      if (std::isdigit(c))
+        ++digits;
+      else if (text[i] == '.' && !dot)
+        dot = true;
+      else
+        break;
+    }
+    if (digits == 0)
+      return false;
+    try {
+      number = std::stod(text.substr(from, i - from));
+    } catch (const std::exception&) {
+      return false;
+    }
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+      ++i;
+    std::string suffix = text.substr(i);
+    while (!suffix.empty() && std::isspace(static_cast<unsigned char>(suffix.back())))
+      suffix.pop_back();
+    for (char& c : suffix)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (points) {
+      if (!suffix.empty() && suffix != "pt" && suffix != "pts" && suffix != "point" &&
+          suffix != "points")
+        return false;
+      return number >= 0 && number <= 1584;
+    }
+    if (!suffix.empty() && suffix != "li" && suffix != "line" && suffix != "lines")
+      return false;
+    return number >= 0 && number <= 132;
+  };
+  at->signal_output().connect(
+      [at, line, at_typed, format_at] {
+        if (at_typed->bad && at->get_value() == at_typed->kept)
+          return true;
+        at_typed->bad = false;
+        const bool points = line->get_active_row_number() != static_cast<int>(LineRule::Multiple);
+        at->set_text(format_at(at->get_value(), points));
+        return true;
+      },
+      false);
+  at->signal_input().connect(
+      [at, line, at_typed, accept_at](double* value) {
+        double parsed = 0;
+        const bool points = line->get_active_row_number() != static_cast<int>(LineRule::Multiple);
+        if (accept_at(at->get_text().raw(), points, parsed)) {
+          at_typed->bad = false;
+          *value = parsed;
+          return 1;
+        }
+        at_typed->bad = true;
+        at_typed->kept = at->get_value();
+        *value = at_typed->kept;
+        return 1;
+      },
+      true);
+  at->signal_focus_out_event().connect(
+      [at, at_typed, line, format_at](GdkEventFocus*) {
+        at->update();
+        if (!at_typed->bad) {
+          const bool points = line->get_active_row_number() != static_cast<int>(LineRule::Multiple);
+          at->set_text(format_at(at->get_value(), points));
+        }
+        return false;
+      },
+      false);
+  auto tune = [at, uses_at](int row) {
+    at->set_sensitive(uses_at(row));
+    auto adj = at->get_adjustment();
+    if (row == static_cast<int>(LineRule::Multiple)) {
+      adj->set_upper(132);
+      adj->set_step_increment(0.5);
+      adj->set_page_increment(1);
+    } else {
+      adj->set_upper(1584);
+      adj->set_step_increment(1);
+      adj->set_page_increment(6);
+    }
+  };
+  at->get_adjustment()->set_upper(1584);
+  at->set_value(initial_at);
+  tune(initial_rule);
+  const double at_shown = at->get_value();
+  auto rule_was = std::make_shared<int>(initial_rule);
+  line->signal_changed().connect([line, at, rule_was, font_pt, at_points, tune] {
+    const int now = line->get_active_row_number();
+    const int previous = *rule_was;
+    // At least and Exactly share a point size. Coming from any other rule
+    // starts at the paragraph's font size. Multiple starts at 3, as Word does.
+    at->get_adjustment()->set_upper(1584);
+    if (at_points(now) && !at_points(previous))
+      at->set_value(font_pt);
+    else if (now == static_cast<int>(LineRule::Multiple) &&
+             previous != static_cast<int>(LineRule::Multiple))
+      at->set_value(3);
+    *rule_was = now;
+    tune(now);
+    at->update();
+  });
+  sgrid->attach(*label("Be_fore:", *before), 0, 0, 1, 1);
+  sgrid->attach(*before, 1, 0, 1, 1);
+  sgrid->attach(*label("Aft_er:", *after), 2, 0, 1, 1);
+  sgrid->attach(*after, 3, 0, 1, 1);
+  sgrid->attach(*label("Li_ne spacing:", *line), 0, 1, 1, 1);
+  sgrid->attach(*line, 1, 1, 1, 1);
+  sgrid->attach(*label("_At:", *at), 2, 1, 1, 1);
+  sgrid->attach(*at, 3, 1, 1, 1);
+  spacing_frame->add(*sgrid);
+  dialog.get_content_area()->pack_start(*spacing_frame, Gtk::PACK_SHRINK);
   dialog.show_all_children();
   // As in Word 97, OK on a choice that will not do says why and goes back to
   // the dialog with the field to fix selected, rather than quietly changing
   // the value: a field out of range or not a measure, a hanging indent past
   // the left margin, or indents that leave too little room for text.
   Indents chosen;
+  Spacing chosen_spacing;
   for (;;) {
     if (dialog.run() != Gtk::RESPONSE_OK) {
       text_.grab_focus();
@@ -6330,38 +6800,69 @@ void MainWindow::on_paragraph()
     fields.special = special->get_active_row_number();
     fields.special_was = special_was;
     const ParaCheck check = check_paragraph(fields);
-    if (check.field == ParaField::None) {
+    SpacingFields sfields;
+    sfields.units = units;
+    sfields.current = current_spacing;
+    sfields.before = before->get_text().raw();
+    sfields.after = after->get_text().raw();
+    sfields.at = at->get_text().raw();
+    sfields.before_shown = before_shown;
+    sfields.after_shown = after_shown;
+    sfields.at_shown = at_shown;
+    int row = line->get_active_row_number();
+    if (row < 0 || row > static_cast<int>(LineRule::Multiple))
+      row = 0;
+    sfields.rule = static_cast<LineRule>(row);
+    const SpacingCheck scheck =
+        check.field == ParaField::None ? check_spacing(sfields) : SpacingCheck{};
+    if (check.field == ParaField::None && scheck.field == SpacingField::None) {
       chosen = check.indents;
+      chosen_spacing = scheck.spacing;
       break;
     }
-    Gtk::MessageDialog message(dialog, check.message, false, Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK,
-                               true);
+    const bool indent_bad = check.field != ParaField::None;
+    Gtk::MessageDialog message(dialog, indent_bad ? check.message : scheck.message, false,
+                               Gtk::MESSAGE_WARNING, Gtk::BUTTONS_OK, true);
     message.set_title("Paragraph");
     message.run();
     message.hide();
-    Gtk::SpinButton* offending = check.field == ParaField::Left    ? left
-                                 : check.field == ParaField::Right ? right
-                                                                   : by;
+    Gtk::SpinButton* offending = by;
+    if (indent_bad) {
+      offending = check.field == ParaField::Left    ? left
+                  : check.field == ParaField::Right ? right
+                                                    : by;
+    } else if (scheck.field == SpacingField::Before) {
+      offending = before;
+    } else if (scheck.field == SpacingField::After) {
+      offending = after;
+    } else {
+      offending = at;
+    }
     offending->grab_focus();
     offending->select_region(0, -1);
   }
-  if (chosen == current) {
-    // Only what changed is applied, so a new alignment keeps each selected
-    // paragraph's own indents, and new indents keep each one's alignment.
-    const auto align = static_cast<Align>(alignment->get_active_row_number());
-    if (align == current_align) {
+  const auto align = static_cast<Align>(alignment->get_active_row_number());
+  const bool align_changed = align != current_align;
+  const bool indents_changed = !(chosen == current);
+  const bool spacing_changed = !(chosen_spacing == current_spacing);
+  // Only what changed is applied, so a new alignment keeps each selected
+  // paragraph's own indents, and new indents keep each one's alignment.
+  if (!indents_changed && !spacing_changed) {
+    if (!align_changed) {
       text_.grab_focus();
       return;
     }
     apply_align(align);
     return;
   }
-  const auto align = static_cast<Align>(alignment->get_active_row_number());
-  const bool align_changed = align != current_align;
-  apply_para_edit([chosen, align, align_changed](ParaFormat& format) {
-    format.indents = chosen;
+  apply_para_edit([chosen, align, align_changed, chosen_spacing, indents_changed,
+                   spacing_changed](ParaFormat& format) {
+    if (indents_changed)
+      format.indents = chosen;
     if (align_changed)
       format.align = align;
+    if (spacing_changed)
+      format.spacing = chosen_spacing;
   });
 }
 

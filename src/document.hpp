@@ -161,6 +161,29 @@ constexpr int kMinCellTwips = 200;
 // and \qj; Justify is GTK's JUSTIFY_FILL.
 enum class Align { Left, Center, Right, Justify };
 
+// Word 97's line spacing. Single, 1.5 and Double ignore `value`. At least and
+// Exactly store twips (0 through kMaxIndent, which is 0 pt through 1584 pt).
+// Multiple stores a line count in 240ths of a line: 240 is one line, and 132
+// lines is kMaxIndent.
+enum class LineRule { Single, OneHalf, Double, AtLeast, Exactly, Multiple };
+
+struct Spacing {
+  int before = 0;
+  int after = 0;
+  LineRule rule = LineRule::Single;
+  int value = 240;
+};
+
+// Named rules ignore value. At least, Exactly and Multiple compare it.
+bool same_spacing_line(const Spacing& a, const Spacing& b);
+Spacing clamp_spacing(Spacing spacing);
+// \sl and \slmult as read. sl 0 is single. A negative sl is exactly. A
+// positive sl with slmult is 240, 360, 480 or multiple; without it, at least.
+void apply_line_spacing(Spacing& spacing, int sl, int slmult);
+// The \sl and \slmult that write this rule back. Single is 0 and 0, which the
+// writer omits unless a style has to be turned off.
+void line_spacing_raw(const Spacing& spacing, int& sl, int& slmult);
+
 // A bulleted or numbered list item. The list sits on top of the indents: the
 // label hangs in the first-line indent and the text starts at the left one.
 // Numbers are not stored; list_numbers() works them out from the paragraphs.
@@ -222,6 +245,7 @@ struct Style {
   Run format;
   Indents indents;
   Align align = Align::Left;
+  Spacing spacing;
   // The outline level the style gives: 0 for body text, 1 through 6.
   int heading = 0;
 };
@@ -254,6 +278,7 @@ struct Paragraph {
   std::string style = kNormalStyle;
   Indents indents;
   Align align = Align::Left;
+  Spacing spacing;
   ListFormat list;
   std::vector<Run> runs;
   // An empty paragraph's own character format, its paragraph mark's in Word:
@@ -264,6 +289,10 @@ struct Paragraph {
   std::optional<Run> mark;
   // The paragraph format set directly (kDirect* bits below), as Run's.
   unsigned direct = 0;
+  // Half-points of the font the line spacing is drawn against. Display
+  // memory: it is not written and not compared. 0 means work it out from
+  // the runs, the paragraph mark, or 11 pt.
+  int basis = 0;
   // A table cell, or table 0 for an ordinary paragraph. Several paragraphs
   // may share a row and column: a cell holds more than one paragraph.
   Cell cell;
@@ -275,6 +304,10 @@ constexpr unsigned kDirectLeft = 1;
 constexpr unsigned kDirectRight = 2;
 constexpr unsigned kDirectFirst = 4;
 constexpr unsigned kDirectAlign = 8;
+constexpr unsigned kDirectBefore = 16;
+constexpr unsigned kDirectAfter = 32;
+// The line rule and its value, together.
+constexpr unsigned kDirectLine = 64;
 
 struct Document {
   std::vector<Paragraph> paragraphs;
@@ -305,6 +338,8 @@ bool operator==(const Cell& a, const Cell& b);
 bool operator!=(const Cell& a, const Cell& b);
 bool operator==(const Indents& a, const Indents& b);
 bool operator!=(const Indents& a, const Indents& b);
+bool operator==(const Spacing& a, const Spacing& b);
+bool operator!=(const Spacing& a, const Spacing& b);
 bool operator==(const ListFormat& a, const ListFormat& b);
 bool operator!=(const ListFormat& a, const ListFormat& b);
 bool operator==(const Run& a, const Run& b);
@@ -312,6 +347,10 @@ bool operator==(const Paragraph& a, const Paragraph& b);
 bool operator==(const Document& a, const Document& b);
 bool operator==(const Style& a, const Style& b);
 bool operator!=(const Style& a, const Style& b);
+
+// The first run's size, else the paragraph mark's, else a stored basis of at
+// least 1 pt, else 11 pt. Half-points, as RTF's \fsN.
+int basis_half_points(const Paragraph& paragraph);
 
 // Left and right stay between 0 and kMaxIndent. The first line may hang back
 // to the left margin and no further, and may indent up to kMaxIndent.

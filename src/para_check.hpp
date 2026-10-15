@@ -62,6 +62,35 @@ struct ParaCheck {
   Indents indents;
 };
 
+// Format > Paragraph's spacing, apart from the indent checks above so those
+// tests stay as they are. Before and after use Tools > Options. At least and
+// Exactly are a point size, 0 pt through 1584 pt. Multiple is a number of
+// lines, 0 through 132. Single, 1.5 and Double do not read At.
+enum class SpacingField { None, Before, After, At };
+
+struct SpacingFields {
+  Units units = Units::Inches;
+  Spacing current;
+  std::string before;
+  std::string after;
+  std::string at;
+  double before_shown = 0;
+  double after_shown = 0;
+  double at_shown = 0;
+  LineRule rule = LineRule::Single;
+};
+
+struct SpacingCheck {
+  SpacingField field = SpacingField::None;
+  std::string message;
+  Spacing spacing;
+};
+
+// Before, then After, then At when the rule uses it. An untouched field keeps
+// its twips. Multiple of 1, 1.5 or 2 is stored as single, 1.5 or double, which
+// is how \sl240, \sl360 and \sl480 with \slmult1 read back.
+SpacingCheck check_spacing(const SpacingFields& fields);
+
 // The fields first, Left, Right, then By (only when Special is on); then a
 // hanging indent past the left margin (indents_fit); then indents that leave
 // too little room for text: Left and Right, or the first line's start and

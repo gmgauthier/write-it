@@ -81,12 +81,19 @@ struct ParaFormat {
   // parses.
   bool page_break = false;
   Cell cell;
+  // Space before, space after, and line spacing. A tag written before this
+  // slice leaves them single with no space.
+  Spacing spacing;
+  // Half-points the line spacing is drawn against. 22 is 11 pt, which a tag
+  // from before this slice means.
+  int basis = 22;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
   return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
-         a.direct == b.direct && a.page_break == b.page_break && a.cell == b.cell;
+         a.direct == b.direct && a.page_break == b.page_break && a.cell == b.cell &&
+         a.spacing == b.spacing && a.basis == b.basis;
 }
 
 inline ParaFormat para_format(const Paragraph& paragraph)
@@ -99,6 +106,8 @@ inline ParaFormat para_format(const Paragraph& paragraph)
   format.direct = paragraph.direct;
   format.page_break = paragraph.page_break;
   format.cell = paragraph.cell;
+  format.spacing = paragraph.spacing;
+  format.basis = basis_half_points(paragraph);
   return format;
 }
 
@@ -397,13 +406,22 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
   void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
-  // A cell paragraph's indents and alignment. No page margin and no list.
-  void style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents,
-                       Align align) const;
+  // Space before, space after, and the extra a line-spacing rule adds. A page
+  // break's 18 stays. A heading's own gap is included when this tag is raised
+  // over the heading, because an unset property is what lets the heading show.
+  void apply_spacing_pixels(const Glib::RefPtr<Gtk::TextTag>& tag, const Spacing& spacing,
+                            int basis, const std::string& font, int heading, bool page_break) const;
+  // A cell paragraph's indents, alignment, and spacing. No page margin and no list.
+  void style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents, Align align,
+                       const Spacing& spacing, int basis, int heading,
+                       const std::string& font) const;
   Glib::RefPtr<Gtk::TextTag> cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
-                                           const Indents& indents, Align align);
+                                           const Paragraph& paragraph);
   Glib::RefPtr<Gtk::TextTag> para_tag_at(Gtk::TextIter iter) const;
   ParaFormat para_at(int offset) const;
+  // Half-points the paragraph's line spacing is drawn against: its first
+  // character, else the newline's format, else the tag, else 11 pt.
+  int basis_half_at(int offset) const;
   Indents indents_at(int offset) const;
   ParaFormat destination_para(int start, int end) const;
   int paragraph_start(int offset) const;
