@@ -312,6 +312,19 @@ void restyle_indents(Indents& indents, unsigned& direct, const Indents& from, co
     indents.first = to.first;
 }
 
+void restyle_spacing(Spacing& spacing, unsigned& direct, const Spacing& from, const Spacing& to)
+{
+  if (!own(direct, kDirectBefore, spacing.before != from.before))
+    spacing.before = to.before;
+  if (!own(direct, kDirectAfter, spacing.after != from.after))
+    spacing.after = to.after;
+  if (!own(direct, kDirectLine, !same_spacing_line(spacing, from))) {
+    spacing.rule = to.rule;
+    spacing.value = to.value;
+  }
+  spacing = clamp_spacing(spacing);
+}
+
 // Attribute by attribute, as restyle_run() does for a run.
 void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
 {
@@ -346,6 +359,7 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
   }
   if (!own(paragraph.direct, kDirectAlign, paragraph.align != from.align))
     paragraph.align = to.align;
+  restyle_spacing(paragraph.spacing, paragraph.direct, from.spacing, to.spacing);
   if (paragraph.heading == from.heading)
     paragraph.heading = to.heading;
   paragraph.style = to.name;
@@ -363,6 +377,7 @@ Style restyle_style(Style style, const Style& from, const Style& to)
   style.format = format;
   unsigned none = 0;
   restyle_indents(style.indents, none, from.indents, to.indents);
+  restyle_spacing(style.spacing, none, from.spacing, to.spacing);
   if (style.align == from.align)
     style.align = to.align;
   return style;
@@ -544,6 +559,113 @@ bool operator!=(const Indents& a, const Indents& b)
   return !(a == b);
 }
 
+bool same_spacing_line(const Spacing& a, const Spacing& b)
+{
+  if (a.rule != b.rule)
+    return false;
+  if (a.rule == LineRule::AtLeast || a.rule == LineRule::Exactly || a.rule == LineRule::Multiple)
+    return a.value == b.value;
+  return true;
+}
+
+bool operator==(const Spacing& a, const Spacing& b)
+{
+  return a.before == b.before && a.after == b.after && same_spacing_line(a, b);
+}
+
+bool operator!=(const Spacing& a, const Spacing& b)
+{
+  return !(a == b);
+}
+
+Spacing clamp_spacing(Spacing spacing)
+{
+  spacing.before = std::max(0, std::min(kMaxIndent, spacing.before));
+  spacing.after = std::max(0, std::min(kMaxIndent, spacing.after));
+  if (spacing.rule == LineRule::AtLeast || spacing.rule == LineRule::Exactly ||
+      spacing.rule == LineRule::Multiple)
+    spacing.value = std::max(0, std::min(kMaxIndent, spacing.value));
+  else {
+    spacing.rule = spacing.rule == LineRule::OneHalf || spacing.rule == LineRule::Double
+                       ? spacing.rule
+                       : LineRule::Single;
+    spacing.value = 240;
+  }
+  return spacing;
+}
+
+void apply_line_spacing(Spacing& spacing, int sl, int slmult)
+{
+  if (sl == 0) {
+    spacing.rule = LineRule::Single;
+    spacing.value = 240;
+    return;
+  }
+  if (sl < 0) {
+    spacing.rule = LineRule::Exactly;
+    spacing.value = -sl;
+    return;
+  }
+  if (slmult != 0) {
+    if (sl == 240)
+      spacing.rule = LineRule::Single;
+    else if (sl == 360)
+      spacing.rule = LineRule::OneHalf;
+    else if (sl == 480)
+      spacing.rule = LineRule::Double;
+    else {
+      spacing.rule = LineRule::Multiple;
+      spacing.value = sl;
+    }
+    return;
+  }
+  spacing.rule = LineRule::AtLeast;
+  spacing.value = sl;
+}
+
+void line_spacing_raw(const Spacing& spacing, int& sl, int& slmult)
+{
+  switch (spacing.rule) {
+    case LineRule::OneHalf:
+      sl = 360;
+      slmult = 1;
+      break;
+    case LineRule::Double:
+      sl = 480;
+      slmult = 1;
+      break;
+    case LineRule::AtLeast:
+      sl = spacing.value;
+      slmult = 0;
+      break;
+    case LineRule::Exactly:
+      sl = -spacing.value;
+      slmult = 0;
+      break;
+    case LineRule::Multiple:
+      sl = spacing.value;
+      slmult = 1;
+      break;
+    case LineRule::Single:
+      sl = 0;
+      slmult = 0;
+      break;
+  }
+}
+
+int basis_half_points(const Paragraph& paragraph)
+{
+  for (const Run& run : paragraph.runs) {
+    if (!run.text.empty() || run.note != 0 || run.image)
+      return half_points_of(run.size);
+  }
+  if (paragraph.mark)
+    return half_points_of(paragraph.mark->size);
+  if (paragraph.basis >= 2)
+    return paragraph.basis;
+  return 22;
+}
+
 bool operator==(const ListFormat& a, const ListFormat& b)
 {
   return a.kind == b.kind && a.level == b.level &&
@@ -558,7 +680,7 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
-         a.align == b.align && a.list == b.list && a.cell == b.cell &&
+         a.align == b.align && a.spacing == b.spacing && a.list == b.list && a.cell == b.cell &&
          a.page_break == b.page_break && same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
@@ -913,9 +1035,9 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& x = a.paragraphs[i];
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.style != y.style || x.indents != y.indents ||
-        x.align != y.align || x.list.kind != y.list.kind || x.list.level != y.list.level ||
-        x.cell != y.cell || x.page_break != y.page_break || !same_runs(x.runs, y.runs) ||
-        !same_mark(x, y))
+        x.align != y.align || x.spacing != y.spacing || x.list.kind != y.list.kind ||
+        x.list.level != y.list.level || x.cell != y.cell || x.page_break != y.page_break ||
+        !same_runs(x.runs, y.runs) || !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -943,7 +1065,7 @@ bool operator==(const Style& a, const Style& b)
 {
   return a.name == b.name && a.based_on == b.based_on && a.next == b.next &&
          same_format(a.format, b.format) && a.indents == b.indents && a.align == b.align &&
-         a.heading == b.heading;
+         a.spacing == b.spacing && a.heading == b.heading;
 }
 
 bool operator!=(const Style& a, const Style& b)
@@ -1190,6 +1312,15 @@ void take_paragraph_style(Paragraph& paragraph, const Style& to)
   }
   if ((paragraph.direct & kDirectAlign) == 0)
     paragraph.align = to.align;
+  if ((paragraph.direct & kDirectBefore) == 0)
+    paragraph.spacing.before = to.spacing.before;
+  if ((paragraph.direct & kDirectAfter) == 0)
+    paragraph.spacing.after = to.spacing.after;
+  if ((paragraph.direct & kDirectLine) == 0) {
+    paragraph.spacing.rule = to.spacing.rule;
+    paragraph.spacing.value = to.spacing.value;
+  }
+  paragraph.spacing = clamp_spacing(paragraph.spacing);
   paragraph.heading = to.heading;
   paragraph.style = to.name;
 }
