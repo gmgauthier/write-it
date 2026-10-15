@@ -28,6 +28,51 @@ struct Image {
 
 constexpr std::size_t kMaxImageBytes = 8u * 1024u * 1024u;
 
+// Word 97's font colours, in the order of Word's default colour table.
+// 0 is automatic for a font colour and none for a highlight. Highlight uses
+// this same index (\highlightN), not a colour-table lookup.
+enum class Ink : int {
+  Auto = 0,
+  Black = 1,
+  Blue = 2,
+  Cyan = 3,
+  Green = 4,
+  Magenta = 5,
+  Red = 6,
+  Yellow = 7,
+  White = 8,
+  DarkBlue = 9,
+  Teal = 10,
+  DarkGreen = 11,
+  Violet = 12,
+  DarkRed = 13,
+  DarkYellow = 14,
+  Gray50 = 15,
+  Gray25 = 16,
+};
+
+// Superscript and subscript do not apply together.
+enum class Script : int { None = 0, Super = 1, Sub = 2 };
+
+struct Rgb {
+  int red = 0;
+  int green = 0;
+  int blue = 0;
+};
+
+// Word 97's names. Index 0 is "Automatic" for a font colour and "None" for a
+// highlight. An index outside 0–16 is named as automatic.
+const char* ink_name(Ink ink, bool highlight);
+// Red, green, and blue. Automatic is 0, 0, 0, which is also black.
+Rgb ink_rgb(Ink ink);
+// The palette colour with this red, green, and blue, or the nearest of the
+// sixteen. A tie keeps the lower index. Automatic is not a match.
+Ink ink_from_rgb(int red, int green, int blue);
+// An index outside 0–16 is automatic.
+Ink ink_clamp(int index);
+// #RRGGBB of ink_rgb().
+std::string ink_hex(Ink ink);
+
 struct Run {
   std::string text;
   std::string font = "Sans";
@@ -36,6 +81,12 @@ struct Run {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  // One font colour, one highlight, strikethrough, and one of superscript,
+  // subscript, or neither. Highlight's Auto is none.
+  Ink color = Ink::Auto;
+  Ink highlight = Ink::Auto;
+  bool strike = false;
+  Script script = Script::None;
   // 1-based index into Document::notes. 0 is not a footnote marker. The
   // marker's text is the number the page shows.
   int note = 0;
@@ -54,6 +105,11 @@ constexpr unsigned kDirectSize = 2;
 constexpr unsigned kDirectBold = 4;
 constexpr unsigned kDirectItalic = 8;
 constexpr unsigned kDirectUnderline = 16;
+constexpr unsigned kDirectColor = 32;
+constexpr unsigned kDirectHighlight = 64;
+constexpr unsigned kDirectStrike = 128;
+// One bit: superscript and subscript do not apply together.
+constexpr unsigned kDirectScript = 256;
 
 // Paragraph indents in twips (1/1440 inch), the unit RTF writes. `first` is
 // the first line relative to `left`. A negative `first` is a hanging indent.
@@ -161,7 +217,8 @@ struct Style {
   std::string based_on;
   // The style Enter gives the next paragraph; empty for this one.
   std::string next;
-  // Font, size, bold, italic and underline. The text is unused.
+  // Font, size, bold, italic, underline, colour, highlight, strikethrough,
+  // and script. The text is unused.
   Run format;
   Indents indents;
   Align align = Align::Left;

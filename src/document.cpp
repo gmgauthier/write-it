@@ -400,6 +400,79 @@ void carry_style(Document& doc, std::vector<Style>& sheet, size_t index, const S
 
 }  // namespace
 
+namespace {
+
+const Rgb kInkRgb[] = {
+    {0, 0, 0},     {0, 0, 0},     {0, 0, 255},     {0, 255, 255},   {0, 255, 0},     {255, 0, 255},
+    {255, 0, 0},   {255, 255, 0}, {255, 255, 255}, {0, 0, 128},     {0, 128, 128},   {0, 128, 0},
+    {128, 0, 128}, {128, 0, 0},   {128, 128, 0},   {128, 128, 128}, {192, 192, 192},
+};
+
+const char* kInkNames[] = {
+    "Automatic", "Black",    "Blue",        "Turquoise", "Bright Green", "Pink",
+    "Red",       "Yellow",   "White",       "Dark Blue", "Teal",         "Green",
+    "Violet",    "Dark Red", "Dark Yellow", "Gray-50%",  "Gray-25%",
+};
+
+}  // namespace
+
+const char* ink_name(Ink ink, bool highlight)
+{
+  const int index = static_cast<int>(ink);
+  if (index <= 0 || index >= static_cast<int>(sizeof kInkNames / sizeof kInkNames[0]))
+    return highlight ? "None" : "Automatic";
+  return kInkNames[index];
+}
+
+Rgb ink_rgb(Ink ink)
+{
+  const int index = static_cast<int>(ink);
+  if (index < 0 || index >= static_cast<int>(sizeof kInkRgb / sizeof kInkRgb[0]))
+    return kInkRgb[0];
+  return kInkRgb[index];
+}
+
+Ink ink_from_rgb(int red, int green, int blue)
+{
+  Ink best = Ink::Black;
+  long best_d = LONG_MAX;
+  for (int i = 1; i <= 16; ++i) {
+    const Rgb c = kInkRgb[i];
+    const long dr = static_cast<long>(red) - c.red;
+    const long dg = static_cast<long>(green) - c.green;
+    const long db = static_cast<long>(blue) - c.blue;
+    const long d = dr * dr + dg * dg + db * db;
+    if (d < best_d) {
+      best_d = d;
+      best = static_cast<Ink>(i);
+    }
+  }
+  return best;
+}
+
+Ink ink_clamp(int index)
+{
+  if (index < 0 || index > 16)
+    return Ink::Auto;
+  return static_cast<Ink>(index);
+}
+
+std::string ink_hex(Ink ink)
+{
+  const Rgb c = ink_rgb(ink);
+  static const char* kDigits = "0123456789ABCDEF";
+  std::string out = "#000000";
+  auto put = [&](int value, int at) {
+    const int byte = std::max(0, std::min(255, value));
+    out[static_cast<size_t>(at)] = kDigits[(byte >> 4) & 0xF];
+    out[static_cast<size_t>(at + 1)] = kDigits[byte & 0xF];
+  };
+  put(c.red, 1);
+  put(c.green, 3);
+  put(c.blue, 5);
+  return out;
+}
+
 bool same_image(const std::optional<Image>& a, const std::optional<Image>& b)
 {
   if (a.has_value() != b.has_value())
@@ -413,7 +486,9 @@ bool same_image(const std::optional<Image>& a, const std::optional<Image>& b)
 bool same_look(const Run& a, const Run& b)
 {
   return a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
-         a.underline == b.underline && a.note == b.note && same_image(a.image, b.image);
+         a.underline == b.underline && a.color == b.color && a.highlight == b.highlight &&
+         a.strike == b.strike && a.script == b.script && a.note == b.note &&
+         same_image(a.image, b.image);
 }
 
 bool same_format(const Run& a, const Run& b)
@@ -1023,6 +1098,14 @@ void restyle_run(Run& run, const Style& from, const Style& to)
     run.italic = to.format.italic;
   if (!own(run.direct, kDirectUnderline, run.underline != f.underline))
     run.underline = to.format.underline;
+  if (!own(run.direct, kDirectColor, run.color != f.color))
+    run.color = to.format.color;
+  if (!own(run.direct, kDirectHighlight, run.highlight != f.highlight))
+    run.highlight = to.format.highlight;
+  if (!own(run.direct, kDirectStrike, run.strike != f.strike))
+    run.strike = to.format.strike;
+  if (!own(run.direct, kDirectScript, run.script != f.script))
+    run.script = to.format.script;
 }
 
 bool apply_style(Document& doc, size_t first, size_t last, const std::string& name)
@@ -1055,6 +1138,14 @@ void take_character(Run& run, const Run& format)
     run.italic = format.italic;
   if ((run.direct & kDirectUnderline) == 0)
     run.underline = format.underline;
+  if ((run.direct & kDirectColor) == 0)
+    run.color = format.color;
+  if ((run.direct & kDirectHighlight) == 0)
+    run.highlight = format.highlight;
+  if ((run.direct & kDirectStrike) == 0)
+    run.strike = format.strike;
+  if ((run.direct & kDirectScript) == 0)
+    run.script = format.script;
 }
 
 }  // namespace

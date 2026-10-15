@@ -240,10 +240,10 @@ bool skip_destination(const std::string& word)
   // pict, header, footer, footnote, and shppict are read. The first-page,
   // left, and right stories are not, and nonshppict is the metafile fallback
   // beside a real picture.
-  return word == "stylesheet" || word == "info" || word == "colortbl" || word == "object" ||
-         word == "footerf" || word == "footerl" || word == "footerr" || word == "headerf" ||
-         word == "headerl" || word == "headerr" || word == "fldinst" || word == "fldrslt" ||
-         word == "field" || word == "xmlnstbl" || word == "generator" || word == "listtable" ||
+  return word == "stylesheet" || word == "info" || word == "object" || word == "footerf" ||
+         word == "footerl" || word == "footerr" || word == "headerf" || word == "headerl" ||
+         word == "headerr" || word == "fldinst" || word == "fldrslt" || word == "field" ||
+         word == "xmlnstbl" || word == "generator" || word == "listtable" ||
          word == "listoverridetable" || word == "rsidtbl" || word == "themedata" ||
          word == "latentstyles" || word == "colorschememapping" || word == "datastore" ||
          word == "nonshppict" || word == "shppict" || word == "background" || word == "pntext" ||
@@ -286,6 +286,14 @@ struct State {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  // Font colour, highlight, strikethrough, and script. A group copies them
+  // and } puts the outer ones back. Highlight's Auto is none.
+  Ink color = Ink::Auto;
+  Ink highlight = Ink::Auto;
+  bool strike = false;
+  Script script = Script::None;
+  // Inside {\colortbl ...}. The table itself lives on the reader.
+  bool in_colortbl = false;
   int heading = 0;
   // Paragraph properties. They belong to the paragraph that the next \par ends.
   Indents indents;
@@ -353,6 +361,10 @@ struct StyleEntry {
   std::optional<bool> bold;
   std::optional<bool> italic;
   std::optional<bool> underline;
+  std::optional<Ink> color;
+  std::optional<Ink> highlight;
+  std::optional<bool> strike;
+  std::optional<Script> script;
   std::optional<int> left;
   std::optional<int> right;
   std::optional<int> first;
@@ -366,6 +378,10 @@ struct ReadStyle {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  Ink color = Ink::Auto;
+  Ink highlight = Ink::Auto;
+  bool strike = false;
+  Script script = Script::None;
   Indents indents;
   Align align = Align::Left;
   int heading = 0;
@@ -451,6 +467,13 @@ class Reader {
  private:
   void literal(char c)
   {
+    // A colour-table ';' commits one entry. Anything else in the table,
+    // including a space, is not document text.
+    if (state_.in_colortbl) {
+      if (c == ';')
+        commit_color();
+      return;
+    }
     if (state_.in_style && c == ';') {
       if (stack_.size() == entry_depth_)
         entry_.name_done = true;
@@ -597,9 +620,22 @@ class Reader {
           notes_.emplace_back();
           note_marks_.emplace_back();
           enter_story(Story::Note);
+          // The {\super } around a marker is how the mark is drawn. It is
+          // not superscript on the note, and \pard does not clear script.
+          state_.script = Script::None;
         } else {
           state_.ignore = true;
         }
+        return;
+      }
+      if (word == "colortbl") {
+        state_.in_colortbl = true;
+        state_.ignore = true;
+        colors_.clear();
+        color_red_ = 0;
+        color_green_ = 0;
+        color_blue_ = 0;
+        color_seen_ = false;
         return;
       }
       if (skip_destination(word)) {
@@ -611,6 +647,19 @@ class Reader {
       commit_font();
       font_index_ = param;
       font_chars_.clear();
+      return;
+    }
+    if (state_.in_colortbl) {
+      if (word == "red" && has_param) {
+        color_red_ = param;
+        color_seen_ = true;
+      } else if (word == "green" && has_param) {
+        color_green_ = param;
+        color_seen_ = true;
+      } else if (word == "blue" && has_param) {
+        color_blue_ = param;
+        color_seen_ = true;
+      }
       return;
     }
     // \uN and \ucN work everywhere, the font table included.
@@ -740,6 +789,10 @@ class Reader {
       state_.underline = false;
       state_.font = 0;
       state_.half_points = 22;
+      state_.color = Ink::Auto;
+      state_.highlight = Ink::Auto;
+      state_.strike = false;
+      state_.script = Script::None;
       return;
     }
     if (word == "outlinelevel" && has_param) {
@@ -781,6 +834,43 @@ class Reader {
     if (word == "ulnone") {
       char_seen_ = true;
       state_.underline = false;
+      return;
+    }
+    if (word == "cf") {
+      char_seen_ = true;
+      state_.color = color_of(has_param ? param : 0);
+      return;
+    }
+    if (word == "highlight") {
+      char_seen_ = true;
+      // \highlightN is the fixed palette index, not a colour-table lookup.
+      state_.highlight = ink_clamp(has_param ? param : 0);
+      return;
+    }
+    if (word == "strike") {
+      char_seen_ = true;
+      state_.strike = !has_param || param != 0;
+      return;
+    }
+    if (word == "super") {
+      char_seen_ = true;
+      if (!has_param || param != 0)
+        state_.script = Script::Super;
+      else if (state_.script == Script::Super)
+        state_.script = Script::None;
+      return;
+    }
+    if (word == "sub") {
+      char_seen_ = true;
+      if (!has_param || param != 0)
+        state_.script = Script::Sub;
+      else if (state_.script == Script::Sub)
+        state_.script = Script::None;
+      return;
+    }
+    if (word == "nosupersub") {
+      char_seen_ = true;
+      state_.script = Script::None;
       return;
     }
     if (word == "paperw" && has_param) {
@@ -1189,7 +1279,38 @@ class Reader {
     run.bold = state_.bold;
     run.italic = state_.italic;
     run.underline = state_.underline;
+    run.color = state_.color;
+    run.highlight = state_.highlight;
+    run.strike = state_.strike;
+    run.script = state_.script;
     return run;
+  }
+
+  // \cfN. No colour table: 0 is automatic and 1–16 are Word's palette.
+  // A table entry that was only ';' is automatic, and so is an index the
+  // table does not hold. \cf with no parameter is 0.
+  Ink color_of(int index) const
+  {
+    if (colors_.empty())
+      return ink_clamp(index);
+    if (index < 0 || static_cast<size_t>(index) >= colors_.size() ||
+        !colors_[static_cast<size_t>(index)])
+      return Ink::Auto;
+    return *colors_[static_cast<size_t>(index)];
+  }
+
+  // One colour-table entry. No \red, \green, or \blue means the entry was
+  // omitted, which is automatic, not black.
+  void commit_color()
+  {
+    if (!color_seen_)
+      colors_.push_back(std::nullopt);
+    else
+      colors_.push_back(ink_from_rgb(color_red_, color_green_, color_blue_));
+    color_red_ = 0;
+    color_green_ = 0;
+    color_blue_ = 0;
+    color_seen_ = false;
   }
 
   // The \outlinelevel a heading reads as: 0 through 5 are Heading 1 through
@@ -1243,12 +1364,34 @@ class Reader {
       e.underline = !has_param || param != 0;
     } else if (word == "ulnone") {
       e.underline = false;
+    } else if (word == "cf") {
+      e.color = color_of(has_param ? param : 0);
+    } else if (word == "highlight") {
+      e.highlight = ink_clamp(has_param ? param : 0);
+    } else if (word == "strike") {
+      e.strike = !has_param || param != 0;
+    } else if (word == "super") {
+      if (!has_param || param != 0)
+        e.script = Script::Super;
+      else if (e.script && *e.script == Script::Super)
+        e.script = Script::None;
+    } else if (word == "sub") {
+      if (!has_param || param != 0)
+        e.script = Script::Sub;
+      else if (e.script && *e.script == Script::Sub)
+        e.script = Script::None;
+    } else if (word == "nosupersub") {
+      e.script = Script::None;
     } else if (word == "plain") {
       e.bold = false;
       e.italic = false;
       e.underline = false;
       e.font = 0;
       e.half_points = 22;
+      e.color = Ink::Auto;
+      e.highlight = Ink::Auto;
+      e.strike = false;
+      e.script = Script::None;
     } else if (word == "pard") {
       e.left = 0;
       e.right = 0;
@@ -1323,6 +1466,14 @@ class Reader {
       r.italic = *e.italic;
     if (e.underline)
       r.underline = *e.underline;
+    if (e.color)
+      r.color = *e.color;
+    if (e.highlight)
+      r.highlight = *e.highlight;
+    if (e.strike)
+      r.strike = *e.strike;
+    if (e.script)
+      r.script = *e.script;
     if (e.left)
       r.indents.left = *e.left;
     if (e.right)
@@ -1386,6 +1537,10 @@ class Reader {
       style.format.bold = r.bold;
       style.format.italic = r.italic;
       style.format.underline = r.underline;
+      style.format.color = r.color;
+      style.format.highlight = r.highlight;
+      style.format.strike = r.strike;
+      style.format.script = r.script;
       style.indents = r.indents;
       style.align = r.align;
       style.heading = r.heading;
@@ -1434,6 +1589,14 @@ class Reader {
       state_.italic = to.italic;
     if (state_.underline == from.underline)
       state_.underline = to.underline;
+    if (state_.color == from.color)
+      state_.color = to.color;
+    if (state_.highlight == from.highlight)
+      state_.highlight = to.highlight;
+    if (state_.strike == from.strike)
+      state_.strike = to.strike;
+    if (state_.script == from.script)
+      state_.script = to.script;
   }
 
   // \sN: the paragraph takes the style, attribute by attribute, as
@@ -1568,8 +1731,10 @@ class Reader {
   }
 
   // The reference mark is the digits just before {\footnote}. They often share
-  // a run with the sentence, because \super is not a format this reader keeps.
-  // Split that tail off so the sentence stays ordinary text.
+  // a run with the sentence. Split that tail off so the sentence stays
+  // ordinary text. The {\super } around the mark is how it is drawn; it is
+  // not stored as superscript on the marker. Colour, highlight, and
+  // strikethrough on that run stay.
   bool take_note(std::vector<Run>& runs, int index, const std::string& label)
   {
     if (runs.empty())
@@ -1579,6 +1744,7 @@ class Reader {
       return false;
     if (run.text == label) {
       run.note = index;
+      run.script = Script::None;
       return true;
     }
     if (run.text.size() > label.size() &&
@@ -1586,6 +1752,7 @@ class Reader {
       Run marker = run;
       marker.text = label;
       marker.note = index;
+      marker.script = Script::None;
       run.text.resize(run.text.size() - label.size());
       runs.push_back(std::move(marker));
       return true;
@@ -1610,12 +1777,14 @@ class Reader {
       Run& run = paragraphs_.back().runs.back();
       if (!run.image && run.note == 0 && run.text == label) {
         run.note = index;
+        run.script = Script::None;
         return;
       }
     }
     Run run = char_run();
     run.text = label;
     run.note = index;
+    run.script = Script::None;
     add_run(paragraph_, std::move(run));
   }
 
@@ -1893,6 +2062,13 @@ class Reader {
   State state_;
   std::vector<State> stack_;
   std::map<int, std::string> fonts_;
+  // The document colour table, in file order. An omitted entry is nullopt
+  // (automatic). It outlives the {\colortbl} group.
+  std::vector<std::optional<Ink>> colors_;
+  int color_red_ = 0;
+  int color_green_ = 0;
+  int color_blue_ = 0;
+  bool color_seen_ = false;
   int font_index_ = 0;
   std::string font_chars_;
   Paragraph paragraph_;
@@ -2018,6 +2194,53 @@ std::string pict_bytes(const std::string& data)
       out.push_back('\n');
   }
   return out;
+}
+
+// \cfN \highlightN \strike and \super, \sub, or \nosupersub. A note marker
+// is drawn with {\super }; that word is not also stored on the marker.
+std::string face_words(const Run& run, bool note_marker)
+{
+  std::string out =
+      "\\cf" + std::to_string(static_cast<int>(ink_clamp(static_cast<int>(run.color))));
+  out +=
+      "\\highlight" + std::to_string(static_cast<int>(ink_clamp(static_cast<int>(run.highlight))));
+  out += run.strike ? "\\strike" : "\\strike0";
+  const Script script = note_marker ? Script::None : run.script;
+  if (script == Script::Super)
+    out += "\\super";
+  else if (script == Script::Sub)
+    out += "\\sub";
+  else
+    out += "\\nosupersub";
+  return out;
+}
+
+bool run_faced(const Run& run)
+{
+  return run.color != Ink::Auto || run.highlight != Ink::Auto || run.strike ||
+         run.script != Script::None;
+}
+
+void write_style_face(std::ostringstream& out, const Run& format, const Run* base)
+{
+  if (format.color != Ink::Auto)
+    out << "\\cf" << static_cast<int>(ink_clamp(static_cast<int>(format.color)));
+  else if (base && base->color != Ink::Auto)
+    out << "\\cf0";
+  if (format.highlight != Ink::Auto)
+    out << "\\highlight" << static_cast<int>(ink_clamp(static_cast<int>(format.highlight)));
+  else if (base && base->highlight != Ink::Auto)
+    out << "\\highlight0";
+  if (format.strike)
+    out << "\\strike";
+  else if (base && base->strike)
+    out << "\\strike0";
+  if (format.script == Script::Super)
+    out << "\\super";
+  else if (format.script == Script::Sub)
+    out << "\\sub";
+  else if (base && base->script != Script::None)
+    out << "\\nosupersub";
 }
 
 std::string rtf_export(const Document& doc)
@@ -2197,6 +2420,30 @@ std::string rtf_export(const Document& doc)
   }
   const std::vector<int> numbers = list_numbers(doc.paragraphs);
 
+  bool uses_face = false;
+  bool uses_color = false;
+  auto see_run = [&](const Run& run) {
+    if (run_faced(run))
+      uses_face = true;
+    if (run.color != Ink::Auto)
+      uses_color = true;
+  };
+  auto see_paragraphs = [&](const std::vector<Paragraph>& paragraphs) {
+    for (const Paragraph& paragraph : paragraphs) {
+      for (const Run& run : paragraph.runs)
+        see_run(run);
+      if (const Run* mark = mark_of(paragraph))
+        see_run(*mark);
+    }
+  };
+  see_paragraphs(doc.paragraphs);
+  see_paragraphs(doc.header);
+  see_paragraphs(doc.footer);
+  for (const std::vector<Paragraph>& note : doc.notes)
+    see_paragraphs(note);
+  for (const Style& style : sheet)
+    see_run(style.format);
+
   std::ostringstream out;
   out << "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n{\\fonttbl";
   for (size_t i = 0; i < fonts.size(); ++i) {
@@ -2204,6 +2451,16 @@ std::string rtf_export(const Document& doc)
         << ";}";
   }
   out << "}\n";
+  if (uses_color) {
+    // A leading empty entry, so 0 is automatic and 1 is black. Highlight
+    // does not use this table, so a highlight alone does not write one.
+    out << "{\\colortbl;";
+    for (int i = 1; i <= 16; ++i) {
+      const Rgb c = ink_rgb(static_cast<Ink>(i));
+      out << "\\red" << c.red << "\\green" << c.green << "\\blue" << c.blue << ";";
+    }
+    out << "}\n";
+  }
   if (any_list) {
     out << "{\\*\\listtable";
     write_list(out, ListKind::Bullet, 1, ones);
@@ -2262,6 +2519,7 @@ std::string rtf_export(const Document& doc)
         out << "\\ul";
       else if (up && up->format.underline)
         out << "\\ulnone";
+      write_style_face(out, style.format, up ? &up->format : nullptr);
       // ';' ends the name, so one inside it is written as a code point.
       std::string name;
       for (char c : escape_rtf(style.name, true)) {
@@ -2306,6 +2564,8 @@ std::string rtf_export(const Document& doc)
       }
       if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
         const std::string label = run.text.empty() ? std::to_string(run.note) : run.text;
+        if (uses_face)
+          out << face_words(run, true);
         out << "{\\super " << escape_rtf(label) << "{\\footnote ";
         const std::vector<Paragraph>& note = doc.notes[static_cast<size_t>(run.note - 1)];
         if (note.empty())
@@ -2324,7 +2584,10 @@ std::string rtf_export(const Document& doc)
         continue;
       out << "\\f" << index_of(run.font) << "\\fs" << half_points_of(run.size)
           << (run.bold ? "\\b" : "\\b0") << (run.italic ? "\\i" : "\\i0")
-          << (run.underline ? "\\ul" : "\\ulnone") << " " << escape_rtf(run.text);
+          << (run.underline ? "\\ul" : "\\ulnone");
+      if (uses_face)
+        out << face_words(run, false);
+      out << " " << escape_rtf(run.text);
     }
   };
   write_plain = [&](const Paragraph& paragraph, int ls) {
@@ -2360,10 +2623,13 @@ std::string rtf_export(const Document& doc)
       return false;
     }();
     if (!had_run) {
-      if (const Run* mark = mark_of(paragraph))
+      if (const Run* mark = mark_of(paragraph)) {
         out << "\\f" << index_of(mark->font) << "\\fs" << half_points_of(mark->size)
             << (mark->bold ? "\\b" : "\\b0") << (mark->italic ? "\\i" : "\\i0")
             << (mark->underline ? "\\ul" : "\\ulnone");
+        if (uses_face)
+          out << face_words(*mark, false);
+      }
     } else {
       emit_runs(paragraph);
     }
@@ -2439,10 +2705,13 @@ std::string rtf_export(const Document& doc)
           cell_text = true;
       }
       if (!cell_text) {
-        if (const Run* mark = mark_of(paragraph))
+        if (const Run* mark = mark_of(paragraph)) {
           out << "\\f" << index_of(mark->font) << "\\fs" << half_points_of(mark->size)
               << (mark->bold ? "\\b" : "\\b0") << (mark->italic ? "\\i" : "\\i0")
               << (mark->underline ? "\\ul" : "\\ulnone");
+          if (uses_face)
+            out << face_words(*mark, false);
+        }
       }
       out << (cell_end ? "\\cell" : "\\par");
       if (row_end)
@@ -2470,8 +2739,10 @@ std::string rtf_export(const Document& doc)
         break;
       }
       out << "{\\pntext\\f" << index_of(label.font) << "\\fs" << half_points_of(label.size)
-          << (label.bold ? "\\b" : "") << (label.italic ? "\\i" : "") << " "
-          << label_rtf(list_label(list, numbers[index])) << "\\tab}";
+          << (label.bold ? "\\b" : "") << (label.italic ? "\\i" : "");
+      if (uses_face)
+        out << face_words(label, false);
+      out << " " << label_rtf(list_label(list, numbers[index])) << "\\tab}";
     }
     out << "\\pard";
     const int style = any_style ? style_index(paragraph.style) : -1;
@@ -2518,7 +2789,7 @@ std::string rtf_export(const Document& doc)
     // when it wrote a control word, which the text after needs a delimiter
     // after: a run that looks like the one before (its direct bits aside)
     // carries straight on.
-    auto format = [&](const Run& run) {
+    auto format = [&](const Run& run, bool note_marker = false) {
       bool word = first;
       const int fi = index_of(run.font);
       if (first || fi != font) {
@@ -2547,6 +2818,12 @@ std::string rtf_export(const Document& doc)
         underline = run.underline;
         word = true;
       }
+      // Absolute, on every run, once any run in the file uses them. A delta
+      // would leak \cf and \super into the next paragraph and into a footnote.
+      if (uses_face) {
+        out << face_words(run, note_marker);
+        word = true;
+      }
       first = false;
       return word;
     };
@@ -2567,7 +2844,7 @@ std::string rtf_export(const Document& doc)
         }
       }
       if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
-        if (format(run))
+        if (format(run, true))
           out << " ";
         const std::string label = run.text.empty() ? std::to_string(run.note) : run.text;
         out << "{\\super " << escape_rtf(label) << "{\\footnote ";

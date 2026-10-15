@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '1.0.23',
+  version: '2.0.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -195,6 +195,13 @@ write_it_document_tests = executable(
   dependencies: [writeit_dep],
 )
 test('document', write_it_document_tests)
+
+write_it_character_tests = executable(
+  'write-it-character-tests',
+  'tests/test_character.cpp',
+  dependencies: [writeit_dep],
+)
+test('character', write_it_character_tests)
 
 write_it_plain_breaks_tests = executable(
   'write-it-plain-breaks-tests',

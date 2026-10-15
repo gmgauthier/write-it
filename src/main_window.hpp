@@ -370,7 +370,15 @@ class MainWindow : public Gtk::ApplicationWindow {
   void edit_cell_runs(const std::function<void(Run&)>& edit);
   void show_format(const Run& run);
   void sync_format_controls();
+  void on_font_dialog();
   void on_font_changed();
+  // The run Format → Font… shows: the selection's start, or the caret's
+  // typing run when nothing is selected. A cell uses the same lookup as the
+  // toolbar.
+  Run dialog_run();
+  void apply_font_color(Ink ink);
+  void apply_highlight(Ink ink);
+  void paint_ink(Gtk::MenuToolButton* button, Ink ink);
   void on_size_changed();
   // Enter in the size box: the typed size, or Word 97's message saying why
   // not, then back to the text's size with the box still to type in.
@@ -841,6 +849,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* select_all_item_ = nullptr;
   Gtk::MenuItem* find_item_ = nullptr;
   Gtk::MenuItem* replace_item_ = nullptr;
+  Gtk::MenuItem* font_item_ = nullptr;
   Gtk::MenuItem* bold_item_ = nullptr;
   Gtk::MenuItem* italic_item_ = nullptr;
   Gtk::MenuItem* underline_item_ = nullptr;
@@ -887,6 +896,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* bold_toggle_ = nullptr;
   Gtk::ToggleToolButton* italic_toggle_ = nullptr;
   Gtk::ToggleToolButton* underline_toggle_ = nullptr;
+  Gtk::MenuToolButton* font_color_button_ = nullptr;
+  Gtk::MenuToolButton* highlight_button_ = nullptr;
+  // The toolbar remembers the last colour. The caret does not retarget it.
+  // Font colour starts on red, highlight on yellow, so a click shows.
+  Ink font_ink_ = Ink::Red;
+  Ink highlight_ink_ = Ink::Yellow;
   Gtk::ToggleToolButton* align_left_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_center_toggle_ = nullptr;
   Gtk::ToggleToolButton* align_right_toggle_ = nullptr;
@@ -1133,10 +1148,12 @@ bool paragraph_is_blank_item(const Glib::ustring& text);
 // the break is set. A letter, a pad that is not alone, or no break, does not.
 bool deleting_pad_clears_break(gunichar erased, bool only_char, bool page_break);
 // The label cache key. Underline is part of it, so a plain label is not reused
-// for an underlined one. The other fields are the ones the layout already
-// varied on: text, family, size, bold, and italic.
+// for an underlined one. Colour, highlight, strikethrough, and script are
+// too: a red label must not be drawn from a black one. The trailing arguments
+// default, so a call from before them still matches one that passes the defaults.
 std::string list_label_key(const std::string& text, const std::string& family, int size, bool bold,
-                           bool italic, bool underline);
+                           bool italic, bool underline, int color = 0, int highlight = 0,
+                           bool strike = false, int script = 0);
 // The item's first character is underlined, so the label is too.
 bool label_underlined(const Run& format);
 // Underline is not a font field. When `underline` is set, the layout carries

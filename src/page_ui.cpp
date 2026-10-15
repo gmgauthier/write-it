@@ -2105,6 +2105,51 @@ void MainWindow::show_cell_style()
   suppress_format_ = guard;
 }
 
+Run MainWindow::dialog_run()
+{
+  if (editing_cell()) {
+    TableSheet* sheet = editing_sheet();
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+    if (sheet && cell_place(*sheet, row, column, caret, bound)) {
+      if (Gtk::TextView* view = sheet->view_at(row, column)) {
+        if (auto buffer = view->get_buffer()) {
+          const int count = buffer->get_char_count();
+          caret = std::max(0, std::min(caret, count));
+          bound = std::max(0, std::min(bound, count));
+          const int start = std::min(caret, bound);
+          const int end = std::max(caret, bound);
+          if (start != end)
+            return format_of(buffer->get_iter_at_offset(start));
+          if (cell_typing_on_ && caret == cell_typing_caret_ && bound == cell_typing_bound_)
+            return cell_typing_;
+          if (caret > 0) {
+            auto prev = buffer->get_iter_at_offset(caret - 1);
+            if (prev.get_char() != '\n' && has_fmt(prev))
+              return format_of(prev);
+          }
+          if (caret < count) {
+            auto at = buffer->get_iter_at_offset(caret);
+            if (at.get_char() != '\n' && has_fmt(at))
+              return format_of(at);
+          }
+          const Paragraph* form = sheet->form_at(row, column, sheet->line_at(row, column, caret));
+          return style_typing(form ? form->style : std::string(kNormalStyle));
+        }
+      }
+    }
+  }
+  if (!buffer_)
+    return typing_;
+  Gtk::TextBuffer::iterator start_iter;
+  Gtk::TextBuffer::iterator end_iter;
+  if (buffer_->get_selection_bounds(start_iter, end_iter) && start_iter != end_iter)
+    return format_of(start_iter);
+  return typing_;
+}
+
 void MainWindow::show_cell_format()
 {
   show_cell_style();
