@@ -379,7 +379,7 @@ The lists are Word 97's sixteen colours, in Word's order. The font colour list s
 
 A file stores the font colour as `\cfN` into a colour table this program writes, with an empty first entry so 0 is automatic and 1 is black. Highlight is `\highlightN` with that same index, not a colour-table index. Strikethrough is `\strike` and `\strike0`. Superscript and subscript are `\super`, `\sub`, and `\nosupersub`. A colour this program does not list is read as the nearest of the sixteen. A footnote marker is still drawn raised, and the `\super` around it is not stored as superscript. A style carries the same attributes, and a value set on the run stays when the style changes.
 
-**2.0 M2 — Spacing.** Format → Paragraph… gains space before, space after, and line spacing. Line spacing is Word 97's list: single, 1.5, double, at least, exactly, and multiple. Before and after use the units from Tools → Options…. The screen and the page count follow the spacing. RTF round-trips it.
+**2.0 M2 — Spacing.** Format → Paragraph… gains space before, space after, and line spacing. Line spacing is Word 97's list: single, 1.5, double, at least, exactly, and multiple. Before and after use the units from Tools → Options…. At least and Exactly take a point size, from 0 pt to 1584 pt. Multiple takes a number of lines, from 0 to 132. The screen and the page count follow the spacing. A line cannot be drawn shorter than its font, so Exactly and a multiple below one line are stored and round-trip, and the screen keeps the font's line. RTF stores before and after as `\sb` and `\sa` in twips. Line spacing is `\sl` and `\slmult`: 240, 360, and 480 with `\slmult1` are single, 1.5, and double; another positive `\sl` with `\slmult1` is multiple; a positive `\sl` without it is at least; a negative `\sl` is exactly that many twips.
 
 **2.0 M3 — Borders.** Format → Borders and Shading… sets a paragraph's borders and shading, and a table cell's borders and shading. The fixed cell frame from 1.0 follows what this dialog stored. RTF round-trips both.
 
@@ -391,7 +391,7 @@ A file stores the font colour as `\cfN` into a colour table this program writes,
 
 **2.0 M7 — Painter.** The format painter copies character and paragraph format, including M1–M4, from the selection onto the text it is dragged across. Inside a table it also copies the cell's shading, whether that shading came from M3 or from a row or column colour. One click paints once. A double click keeps painting until Escape, as in Word 97. It does not invent a format 2.0 does not store.
 
-**Done when** the seven lines are true and `v2.0.0` is tagged.
+**Done when** the seven lines are true. 2.0 M1 is `v2.0.0`. Each later milestone is tagged when Greg says it is ready.
 
 ### 3.0 — A long document
 

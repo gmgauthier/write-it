@@ -298,6 +298,11 @@ struct State {
   // Paragraph properties. They belong to the paragraph that the next \par ends.
   Indents indents;
   Align align = Align::Left;
+  Spacing spacing;
+  // The \sl and \slmult in force, so a later word of the pair recomputes the
+  // rule. Single leaves both at 0.
+  int line_sl = 0;
+  int line_mult = 0;
   ListMarks marks;
   // The paragraph's style: an index into the style sheet.
   int style = 0;
@@ -369,6 +374,10 @@ struct StyleEntry {
   std::optional<int> right;
   std::optional<int> first;
   std::optional<Align> align;
+  std::optional<int> before;
+  std::optional<int> after;
+  std::optional<int> sl;
+  std::optional<int> slmult;
   std::optional<int> heading;
 };
 // A style resolved against its bases, in the reader's own terms.
@@ -384,6 +393,7 @@ struct ReadStyle {
   Script script = Script::None;
   Indents indents;
   Align align = Align::Left;
+  Spacing spacing;
   int heading = 0;
 };
 
@@ -422,6 +432,7 @@ class Reader {
         if (stack_.size() == 1) {
           final_indents_ = state_.indents;
           final_align_ = state_.align;
+          final_spacing_ = state_.spacing;
           final_marks_ = state_.marks;
           final_style_ = state_.style;
           closed_ = true;
@@ -729,6 +740,8 @@ class Reader {
       state_.heading = normal.heading;
       state_.indents = normal.indents;
       state_.align = normal.align;
+      state_.spacing = normal.spacing;
+      sync_line_raw();
       state_.marks = ListMarks{};
       state_.intbl = false;
       // \pard drops the character format carried from the paragraph before.
@@ -780,6 +793,24 @@ class Reader {
     }
     if (word == "fi" && has_param) {
       state_.indents.first = param;
+      return;
+    }
+    if (word == "sb" && has_param) {
+      state_.spacing.before = param;
+      return;
+    }
+    if (word == "sa" && has_param) {
+      state_.spacing.after = param;
+      return;
+    }
+    if (word == "sl" && has_param) {
+      state_.line_sl = param;
+      apply_line_spacing(state_.spacing, state_.line_sl, state_.line_mult);
+      return;
+    }
+    if (word == "slmult" && has_param) {
+      state_.line_mult = param != 0 ? 1 : 0;
+      apply_line_spacing(state_.spacing, state_.line_sl, state_.line_mult);
       return;
     }
     if (word == "plain") {
@@ -1350,6 +1381,14 @@ class Reader {
       e.align = Align::Center;
     } else if (word == "qr") {
       e.align = Align::Right;
+    } else if (word == "sb" && has_param) {
+      e.before = param;
+    } else if (word == "sa" && has_param) {
+      e.after = param;
+    } else if (word == "sl" && has_param) {
+      e.sl = param;
+    } else if (word == "slmult" && has_param) {
+      e.slmult = param != 0 ? 1 : 0;
     } else if (word == "outlinelevel" && has_param) {
       e.heading = outline_heading(param);
     } else if (word == "f" && has_param) {
@@ -1397,6 +1436,10 @@ class Reader {
       e.right = 0;
       e.first = 0;
       e.align = Align::Left;
+      e.before = 0;
+      e.after = 0;
+      e.sl = 0;
+      e.slmult = 0;
     }
   }
 
@@ -1483,6 +1526,21 @@ class Reader {
     r.indents = clamp_indents(r.indents);
     if (e.align)
       r.align = *e.align;
+    if (e.before)
+      r.spacing.before = *e.before;
+    if (e.after)
+      r.spacing.after = *e.after;
+    if (e.sl || e.slmult) {
+      int sl = 0;
+      int mult = 0;
+      line_spacing_raw(r.spacing, sl, mult);
+      if (e.sl)
+        sl = *e.sl;
+      if (e.slmult)
+        mult = *e.slmult;
+      apply_line_spacing(r.spacing, sl, mult);
+    }
+    r.spacing = clamp_spacing(r.spacing);
     // A level from the file, else from a "heading N" name (LibreOffice
     // writes none in its sheet), else the base's.
     if (e.heading)
@@ -1543,6 +1601,7 @@ class Reader {
       style.format.script = r.script;
       style.indents = r.indents;
       style.align = r.align;
+      style.spacing = r.spacing;
       style.heading = r.heading;
       sheet.push_back(style);
     }
@@ -1599,6 +1658,13 @@ class Reader {
       state_.script = to.script;
   }
 
+  // line_sl and line_mult follow the spacing now in force, so the next \sl or
+  // \slmult edits that rule instead of a value left over from before.
+  void sync_line_raw()
+  {
+    line_spacing_raw(state_.spacing, state_.line_sl, state_.line_mult);
+  }
+
   // \sN: the paragraph takes the style, attribute by attribute, as
   // apply_style() does, so words after it still win. A number the sheet does
   // not define is Normal.
@@ -1617,6 +1683,15 @@ class Reader {
       state_.indents.first = to.indents.first;
     if (state_.align == from.align)
       state_.align = to.align;
+    if (state_.spacing.before == from.spacing.before)
+      state_.spacing.before = to.spacing.before;
+    if (state_.spacing.after == from.spacing.after)
+      state_.spacing.after = to.spacing.after;
+    if (same_spacing_line(state_.spacing, from.spacing)) {
+      state_.spacing.rule = to.spacing.rule;
+      state_.spacing.value = to.spacing.value;
+    }
+    sync_line_raw();
     if (state_.heading == from.heading) {
       state_.heading = to.heading;
       if (!paragraph_.runs.empty())
@@ -1722,6 +1797,7 @@ class Reader {
     // has it. \pard is what clears the carried format.
     paragraph_.indents = clamp_indents(state_.indents);
     paragraph_.align = state_.align;
+    paragraph_.spacing = clamp_spacing(state_.spacing);
     paragraph_.style = style_name(state_.style);
     paragraph_.heading = state_.heading;
     dest->push_back(paragraph_);
@@ -1893,6 +1969,7 @@ class Reader {
       paragraph_.mark = char_run();
     paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
     paragraph_.align = live ? state_.align : final_align_;
+    paragraph_.spacing = clamp_spacing(live ? state_.spacing : final_spacing_);
     paragraph_.style = style_name(live ? state_.style : final_style_);
     paragraphs_.push_back(paragraph_);
     marks_.push_back(live ? state_.marks : final_marks_);
@@ -1932,6 +2009,7 @@ class Reader {
       merged.style = paragraph.style;
       merged.align = paragraph.align;
       merged.indents = paragraph.indents;
+      merged.spacing = paragraph.spacing;
       merged.page_break = paragraph.page_break;
       merged.cell = paragraph.cell;
       merged.list = resolve(marks_[i]);
@@ -1973,6 +2051,7 @@ class Reader {
         merged.style = source[n].style;
         merged.align = source[n].align;
         merged.indents = source[n].indents;
+        merged.spacing = source[n].spacing;
         merged.page_break = source[n].page_break;
         merged.list = n < marks.size() ? resolve(marks[n]) : ListFormat{};
         for (Run& run : source[n].runs) {
@@ -2004,6 +2083,7 @@ class Reader {
     const int text = page_text_twips(doc.page);
     auto fit = [text](Paragraph& paragraph) {
       paragraph.indents = clamp_indents(paragraph.indents, text);
+      paragraph.spacing = clamp_spacing(paragraph.spacing);
       if (paragraph.list.has_own)
         paragraph.list.own = clamp_indents(paragraph.list.own, text);
     };
@@ -2016,8 +2096,10 @@ class Reader {
     for (std::vector<Paragraph>& note : doc.notes)
       for (Paragraph& paragraph : note)
         fit(paragraph);
-    for (Style& style : doc.styles)
+    for (Style& style : doc.styles) {
       style.indents = clamp_indents(style.indents, text);
+      style.spacing = clamp_spacing(style.spacing);
+    }
   }
 
   // One \list from the list table: the kind of each of its nine levels.
@@ -2100,6 +2182,7 @@ class Reader {
   bool char_seen_ = false;
   Indents final_indents_;
   Align final_align_ = Align::Left;
+  Spacing final_spacing_;
   ListMarks final_marks_;
   std::vector<ListMarks> marks_;
   std::map<int, ListDef> lists_;
@@ -2242,6 +2325,51 @@ void write_style_face(std::ostringstream& out, const Run& format, const Run* bas
   else if (base && base->script != Script::None)
     out << "\\nosupersub";
 }
+
+namespace {
+
+// Space before, space after, and line spacing. Zero before and after are
+// omitted when the style agrees. Single is omitted the same way; a paragraph
+// that is single while its style is not writes \sl240\slmult1.
+void write_spacing(std::ostringstream& out, const Spacing& spacing, const Spacing* base)
+{
+  const Spacing mine = clamp_spacing(spacing);
+  const Spacing from = base ? clamp_spacing(*base) : Spacing{};
+  if (mine.before != 0 || mine.before != from.before)
+    out << "\\sb" << mine.before;
+  if (mine.after != 0 || mine.after != from.after)
+    out << "\\sa" << mine.after;
+  if (same_spacing_line(mine, from))
+    return;
+  const bool mult = from.rule == LineRule::OneHalf || from.rule == LineRule::Double ||
+                    from.rule == LineRule::Multiple;
+  switch (mine.rule) {
+    case LineRule::Single:
+      out << "\\sl240\\slmult1";
+      break;
+    case LineRule::OneHalf:
+      out << "\\sl360\\slmult1";
+      break;
+    case LineRule::Double:
+      out << "\\sl480\\slmult1";
+      break;
+    case LineRule::AtLeast:
+      out << "\\sl" << mine.value;
+      if (mult)
+        out << "\\slmult0";
+      break;
+    case LineRule::Exactly:
+      out << "\\sl-" << mine.value;
+      if (mult)
+        out << "\\slmult0";
+      break;
+    case LineRule::Multiple:
+      out << "\\sl" << mine.value << "\\slmult1";
+      break;
+  }
+}
+
+}  // namespace
 
 std::string rtf_export(const Document& doc)
 {
@@ -2502,6 +2630,7 @@ std::string rtf_export(const Document& doc)
         out << "\\qj";
       else if (up && up->align != Align::Left)
         out << "\\ql";
+      write_spacing(out, style.spacing, up ? &up->spacing : nullptr);
       if (style.heading >= 1 && style.heading <= 6)
         out << "\\outlinelevel" << (style.heading - 1);
       else if ((up && up->heading != 0) || builtin_heading(style.name) != 0)
@@ -2610,6 +2739,13 @@ std::string rtf_export(const Document& doc)
       out << "\\qr";
     else if (paragraph.align == Align::Justify)
       out << "\\qj";
+    const Style* plain_style = nullptr;
+    if (any_style) {
+      const int plain_index = style > 0 ? style : 0;
+      if (plain_index >= 0 && static_cast<size_t>(plain_index) < sheet.size())
+        plain_style = &sheet[static_cast<size_t>(plain_index)];
+    }
+    write_spacing(out, paragraph.spacing, plain_style ? &plain_style->spacing : nullptr);
     if (ls > 0)
       out << "\\ls" << ls << "\\ilvl" << clamp_list(paragraph.list).level;
     if (paragraph.heading >= 1 && paragraph.heading <= 6)
@@ -2696,6 +2832,13 @@ std::string rtf_export(const Document& doc)
         out << "\\qr";
       else if (paragraph.align == Align::Justify)
         out << "\\qj";
+      const Style* cell_style_fmt = nullptr;
+      if (any_style) {
+        const int cell_base = cell_style > 0 ? cell_style : 0;
+        if (cell_base >= 0 && static_cast<size_t>(cell_base) < sheet.size())
+          cell_style_fmt = &sheet[static_cast<size_t>(cell_base)];
+      }
+      write_spacing(out, paragraph.spacing, cell_style_fmt ? &cell_style_fmt->spacing : nullptr);
       if (list.kind != ListKind::None)
         out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
       emit_runs(paragraph);
@@ -2770,6 +2913,7 @@ std::string rtf_export(const Document& doc)
     // Left is RTF's default, written only where the style has otherwise.
     else if (given_style && given_style->align != Align::Left)
       out << "\\ql";
+    write_spacing(out, paragraph.spacing, given_style ? &given_style->spacing : nullptr);
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.

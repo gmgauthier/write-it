@@ -3,7 +3,9 @@
 #include "para_check.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
 
 namespace writeit {
 namespace {
@@ -57,6 +59,122 @@ std::string measure_message(MeasureCheck check, Units units)
       break;
   }
   return "";
+}
+
+namespace {
+
+bool parse_number(const std::string& text, double& number, std::string& suffix)
+{
+  size_t i = 0;
+  while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+    ++i;
+  if (i < text.size() && (text[i] == '+' || text[i] == '-'))
+    ++i;
+  const size_t digits_from = i;
+  bool dot = false;
+  size_t digits = 0;
+  for (; i < text.size(); ++i) {
+    if (std::isdigit(static_cast<unsigned char>(text[i]))) {
+      ++digits;
+    } else if (text[i] == '.' && !dot) {
+      dot = true;
+    } else {
+      break;
+    }
+  }
+  if (digits == 0 || i == digits_from)
+    return false;
+  const std::string body = text.substr(0, i);
+  char* end = nullptr;
+  number = std::strtod(body.c_str(), &end);
+  if (end == body.c_str())
+    return false;
+  while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+    ++i;
+  suffix = text.substr(i);
+  while (!suffix.empty() && std::isspace(static_cast<unsigned char>(suffix.back())))
+    suffix.pop_back();
+  for (char& c : suffix)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return true;
+}
+
+const char* kPointRange = "The measurement must be between 0 pt and 1584 pt.";
+const char* kMultipleRange = "The number must be between 0 and 132.";
+
+bool keep_shown(double now, double shown, int decimals)
+{
+  const double half = 0.5 / std::pow(10.0, decimals);
+  return std::fabs(now - shown) < half;
+}
+
+}  // namespace
+
+SpacingCheck check_spacing(const SpacingFields& fields)
+{
+  SpacingCheck result;
+  auto refuse = [&result](SpacingField field, std::string message) {
+    result.field = field;
+    result.message = std::move(message);
+    return result;
+  };
+  double before = 0;
+  double after = 0;
+  MeasureCheck check = check_measure(fields.before, fields.units, before);
+  if (check != MeasureCheck::Ok)
+    return refuse(SpacingField::Before, measure_message(check, fields.units));
+  check = check_measure(fields.after, fields.units, after);
+  if (check != MeasureCheck::Ok)
+    return refuse(SpacingField::After, measure_message(check, fields.units));
+  Spacing spacing;
+  spacing.before = keep_twips(fields.current.before, fields.before_shown, before, fields.units);
+  spacing.after = keep_twips(fields.current.after, fields.after_shown, after, fields.units);
+  spacing.rule = fields.rule;
+  spacing.value = 240;
+  const bool points = fields.rule == LineRule::AtLeast || fields.rule == LineRule::Exactly;
+  const bool multiple = fields.rule == LineRule::Multiple;
+  if (points || multiple) {
+    double number = 0;
+    std::string suffix;
+    if (!parse_number(fields.at, number, suffix)) {
+      if (points)
+        return refuse(SpacingField::At,
+                      std::string("This is not a valid measurement. ") + kPointRange);
+      return refuse(SpacingField::At, std::string("This is not a valid number. ") + kMultipleRange);
+    }
+    if (points) {
+      if (!suffix.empty() && suffix != "pt" && suffix != "pts" && suffix != "point" &&
+          suffix != "points")
+        return refuse(SpacingField::At,
+                      std::string("This is not a valid measurement. ") + kPointRange);
+      if (!(number >= 0 && number <= 1584))
+        return refuse(SpacingField::At, kPointRange);
+      const int original = fields.current.rule == fields.rule ? fields.current.value : -1;
+      spacing.value = original >= 0 && keep_shown(number, fields.at_shown, 2)
+                          ? original
+                          : static_cast<int>(std::lround(number * 20.0));
+    } else {
+      if (!suffix.empty() && suffix != "li" && suffix != "line" && suffix != "lines")
+        return refuse(SpacingField::At,
+                      std::string("This is not a valid number. ") + kMultipleRange);
+      if (!(number >= 0 && number <= 132))
+        return refuse(SpacingField::At, kMultipleRange);
+      const int original = fields.current.rule == LineRule::Multiple ? fields.current.value : -1;
+      int value = original >= 0 && keep_shown(number, fields.at_shown, 2)
+                      ? original
+                      : static_cast<int>(std::lround(number * 240.0));
+      if (value == 240)
+        spacing.rule = LineRule::Single;
+      else if (value == 360)
+        spacing.rule = LineRule::OneHalf;
+      else if (value == 480)
+        spacing.rule = LineRule::Double;
+      else
+        spacing.value = value;
+    }
+  }
+  result.spacing = clamp_spacing(spacing);
+  return result;
 }
 
 ParaCheck check_paragraph(const ParaFields& fields, int text_width)

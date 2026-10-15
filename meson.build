@@ -203,6 +203,21 @@ write_it_character_tests = executable(
 )
 test('character', write_it_character_tests)
 
+write_it_spacing_tests = executable(
+  'write-it-spacing-tests',
+  'tests/test_spacing.cpp',
+  dependencies: [writeit_dep],
+)
+test('spacing', write_it_spacing_tests)
+
+# Enter twice after a page break must not start another sheet.
+write_it_double_return_tests = executable(
+  'write-it-double-return-tests',
+  'tests/test_double_return.cpp',
+  dependencies: [writeit_dep],
+)
+test('double-return', with_display, args: [write_it_double_return_tests.full_path()], depends: write_it_double_return_tests, timeout: 60, suite: 'ui')
+
 write_it_plain_breaks_tests = executable(
   'write-it-plain-breaks-tests',
   'tests/test_plain_breaks.cpp',
