@@ -1,3 +1,11 @@
+write-it (1.0.23-1) unstable; urgency=medium
+
+  * Typing in a long document measures the page by paragraph.
+  * A page break appears where it was inserted, including just after a table.
+  * Blank lines after that break stay blank.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Thu, 15 Oct 2026 08:06:00 +0100
+
 write-it (1.0.22-1) unstable; urgency=medium
 
   * Zooming out scales pictures and footnotes with the page.
