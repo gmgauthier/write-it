@@ -495,7 +495,7 @@ void MainWindow::build_menus()
   footnote_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_footnote));
 
   auto* format_menu = add_menu("F_ormat");
-  font_item_ = add_item(*format_menu, "_Font…", false);
+  font_item_ = add_item(*format_menu, "_Font…", true);
   bold_item_ = add_item(*format_menu, "_Bold", true, GDK_KEY_b, Gdk::CONTROL_MASK);
   italic_item_ = add_item(*format_menu, "_Italic", true, GDK_KEY_i, Gdk::CONTROL_MASK);
   underline_item_ = add_item(*format_menu, "_Underline", true, GDK_KEY_u, Gdk::CONTROL_MASK);
