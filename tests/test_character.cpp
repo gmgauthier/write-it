@@ -121,12 +121,12 @@ void words()
 {
   using namespace writeit;
   Document doc;
-  CHECK(rtf_import("{\\rtf1\\ansi On\\strike Off\\strike0\\par}", doc));
+  CHECK(rtf_import("{\\rtf1\\ansi\\strike On\\strike0 Off\\par}", doc));
   CHECK(doc.paragraphs.size() == 1 && doc.paragraphs[0].runs.size() == 2 &&
         doc.paragraphs[0].runs[0].text == "On" && doc.paragraphs[0].runs[0].strike &&
         doc.paragraphs[0].runs[1].text == "Off" && !doc.paragraphs[0].runs[1].strike);
 
-  CHECK(rtf_import("{\\rtf1\\ansi Up\\super Down\\nosupersub\\par}", doc));
+  CHECK(rtf_import("{\\rtf1\\ansi\\super Up\\nosupersub Down\\par}", doc));
   CHECK(doc.paragraphs.size() == 1 && doc.paragraphs[0].runs.size() == 2 &&
         doc.paragraphs[0].runs[0].text == "Up" &&
         doc.paragraphs[0].runs[0].script == Script::Super &&
@@ -138,7 +138,7 @@ void words()
         doc.paragraphs[0].runs[0].text == "DownStill" &&
         doc.paragraphs[0].runs[0].script == Script::Sub);
 
-  CHECK(rtf_import("{\\rtf1\\ansi Up\\super Down\\sub\\par}", doc));
+  CHECK(rtf_import("{\\rtf1\\ansi\\super Up\\sub Down\\par}", doc));
   CHECK(doc.paragraphs.size() == 1 && doc.paragraphs[0].runs.size() == 2 &&
         doc.paragraphs[0].runs[0].text == "Up" && doc.paragraphs[0].runs[0].script == Script::Super &&
         doc.paragraphs[0].runs[1].text == "Down" &&

@@ -175,7 +175,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 
 **Insert.** Picture…, Table…, Page Break, Footnote.
 
-**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline. No colour in v1.
+**Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline, colour, strikethrough, superscript, and subscript. Superscript and subscript do not apply together. The colour list is Word 97's, including Automatic.
 
 The font list and the size list match the other two apps. The size box lists 8, 9, 10, 11, 12, 14, 16, 18, 24, 36 and is editable: a typed size applies on Enter, to the selection. The font and the size apply inside a table cell as well: a selection changes, and with only the caret the next character typed there takes that face or size. Sizes are half points, so 10.5 and 8.5 are accepted and shown, and other fractions such as 10.3 are refused, as in Word 97. Spaces around a typed size are trimmed and leading zeros ignored, so “  12 ” and “00012” are 12. A refused entry shows one of these messages (“This is not a valid number.”, “The number must be between 1 and 1638.” or “Font sizes must be whole numbers or end in .5.”), and the box goes back to the text’s size, selected to type over. Sizes are clamped to 1–1638 pt. A new document starts at Sans 11.
 
@@ -193,7 +193,7 @@ The only keyboard is the Word 97 map in the menus above. WordPerfect 5.1’s fun
 
 The standard toolbar never grows an app-specific button. Groups, left to right: New Open Save, Print, Cut Copy Paste, Undo Redo.
 
-The format toolbar: font, size, bold, italic, underline, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering.
+The format toolbar: font, size, bold, italic, underline, font colour, highlight, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering. Font colour and highlight sit together after underline, which is where Word 97 puts the highlight next to the font colour.
 
 View → Side by side is on by default, so the two toolbars share one row. Turning it off stacks them, with the standard toolbar above the format toolbar.
 
@@ -373,7 +373,11 @@ The rest of the Format menu a letter uses, and two table jobs 1.0 does not do. 1
 | **2.0 M6 — Row and column colour** | A selected row or column takes one background colour, and that colour round-trips. |
 | **2.0 M7 — Painter** | The format painter copies the format of M1–M4, and a cell's shading from M3 and M6. |
 
-**2.0 M1 — Character.** Format → Font… gains colour, strikethrough, superscript, and subscript. Highlight is the toolbar control Word 97 puts next to the font colour. Superscript and subscript do not apply together. The colour lists are Word 97's, including automatic. A run stores one of each. RTF round-trips them.
+**2.0 M1 — Character.** Format → Font… sets the font, the size, bold, italic, underline, the font colour, strikethrough, superscript, and subscript. The dialog shows the format at the start of the selection, or the format typing would use when nothing is selected. Its size box is the same half-point list as the toolbar. The format toolbar's font colour and highlight sit together after underline, which is where Word 97 puts the highlight next to the font colour. The font-colour button starts on Red and the highlight button starts on Yellow. A click uses the colour last chosen from that button, and moving the caret does not change the choice. Superscript and subscript do not apply together: turning one on turns the other off. A run stores one font colour, one highlight, strikethrough on or off, and one of superscript, subscript, or neither.
+
+The lists are Word 97's sixteen colours, in Word's order. The font colour list starts with Automatic. The highlight list starts with None. The sixteen are Black, Blue, Turquoise, Bright Green, Pink, Red, Yellow, White, Dark Blue, Teal, Green, Violet, Dark Red, Dark Yellow, Gray-50%, and Gray-25%. Their red, green, and blue values are the ones in Word's default colour table: 0 0 0, 0 0 255, 0 255 255, 0 255 0, 255 0 255, 255 0 0, 255 255 0, 255 255 255, 0 0 128, 0 128 128, 0 128 0, 128 0 128, 128 0 0, 128 128 0, 128 128 128, and 192 192 192.
+
+A file stores the font colour as `\cfN` into a colour table this program writes, with an empty first entry so 0 is automatic and 1 is black. Highlight is `\highlightN` with that same index, not a colour-table index. Strikethrough is `\strike` and `\strike0`. Superscript and subscript are `\super`, `\sub`, and `\nosupersub`. A colour this program does not list is read as the nearest of the sixteen. A footnote marker is still drawn raised, and the `\super` around it is not stored as superscript. A style carries the same attributes, and a value set on the run stays when the style changes.
 
 **2.0 M2 — Spacing.** Format → Paragraph… gains space before, space after, and line spacing. Line spacing is Word 97's list: single, 1.5, double, at least, exactly, and multiple. Before and after use the units from Tools → Options…. The screen and the page count follow the spacing. RTF round-trips it.
 

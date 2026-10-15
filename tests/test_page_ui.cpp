@@ -535,7 +535,9 @@ struct MainWindowProbe {
           ++fields;
           last = i + 1;
         }
-        if (fields != 8)
+        // A note tag has eight fields from before colour, or twelve with it.
+        // The note index is the last field either way.
+        if (fields != 8 && fields != 12)
           continue;
         int n = 0;
         bool digits = last < name.size();

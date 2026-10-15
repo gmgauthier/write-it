@@ -164,13 +164,17 @@ std::string tag_name(const Glib::RefPtr<Tag>& tag)
 
 std::string fmt_name(const Run& run)
 {
-  // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag. A
-  // footnote marker adds its 1-based index; a run without one keeps the
-  // seven-part tag it has always had.
-  std::string name = std::string("fmt") + '\x1f' + run.font + '\x1f' +
-                     std::to_string(half_points_of(run.size)) + '\x1f' + (run.bold ? "1" : "0") +
-                     '\x1f' + (run.italic ? "1" : "0") + '\x1f' + (run.underline ? "1" : "0") +
-                     '\x1f' + std::to_string(run.direct);
+  // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag.
+  // Colour, highlight, strikethrough, and script follow the direct bits. A
+  // footnote marker adds its 1-based index after those. A tag from before
+  // them has seven parts, or eight with the note, and still parses.
+  std::string name =
+      std::string("fmt") + '\x1f' + run.font + '\x1f' + std::to_string(half_points_of(run.size)) +
+      '\x1f' + (run.bold ? "1" : "0") + '\x1f' + (run.italic ? "1" : "0") + '\x1f' +
+      (run.underline ? "1" : "0") + '\x1f' + std::to_string(run.direct) + '\x1f' +
+      std::to_string(static_cast<int>(ink_clamp(static_cast<int>(run.color)))) + '\x1f' +
+      std::to_string(static_cast<int>(ink_clamp(static_cast<int>(run.highlight)))) + '\x1f' +
+      (run.strike ? "1" : "0") + '\x1f' + std::to_string(static_cast<int>(run.script));
   if (run.note != 0)
     name += '\x1f' + std::to_string(run.note);
   return name;
@@ -189,13 +193,33 @@ bool parse_fmt(const std::string& name, Run& run)
     }
   }
   parts.push_back(current);
-  if ((parts.size() != 7 && parts.size() != 8) || parts[0] != "fmt")
+  const bool legacy = parts.size() == 7 || parts.size() == 8;
+  const bool faced = parts.size() == 11 || parts.size() == 12;
+  if ((!legacy && !faced) || parts[0] != "fmt")
     return false;
   try {
     run.font = parts[1];
     run.size = size_from_half_points(std::stoi(parts[2]));
     run.direct = static_cast<unsigned>(std::stoul(parts[6]));
-    run.note = parts.size() == 8 ? std::stoi(parts[7]) : 0;
+    run.color = Ink::Auto;
+    run.highlight = Ink::Auto;
+    run.strike = false;
+    run.script = Script::None;
+    run.note = 0;
+    if (faced) {
+      run.color = ink_clamp(std::stoi(parts[7]));
+      run.highlight = ink_clamp(std::stoi(parts[8]));
+      run.strike = parts[9] == "1";
+      const int script = std::stoi(parts[10]);
+      if (script == static_cast<int>(Script::Super))
+        run.script = Script::Super;
+      else if (script == static_cast<int>(Script::Sub))
+        run.script = Script::Sub;
+      if (parts.size() == 12)
+        run.note = std::stoi(parts[11]);
+    } else if (parts.size() == 8) {
+      run.note = std::stoi(parts[7]);
+    }
   } catch (const std::exception&) {
     return false;
   }
@@ -832,6 +856,8 @@ void MainWindow::connect_format()
       });
     }
   });
+  if (font_item_)
+    font_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_font_dialog));
   if (bold_toggle_)
     bold_toggle_->signal_toggled().connect([this] { toggle_flag(TextFlag::Bold); });
   if (italic_toggle_)
@@ -2086,11 +2112,23 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag_on(const Glib::RefPtr<Gtk::Tex
     tag->property_weight() = key.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL;
     tag->property_style() = key.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL;
     tag->property_underline() = key.underline ? Pango::UNDERLINE_SINGLE : Pango::UNDERLINE_NONE;
+    if (key.strike)
+      tag->property_strikethrough() = true;
+    if (key.color != Ink::Auto)
+      tag->property_foreground() = ink_hex(key.color);
+    if (key.highlight != Ink::Auto)
+      tag->property_background() = ink_hex(key.highlight);
     // A footnote marker is a raised number, the same mark the file writes
-    // with \super. The reader does not keep superscript on its own.
+    // with \super. That rise is not also a stored superscript. A real
+    // superscript or subscript uses the same scale and rise, downwards
+    // for a subscript.
+    const int rise = static_cast<int>(key.size * zoom_factor() * 0.45 * Pango::SCALE);
     if (key.note != 0) {
       tag->property_scale() = 0.65;
-      tag->property_rise() = static_cast<int>(key.size * zoom_factor() * 0.45 * Pango::SCALE);
+      tag->property_rise() = rise;
+    } else if (key.script != Script::None) {
+      tag->property_scale() = 0.65;
+      tag->property_rise() = key.script == Script::Sub ? -rise : rise;
     }
     table->add(tag);
     if (buffer == buffer_)
@@ -3169,6 +3207,191 @@ void MainWindow::update_caret_font()
   text_.override_font(story_font());
 }
 
+Glib::RefPtr<Gdk::Pixbuf> ink_pixbuf(Ink ink)
+{
+  auto pix = Gdk::Pixbuf::create(Gdk::COLORSPACE_RGB, true, 8, 16, 16);
+  if (!pix)
+    return {};
+  const Rgb c = ink == Ink::Auto ? Rgb{255, 255, 255} : ink_rgb(ink);
+  pix->fill((static_cast<guint32>(std::max(0, std::min(255, c.red))) << 24) |
+            (static_cast<guint32>(std::max(0, std::min(255, c.green))) << 16) |
+            (static_cast<guint32>(std::max(0, std::min(255, c.blue))) << 8) | 0xFFu);
+  return pix;
+}
+
+void MainWindow::paint_ink(Gtk::MenuToolButton* button, Ink ink)
+{
+  if (!button)
+    return;
+  if (auto* image = dynamic_cast<Gtk::Image*>(button->get_icon_widget()))
+    image->set(ink_pixbuf(ink));
+}
+
+void MainWindow::apply_font_color(Ink ink)
+{
+  font_ink_ = ink_clamp(static_cast<int>(ink));
+  paint_ink(font_color_button_, font_ink_);
+  auto edit = [ink = font_ink_](Run& run) {
+    if (run.color == ink)
+      return;
+    run.color = ink;
+    run.direct |= kDirectColor;
+  };
+  if (editing_cell())
+    edit_cell_runs(edit);
+  else
+    apply_run_edit(edit);
+}
+
+void MainWindow::apply_highlight(Ink ink)
+{
+  highlight_ink_ = ink_clamp(static_cast<int>(ink));
+  paint_ink(highlight_button_, highlight_ink_);
+  auto edit = [ink = highlight_ink_](Run& run) {
+    if (run.highlight == ink)
+      return;
+    run.highlight = ink;
+    run.direct |= kDirectHighlight;
+  };
+  if (editing_cell())
+    edit_cell_runs(edit);
+  else
+    apply_run_edit(edit);
+}
+
+void MainWindow::on_font_dialog()
+{
+  const Run shown = dialog_run();
+  Gtk::Dialog dialog("Font", *this, true);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  auto* grid = Gtk::manage(new Gtk::Grid());
+  grid->set_column_spacing(8);
+  grid->set_row_spacing(6);
+  grid->set_margin_top(8);
+  grid->set_margin_bottom(8);
+  grid->set_margin_start(8);
+  grid->set_margin_end(8);
+
+  auto* font_label = Gtk::manage(new Gtk::Label("Font:", Gtk::ALIGN_START));
+  auto* font = Gtk::manage(new Gtk::ComboBoxText());
+  fill_font_combo(*font, shown.font.empty() ? "Sans" : shown.font);
+  auto* size_label = Gtk::manage(new Gtk::Label("Size:", Gtk::ALIGN_START));
+  auto* size = Gtk::manage(new Gtk::ComboBoxText(true));
+  for (double choice : size_choices(shown.size))
+    size->append(size_text(choice));
+  size->set_active_text(size_text(shown.size));
+  auto* color_label = Gtk::manage(new Gtk::Label("Color:", Gtk::ALIGN_START));
+  auto* color = Gtk::manage(new Gtk::ComboBoxText());
+  for (int i = 0; i <= 16; ++i)
+    color->append(ink_name(static_cast<Ink>(i), false));
+  color->set_active(static_cast<int>(ink_clamp(static_cast<int>(shown.color))));
+
+  auto* bold = Gtk::manage(new Gtk::CheckButton("Bold"));
+  auto* italic = Gtk::manage(new Gtk::CheckButton("Italic"));
+  auto* underline = Gtk::manage(new Gtk::CheckButton("Underline"));
+  auto* strike = Gtk::manage(new Gtk::CheckButton("Strikethrough"));
+  auto* super = Gtk::manage(new Gtk::CheckButton("Superscript"));
+  auto* sub = Gtk::manage(new Gtk::CheckButton("Subscript"));
+  bold->set_active(shown.bold);
+  italic->set_active(shown.italic);
+  underline->set_active(shown.underline);
+  strike->set_active(shown.strike);
+  super->set_active(shown.script == Script::Super);
+  sub->set_active(shown.script == Script::Sub);
+  bool guard = false;
+  super->signal_toggled().connect([&] {
+    if (guard)
+      return;
+    guard = true;
+    if (super->get_active())
+      sub->set_active(false);
+    guard = false;
+  });
+  sub->signal_toggled().connect([&] {
+    if (guard)
+      return;
+    guard = true;
+    if (sub->get_active())
+      super->set_active(false);
+    guard = false;
+  });
+
+  grid->attach(*font_label, 0, 0, 1, 1);
+  grid->attach(*font, 1, 0, 1, 1);
+  grid->attach(*size_label, 0, 1, 1, 1);
+  grid->attach(*size, 1, 1, 1, 1);
+  grid->attach(*color_label, 0, 2, 1, 1);
+  grid->attach(*color, 1, 2, 1, 1);
+  grid->attach(*bold, 0, 3, 2, 1);
+  grid->attach(*italic, 0, 4, 2, 1);
+  grid->attach(*underline, 0, 5, 2, 1);
+  grid->attach(*strike, 0, 6, 2, 1);
+  grid->attach(*super, 0, 7, 2, 1);
+  grid->attach(*sub, 0, 8, 2, 1);
+  dialog.get_content_area()->pack_start(*grid, Gtk::PACK_SHRINK);
+  dialog.show_all_children();
+
+  while (dialog.run() == Gtk::RESPONSE_OK) {
+    const std::string refusal = size_refusal(size->get_active_text());
+    if (!refusal.empty()) {
+      tell(refusal);
+      continue;
+    }
+    const std::string face = font->get_active_text();
+    const double chosen_size = parse_size(size->get_active_text());
+    const Ink chosen_color = ink_clamp(color->get_active_row_number());
+    const bool want_bold = bold->get_active();
+    const bool want_italic = italic->get_active();
+    const bool want_underline = underline->get_active();
+    const bool want_strike = strike->get_active();
+    Script script = Script::None;
+    if (super->get_active())
+      script = Script::Super;
+    else if (sub->get_active())
+      script = Script::Sub;
+    auto edit = [=](Run& run) {
+      if (!face.empty() && run.font != face) {
+        run.font = face;
+        run.direct |= kDirectFont;
+      }
+      if (known_size(chosen_size) && run.size != chosen_size) {
+        run.size = chosen_size;
+        run.direct |= kDirectSize;
+      }
+      if (run.bold != want_bold) {
+        run.bold = want_bold;
+        run.direct |= kDirectBold;
+      }
+      if (run.italic != want_italic) {
+        run.italic = want_italic;
+        run.direct |= kDirectItalic;
+      }
+      if (run.underline != want_underline) {
+        run.underline = want_underline;
+        run.direct |= kDirectUnderline;
+      }
+      if (run.color != chosen_color) {
+        run.color = chosen_color;
+        run.direct |= kDirectColor;
+      }
+      if (run.strike != want_strike) {
+        run.strike = want_strike;
+        run.direct |= kDirectStrike;
+      }
+      if (run.script != script) {
+        run.script = script;
+        run.direct |= kDirectScript;
+      }
+    };
+    if (editing_cell())
+      edit_cell_runs(edit);
+    else
+      apply_run_edit(edit);
+    break;
+  }
+}
+
 void MainWindow::on_font_changed()
 {
   if (suppress_format_)
@@ -3919,7 +4142,8 @@ bool MainWindow::on_text_key(GdkEventKey* event)
 }
 
 std::string list_label_key(const std::string& text, const std::string& family, int size, bool bold,
-                           bool italic, bool underline)
+                           bool italic, bool underline, int color, int highlight, bool strike,
+                           int script)
 {
   std::string key = text;
   key += '\n';
@@ -3929,6 +4153,15 @@ std::string list_label_key(const std::string& text, const std::string& family, i
   key += bold ? "b" : "";
   key += italic ? "i" : "";
   key += underline ? "u" : "";
+  key += '\n';
+  key += std::to_string(color);
+  key += '\n';
+  key += std::to_string(highlight);
+  key += strike ? "s" : "";
+  if (script == static_cast<int>(Script::Super))
+    key += "u";
+  else if (script == static_cast<int>(Script::Sub))
+    key += "d";
   return key;
 }
 
@@ -3949,6 +4182,62 @@ void apply_label_underline(const Glib::RefPtr<Pango::Layout>& layout, bool under
   layout->set_attributes(attrs);
 }
 
+void apply_label_face(const Glib::RefPtr<Pango::Layout>& layout, const Run& format, int font_size)
+{
+  if (!layout)
+    return;
+  Pango::AttrList attrs;
+  bool any = false;
+  auto span = [](Pango::Attribute& attr) {
+    attr.set_start_index(0);
+    attr.set_end_index(G_MAXUINT);
+  };
+  if (format.underline) {
+    Pango::AttrInt mark = Pango::Attribute::create_attr_underline(Pango::UNDERLINE_SINGLE);
+    span(mark);
+    attrs.insert(mark);
+    any = true;
+  }
+  auto channel = [](int value) {
+    return static_cast<guint16>(std::max(0, std::min(255, value)) * 65535 / 255);
+  };
+  if (format.color != Ink::Auto) {
+    const Rgb c = ink_rgb(format.color);
+    Pango::AttrColor fg =
+        Pango::Attribute::create_attr_foreground(channel(c.red), channel(c.green), channel(c.blue));
+    span(fg);
+    attrs.insert(fg);
+    any = true;
+  }
+  if (format.highlight != Ink::Auto) {
+    const Rgb c = ink_rgb(format.highlight);
+    Pango::AttrColor bg =
+        Pango::Attribute::create_attr_background(channel(c.red), channel(c.green), channel(c.blue));
+    span(bg);
+    attrs.insert(bg);
+    any = true;
+  }
+  if (format.strike) {
+    Pango::AttrInt mark = Pango::Attribute::create_attr_strikethrough(true);
+    span(mark);
+    attrs.insert(mark);
+    any = true;
+  }
+  if (format.note == 0 && format.script != Script::None) {
+    Pango::AttrFloat scale = Pango::Attribute::create_attr_scale(0.65);
+    span(scale);
+    attrs.insert(scale);
+    const int rise = static_cast<int>(font_size * 0.45);
+    Pango::AttrInt up =
+        Pango::Attribute::create_attr_rise(format.script == Script::Sub ? -rise : rise);
+    span(up);
+    attrs.insert(up);
+    any = true;
+  }
+  if (any)
+    layout->set_attributes(attrs);
+}
+
 Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& paragraph, int offset,
                                                           int number, int& width, int& gap)
 {
@@ -3962,7 +4251,9 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   const int size = static_cast<int>(std::max(1.0, format.size) * zoom_factor() * PANGO_SCALE);
   const bool underline = label_underlined(format);
   const std::string key =
-      list_label_key(text.raw(), family, size, format.bold, format.italic, underline);
+      list_label_key(text.raw(), family, size, format.bold, format.italic, underline,
+                     static_cast<int>(format.color), static_cast<int>(format.highlight),
+                     format.strike, static_cast<int>(format.script));
   const auto found = label_layout_cache_.find(key);
   if (found != label_layout_cache_.end()) {
     width = found->second.width;
@@ -3978,7 +4269,7 @@ Glib::RefPtr<Pango::Layout> MainWindow::list_label_layout(const Paragraph& parag
   desc.set_weight(format.bold ? Pango::WEIGHT_BOLD : Pango::WEIGHT_NORMAL);
   desc.set_style(format.italic ? Pango::STYLE_ITALIC : Pango::STYLE_NORMAL);
   layout->set_font_description(desc);
-  apply_label_underline(layout, underline);
+  apply_label_face(layout, format, size);
   int height = 0;
   layout->get_pixel_size(width, height);
   auto space = text_.create_pango_layout(" ");
@@ -4368,13 +4659,16 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
   if (list.kind != ListKind::None &&
       (line.format.align == Align::Left || line.format.align == Align::Justify)) {
     // The label as drawn: list_label_layout() lays it out in the paragraph's
-    // first character's font, size, weight and slant, so the cache keys on
-    // all four, and the label's text.
+    // first character's font, size, weight, slant, and script, so the cache
+    // keys on those, and the label's text. Script changes the width.
     const Run format = format_of(buffer_->get_iter_at_offset(start));
+    const char script = format.script == Script::Super ? 'u'
+                        : format.script == Script::Sub ? 'd'
+                                                       : '-';
     const std::string key = (format.font.empty() ? "Sans" : format.font) + '\x1f' +
                             std::to_string(half_points_of(format.size)) + '\x1f' +
-                            (format.bold ? 'b' : '-') + (format.italic ? 'i' : '-') + '\x1f' +
-                            list_label(list, line.number);
+                            (format.bold ? 'b' : '-') + (format.italic ? 'i' : '-') + script +
+                            '\x1f' + list_label(list, line.number);
     auto known = tab_widths_.find(key);
     if (known == tab_widths_.end()) {
       Paragraph paragraph;
