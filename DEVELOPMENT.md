@@ -86,7 +86,7 @@ Organized notes stay in the Ephemeris Notepad. Plain text stays with Lunduke-Not
 - Everything in `src/` except `main.cpp` builds once as the `writeit_core` static library, which the app and every test link. A new `src/*.cpp` file goes in that one list in `meson.build`, never in a test target's own sources.
 - A test that opens a window is marked `is_parallel: false` in `meson.build`, so window tests never share the X display at the same time.
 - Every suite ends with `done(name, n)`, where `n` is the exact number of checks it runs. A suite that runs more or fewer fails.
-- Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag.
+- Each milestone has its own branch, cut from `master`. Every feature PR for that milestone targets the milestone branch, not `master`. M2's branch is `m2`; from M3 on they are named `milestone-N` (`milestone-3`, `milestone-4`, …), so a branch never shares a name with its tag. That is the 1.0 shape, where each of M0–M5 was the branch. From 2.0 on, the branch is the release (`milestone-2`, `milestone-3`, …) and the milestones in section 9 are the order of work on it.
 - One Grok session does the work with Greg. It writes the change, runs the tests, opens the pull requests, and pushes the Gitea mirror. It merges only when Greg says to.
 - The session reads the code and runs the unit tests. The desktop suite runs locally, under Xvfb or `tests/ui-docker.sh`. Greg tries the change in a live window.
 - A pull request into a milestone branch merges once Greg says so and lint passes. Lint is the only required check. The Debian trixie and Devuan Excalibur jobs, and ASan and UBSan on Debian, still compile and run the unit tests on the pull request. The desktop suite stays local. A pull request does not have to be up to date with the milestone branch. If a pull request conflicts, the session fixes the conflict on that pull request.
@@ -245,7 +245,7 @@ Fonts, sizes, underline, alignment, indents, named styles beyond headings, heade
 
 ## 7. Work plan
 
-1.0 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with that release before adding a filter. M5 cuts `v1.0.0`.
+1.0 is M0 through M5, in this order. Write-It is the first Retro-Office codebase. The next milestone starts when the current one's done line is true. Live with that release before adding a filter. M5 cuts `v1.0.0`. The majors after 1.0 are milestone plans in section 9. They do not start in this section.
 
 Each milestone is a branch cut from `master`. M2's was `m2`. From M3 on the branch is `milestone-N` (`milestone-3`, `milestone-4`, …). A milestone that owns a file format or a document operation brings a headless offline test for that slice. The CHECK harness is the one the other guests use. Lint covers `src/` only.
 
@@ -345,12 +345,174 @@ A document of paragraphs and character runs. This is the first slice that round-
 
 The end zone is Word 97 as Office 97 Standard shipped it on 16 January 1997. 1.0 is not that. Each row after 1.0 is one major release, tagged `vX.0.0`, and it starts after Pay-It 1.0 has been lived with, in the rotation in the suite note. A patch release does not add the next row. VBA stays out. Save keeps writing RTF.
 
+A major is one branch, cut from `master` when that release starts: `milestone-2`, then `milestone-3`, and so on. Its milestones are the order of feature pull requests into that branch. One milestone is one job, with a headless offline test for the slice. Word 97 decides the behaviour the table does not spell out, and the pull request writes that detail back into this file. The branch merges once, after the last milestone and a live pass, and that merge is the release tag. A milestone inside a major is not its own GitHub release.
+
+Names below are `2.0 M1`, `3.0 M1`, and so on, so they are not 1.0's M0–M5.
+
 | Version | Job |
 |---|---|
-| **1.0** | The work plan above. |
-| **2.0** | Font colour, highlight, strikethrough, superscript and subscript, paragraph spacing, borders and shading, tabs on a real ruler, and the format painter. |
-| **3.0** | Sections, page numbers, endnotes, captions, a table of contents, an index, bookmarks, and hyperlinks. |
-| **4.0** | Comments, track changes, AutoCorrect, AutoText, a thesaurus, a grammar dialog, and spelling as you type. The checkers are local. |
-| **5.0** | Mail merge, envelopes, and labels. The data source is a CSV. |
-| **6.0** | Text boxes, lines, autoshapes, and wrap around a picture. |
-| **7.0** | Open a Word 97 `.doc` and keep the formatting this program understands. |
+| **1.0** | The work plan above. M0 through M5. |
+| **2.0** | Format depth, and table rows and columns. Seven milestones. |
+| **3.0** | A long document. Eight milestones. |
+| **4.0** | Review and the writing tools. Seven milestones. |
+| **5.0** | Mail merge, envelopes, and labels. Three milestones. |
+| **6.0** | Drawing. Three milestones. |
+| **7.0** | Open a Word 97 `.doc`. Six milestones, one for each earlier release. |
+
+### 2.0 — Format depth
+
+The rest of the Format menu a letter uses, and two table jobs 1.0 does not do. 1.0 already has font, size, bold, italic, underline, alignment, indents, lists, and styles. Its table commands act on the caret's one row or one column.
+
+| Milestone | Done when |
+|---|---|
+| **2.0 M1 — Character** | Font colour, highlight, strikethrough, superscript, and subscript round-trip on a run. |
+| **2.0 M2 — Spacing** | Space before, space after, and line spacing round-trip on a paragraph. |
+| **2.0 M3 — Borders** | Borders and shading round-trip on a paragraph and on a table cell. |
+| **2.0 M4 — Tabs** | The paragraph's own tab stops are set from the ruler and round-trip. |
+| **2.0 M5 — Rows and columns** | Several whole rows, or several whole columns, can be selected, copied, and pasted. |
+| **2.0 M6 — Row and column colour** | A selected row or column takes one background colour, and that colour round-trips. |
+| **2.0 M7 — Painter** | The format painter copies the format of M1–M4, and a cell's shading from M3 and M6. |
+
+**2.0 M1 — Character.** Format → Font… gains colour, strikethrough, superscript, and subscript. Highlight is the toolbar control Word 97 puts next to the font colour. Superscript and subscript do not apply together. The colour lists are Word 97's, including automatic. A run stores one of each. RTF round-trips them.
+
+**2.0 M2 — Spacing.** Format → Paragraph… gains space before, space after, and line spacing. Line spacing is Word 97's list: single, 1.5, double, at least, exactly, and multiple. Before and after use the units from Tools → Options…. The screen and the page count follow the spacing. RTF round-trips it.
+
+**2.0 M3 — Borders.** Format → Borders and Shading… sets a paragraph's borders and shading, and a table cell's borders and shading. The fixed cell frame from 1.0 follows what this dialog stored. RTF round-trips both.
+
+**2.0 M4 — Tabs.** A paragraph can hold its own tab stops. 1.0's list labels still fall on the default half-inch stops when the paragraph has none. Format → Tabs… and the ruler set the same stops: left, center, right, decimal, and bar, with the leaders Word 97 offers. The ruler is no longer only a stub. RTF round-trips the stops.
+
+**2.0 M5 — Rows and columns.** A click on the row's left edge selects that row. A click on the column's top edge selects that column. Shift extends the selection along the same edge, so the selection is whole rows or whole columns, never a mix of the two. Copy keeps each selected cell's text, character format, paragraph format, and shading. Paste of rows inserts those rows after the caret's row. Paste of columns inserts those columns after the caret's column. A paste that would pass 1.0's limits, 32 rows or 16 columns, is refused, and the status bar says so. The paste is one undo step. Pasting the same copy into ordinary text inserts the cells' text as paragraphs. RTF round-trips the table after the paste.
+
+**2.0 M6 — Row and column colour.** With rows selected, one background colour paints every cell in those rows. With columns selected, it paints every cell in those columns. The colours are M1's list, and one more choice clears the colour. The colour is that cell's shading, the same property M3 stores, so a later shading on one cell replaces the row colour there. RTF round-trips it as cell shading.
+
+**2.0 M7 — Painter.** The format painter copies character and paragraph format, including M1–M4, from the selection onto the text it is dragged across. Inside a table it also copies the cell's shading, whether that shading came from M3 or from a row or column colour. One click paints once. A double click keeps painting until Escape, as in Word 97. It does not invent a format 2.0 does not store.
+
+**Done when** the seven lines are true and `v2.0.0` is tagged.
+
+### 3.0 — A long document
+
+1.0 has one section, footnotes, and heading styles. Page numbers, endnotes, captions, a contents, an index, bookmarks, and hyperlinks are this release. Each milestone can use the ones before it.
+
+| Milestone | Done when |
+|---|---|
+| **3.0 M1 — Sections** | A section break starts a section with its own page setup, columns, and header and footer. |
+| **3.0 M2 — Page numbers** | A page number in the header or footer prints that sheet's number, and a section can restart the count. |
+| **3.0 M3 — Endnotes** | An endnote marker in the body collects its note at the end of the document. |
+| **3.0 M4 — Captions** | A caption is a numbered paragraph tied to a picture or a table. |
+| **3.0 M5 — Contents** | A table of contents is built from the heading outline levels and the page numbers. |
+| **3.0 M6 — Index** | An index is built from marked entries and the page numbers. |
+| **3.0 M7 — Bookmarks** | A bookmark names a place. Insert it, and go to it. |
+| **3.0 M8 — Hyperlinks** | A hyperlink jumps to a bookmark in this document, or opens a path. |
+
+**3.0 M1 — Sections.** Insert → Break can start a new section, on the next page or continuous, as in Word 97. The section holds the page setup, the columns, and the header and footer that 1.0 stored for the whole document. A document with one section still saves as 1.0 saved it. RTF round-trips the break and the section's own setup.
+
+**3.0 M2 — Page numbers.** Insert → Page Numbers puts the number in the header or the footer, in the place Word 97 offers. The number on the sheet is the number that prints. A section can restart the count, or keep counting from the section before. The status bar's `Page n of m` stays the count of sheets. RTF round-trips the field.
+
+**3.0 M3 — Endnotes.** Insert → Footnote can insert an endnote. The marker sits in the body, and the note is collected after the last section, not at the foot of the sheet. Footnotes stay what 1.0 made them. Endnotes use the same limit footnotes use, 200. RTF round-trips both.
+
+**3.0 M4 — Captions.** Insert → Caption adds a numbered paragraph under a picture or a table. The number follows the objects of that label. Deleting the object does not leave a number that still counts it. RTF round-trips the caption as that paragraph.
+
+**3.0 M5 — Contents.** Insert → Index and Tables builds a table of contents from Heading 1 to the chosen level, with the page number from M2. Rebuilding replaces the old contents. Editing the heading, or a page break that moves it, shows up on the next rebuild. RTF round-trips the field and the result.
+
+**3.0 M6 — Index.** The same dialog marks an index entry and builds the index from those marks, with the page numbers. A mark that is not shown in the body is still stored. Rebuilding replaces the old index. RTF round-trips the marks and the result.
+
+**3.0 M7 — Bookmarks.** Insert → Bookmark names a selection or a caret. The name is Word 97's: a letter first, then letters, digits, and underscores. Go to that bookmark. A second bookmark of the same name replaces the first. RTF round-trips the names.
+
+**3.0 M8 — Hyperlinks.** Insert → Hyperlink makes a run that jumps to a bookmark in this document, or opens a file path. There is no account and no fetch. The path is stored. RTF round-trips the link.
+
+**Done when** the eight lines are true and `v3.0.0` is tagged.
+
+### 4.0 — Review and writing tools
+
+The checkers are local. Nothing in this release contacts a network. Spelling as you type is the squiggle 1.0 left out. The F7 dialog stays.
+
+| Milestone | Done when |
+|---|---|
+| **4.0 M1 — Comments** | A comment is anchored to a selection, read and deleted from the review, and round-trips. |
+| **4.0 M2 — Track changes** | An insertion and a deletion are marked, accepted, or rejected, and round-trip. |
+| **4.0 M3 — AutoCorrect** | A typed replacement from the local list lands as you type, and Undo removes that replacement. |
+| **4.0 M4 — AutoText** | A stored entry is inserted by its name, and it keeps the format it was stored with. |
+| **4.0 M5 — Thesaurus** | The thesaurus dialog offers local synonyms for the word at the caret and replaces it on OK. |
+| **4.0 M6 — Grammar** | The grammar dialog walks the document against a local check and can change the sentence it stopped on. |
+| **4.0 M7 — Spelling as you type** | A word the local dictionary does not know is marked on the page, and the mark is not stored in the file. |
+
+**4.0 M1 — Comments.** Insert → Comment anchors a note to the selection. The note is not a footnote. Review shows the comments, and deleting one removes that anchor. RTF round-trips the anchor and the text.
+
+**4.0 M2 — Track changes.** Tools → Track Changes marks an insertion and a deletion from then on. Accept and reject take one change or the whole document. Turning tracking off leaves the marks that are already there. RTF round-trips the marks.
+
+**4.0 M3 — AutoCorrect.** Tools → AutoCorrect… holds a local list of replacements. Typing the from-text and the separator Word 97 uses writes the to-text. One Undo removes that one replacement and leaves the typing before it. The list is the program's, not the document's.
+
+**4.0 M4 — AutoText.** Insert → AutoText stores a selection under a name and inserts it later. The entries live with the program, in the same local store as AutoCorrect, as a separate list. An entry keeps the character and paragraph format it was stored with.
+
+**4.0 M5 — Thesaurus.** Tools → Language → Thesaurus… looks up the word at the caret in a local list. OK replaces that word. A word the list does not know gets the dialog's own sentence, and the document is unchanged. No network.
+
+**4.0 M6 — Grammar.** Tools → Grammar… walks the body, the cells, the header, the footer, and the notes, in the order F7 uses. The check is local, not a service. Change applies the suggestion and moves on. Ignore leaves the sentence. The file does not store the marks.
+
+**4.0 M7 — Spelling as you type.** A word the F7 dictionary does not know is marked on screen while the option is on. The mark follows the same word rules as F7, including Ignore All. The mark is not written into the RTF, and turning the option off clears the marks. Squiggles are this milestone. They stay out of every earlier release.
+
+**Done when** the seven lines are true and `v4.0.0` is tagged.
+
+### 5.0 — Mail merge, envelopes, and labels
+
+The data source is a CSV on disk. There is no database and no account. The merge result is an ordinary document, and Save still writes RTF.
+
+| Milestone | Done when |
+|---|---|
+| **5.0 M1 — Mail merge** | Merge fields in a document are filled from a CSV into a new document, one copy per row. |
+| **5.0 M2 — Envelopes** | An envelope page holds a return address and a delivery address, and prints as that page. |
+| **5.0 M3 — Labels** | A label sheet holds one address per label, from the same address block, on a Word 97 label product or a custom grid. |
+
+**5.0 M1 — Mail merge.** Tools → Mail Merge sets the open document as the form, a CSV as the data, and the fields as the columns. A merge field with no such column is left visible. Merging writes a new document, one copy of the form per data row, with the fields replaced. The form itself is unchanged, and it round-trips with the field names still in it. The CSV is not embedded.
+
+**5.0 M2 — Envelopes.** Tools → Envelopes and Labels… builds one envelope. The delivery address and the return address are paragraphs on the envelope page size Word 97 uses for that choice. Printing prints that page. The envelope can take the delivery address from the merge data when a merge is set up, and it can be made with the addresses typed in.
+
+**5.0 M3 — Labels.** The same dialog builds a sheet of labels. One address is repeated, or each label takes the next row of the merge data. The product list is Word 97's, plus a custom label defined by the page, the rows, the columns, and the gaps. The result is an ordinary document.
+
+**Done when** the three lines are true and `v5.0.0` is tagged.
+
+### 6.0 — Drawing
+
+1.0 inserts a picture in the line. This release lets text wrap around that picture, and adds text boxes, lines, and autoshapes. It is not a second Show-It. There is no slide show and no animation.
+
+| Milestone | Done when |
+|---|---|
+| **6.0 M1 — Wrap** | A picture can leave the line, and the body text wraps around it in the ways Word 97 offers. |
+| **6.0 M2 — Text boxes** | A text box holds paragraphs, can be moved and sized, and round-trips. |
+| **6.0 M3 — Shapes** | A line or an autoshape can be drawn, moved, and sized, and round-trips. |
+
+**6.0 M1 — Wrap.** A picture still starts in the line, which is 1.0's behaviour. Format → Picture… can set the wrap Word 97 offers for a picture in a word processor: square, tight, through, top and bottom, behind the text, and in front of the text. The file keeps the original bytes, and the wrap is stored with the picture. An in-line picture still round-trips as 1.0 wrote it.
+
+**6.0 M2 — Text boxes.** Insert → Text Box draws a box that holds paragraphs, in the same character and paragraph format as the body. The box can be moved and sized. Text in the body wraps around it by the same choices as M1. RTF round-trips the box and its text.
+
+**6.0 M3 — Shapes.** The drawing tools add a line and the autoshapes on Word 97's drawing bar. A shape can be moved and sized, and given a line colour and a fill from the 2.0 colour list. RTF round-trips the shape. A shape does not hold a document of its own. Text stays in text boxes.
+
+**Done when** the three lines are true and `v6.0.0` is tagged.
+
+### 7.0 — Word 97 `.doc`
+
+Open a Word 97 `.doc` and keep the formatting this program already understands. Save still writes RTF. The reader does not write a `.doc`. Each milestone adds the formatting of one earlier release, and a fixture from that release opens to the same document model as the RTF this program would have saved.
+
+A `.doc` that uses a feature this program does not store is still opened. The unknown part is dropped, and the status bar says so. The parts this milestone understands are kept.
+
+| Milestone | Done when |
+|---|---|
+| **7.0 M1 — The letter** | A `.doc` of the 1.0 slice opens to the same model as that document saved as RTF. |
+| **7.0 M2 — Format depth** | Colour, highlight, strikethrough, superscript, subscript, spacing, borders, shading, tabs, and row and column backgrounds survive the open. |
+| **7.0 M3 — Long document** | Sections, page numbers, endnotes, captions, contents, index, bookmarks, and hyperlinks survive the open. |
+| **7.0 M4 — Review** | Comments and tracked changes survive the open. AutoCorrect, AutoText, the thesaurus, and the grammar marks are not in the file. |
+| **7.0 M5 — Merge fields** | Merge fields survive the open. The CSV stays outside the file. |
+| **7.0 M6 — Drawing** | Picture wrap, text boxes, lines, and autoshapes survive the open. |
+
+**7.0 M1 — The letter.** Paragraphs, character format, lists, styles, tables, the header, the footer, footnotes, pictures, columns, and page setup. The picture bytes come across. A headless test opens a fixed `.doc` and compares the model.
+
+**7.0 M2 — Format depth.** The 2.0 run and paragraph format, and a row or column background stored as cell shading, on top of M1. A document that uses only 1.0 formatting still opens as M1 opened it. Copied rows are ordinary cells by the time the file is saved, so the open has nothing separate to keep for the copy itself.
+
+**7.0 M3 — Long document.** The 3.0 structures, on top of M2. A contents or an index keeps its field and the result that was stored in the file.
+
+**7.0 M4 — Review.** Comments and tracked insertions and deletions, on top of M3. Accept and reject work on marks that arrived this way.
+
+**7.0 M5 — Merge fields.** The form's merge fields, on top of M4. Merging still reads the CSV from disk. An envelope or a label sheet that is ordinary paragraphs and page setup already opened under M1.
+
+**7.0 M6 — Drawing.** Wrap, text boxes, lines, and autoshapes, on top of M5. An in-line picture still opens as M1 opened it.
+
+**Done when** the six lines are true and `v7.0.0` is tagged. That tag is the end zone. Save still writes RTF.
