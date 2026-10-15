@@ -5291,6 +5291,31 @@ int MainWindow::picture_cell_limit(int column_px) const
   return std::max(1, column_px - 10);
 }
 
+// Show the numbers for this column and hide the rest. A column that used to
+// hold every note keeps those labels; showing them all stacks the later
+// numbers on the first footnote.
+void show_note_marks(Gtk::Fixed& marks, Gtk::Label& first, const std::vector<Gtk::Label*>& labels,
+                     int count)
+{
+  marks.show();
+  if (labels.empty()) {
+    if (count > 0)
+      first.show();
+    else
+      first.hide();
+    return;
+  }
+  for (size_t i = 0; i < labels.size(); ++i) {
+    Gtk::Label* label = labels[i];
+    if (!label)
+      continue;
+    if (static_cast<int>(i) < count)
+      label->show();
+    else
+      label->hide();
+  }
+}
+
 void MainWindow::place_notes()
 {
   if (closing_)
@@ -5405,12 +5430,7 @@ void MainWindow::place_notes()
   note_h_ = std::max(1, note_h);
   // no_show_all keeps the window's show_all off an empty note. show_all on
   // this box itself then returns without showing it, so show the pieces.
-  note_marks_.show();
-  note_label_.show();
-  for (Gtk::Label* label : note_numbers_) {
-    if (label)
-      label->show();
-  }
+  show_note_marks(note_marks_, note_label_, note_numbers_, static_cast<int>(notes_.size()));
   notes_view_.show();
   note_box_.show();
   if (moved)
@@ -5555,12 +5575,8 @@ void MainWindow::place_split_notes()
       note_y_ = y;
       note_w_ = width;
       note_h_ = height[0];
-      note_marks_.show();
-      note_label_.show();
-      for (Gtk::Label* label : note_numbers_) {
-        if (label)
-          label->show();
-      }
+      show_note_marks(note_marks_, note_label_, note_numbers_,
+                      static_cast<int>(note_groups_[static_cast<size_t>(i)].indexes.size()));
       notes_view_.show();
       note_box_.show();
       continue;
@@ -5579,12 +5595,8 @@ void MainWindow::place_split_notes()
     band.y = y;
     band.w = width;
     band.h = band_h;
-    band.marks.show();
-    band.label.show();
-    for (Gtk::Label* label : band.numbers) {
-      if (label)
-        label->show();
-    }
+    show_note_marks(band.marks, band.label, band.numbers,
+                    static_cast<int>(note_groups_[static_cast<size_t>(i)].indexes.size()));
     band.view.show();
     band.box.show();
   }

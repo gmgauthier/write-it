@@ -214,6 +214,44 @@ struct MainWindowProbe {
     return window.note_label_.get_text() == text;
   }
 
+  // Each note column shows one number per note in it, each on its own line.
+  // A number left over from before the column was split stacks on the first.
+  static bool note_numbers_unstacked(MainWindow& window)
+  {
+    auto marks_ok = [](Gtk::Container& marks, int expect) {
+      int visible = 0;
+      std::vector<int> ys;
+      for (Gtk::Widget* child : marks.get_children()) {
+        auto* label = dynamic_cast<Gtk::Label*>(child);
+        if (!label || !label->get_visible() || label->get_text().empty())
+          continue;
+        int x = 0;
+        int y = 0;
+        if (!label->translate_coordinates(marks, 0, 0, x, y))
+          return false;
+        ys.push_back(y);
+        ++visible;
+      }
+      if (visible != expect)
+        return false;
+      std::sort(ys.begin(), ys.end());
+      return std::adjacent_find(ys.begin(), ys.end()) == ys.end();
+    };
+    if (window.note_groups_.size() <= 1)
+      return marks_ok(window.note_marks_, static_cast<int>(window.notes_.size()));
+    if (!marks_ok(window.note_marks_,
+                  static_cast<int>(window.note_groups_.front().indexes.size())))
+      return false;
+    for (size_t g = 1; g < window.note_groups_.size(); ++g) {
+      if (g - 1 >= window.note_bands_.size() || !window.note_bands_[g - 1])
+        return false;
+      if (!marks_ok(window.note_bands_[g - 1]->marks,
+                    static_cast<int>(window.note_groups_[g].indexes.size())))
+        return false;
+    }
+    return true;
+  }
+
   static std::string note_number(MainWindow& window, int index)
   {
     if (index < 0 || index >= static_cast<int>(window.note_numbers_.size()))
@@ -919,7 +957,7 @@ int table_anchor(const writeit::Document& doc)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 210;
+constexpr int kChecks = 211;
 
 int main(int argc, char* argv[])
 {
@@ -2148,6 +2186,7 @@ int main(int argc, char* argv[])
     CHECK(text_one.find("Alpha") != std::string::npos && text_one.find("Beta") == std::string::npos);
     CHECK(text_two.find("Beta") != std::string::npos && text_two.find("Alpha") == std::string::npos);
     CHECK(number_one_band == "1" && number_two_band == "2");
+    CHECK(writeit::MainWindowProbe::note_numbers_unstacked(window));
     writeit::MainWindowProbe::type_in_note(window, 2, "z");
     settle();
     int band_two_after = -1;
