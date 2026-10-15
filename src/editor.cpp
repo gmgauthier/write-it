@@ -3422,8 +3422,13 @@ ParaFormat MainWindow::para_at(int offset) const
   }
   if (iter.is_end() && pending_para_set_)
     return pending_para_;
-  if (line_start.get_offset() > 0)
-    return para_at(line_start.get_offset() - 1);
+  if (line_start.get_offset() > 0) {
+    // The format above, without its page break. capture() keeps a break on
+    // the paragraph that has it; an untagged line must not start a sheet.
+    ParaFormat above = para_at(line_start.get_offset() - 1);
+    above.page_break = false;
+    return above;
+  }
   return ParaFormat{};
 }
 
@@ -4605,6 +4610,33 @@ bool widget_has_note(Gtk::Widget& widget, const std::function<bool(int)>& want)
   return false;
 }
 
+// The offset just past this paragraph's '\n', or -1 when the paragraph runs
+// to the end of the buffer. forward_line jumps there. forward_to_line_end
+// does not: an empty paragraph's iterator is already on the newline, and
+// that call moves to the next line's delimiter, so the seam for one page
+// break was painted on every following blank line. GTK also breaks lines on
+// separators other than '\n'. Those stay one paragraph, the same as the
+// character scan this replaced.
+int next_paragraph_offset(Gtk::TextIter iter)
+{
+  if (iter.is_end())
+    return -1;
+  const int start = iter.get_offset();
+  auto next = iter;
+  if (next.forward_line()) {
+    auto before = next;
+    if (before.backward_char() && before.get_offset() >= start && before.get_char() == '\n')
+      return next.get_offset();
+  }
+  for (; !iter.is_end(); ++iter) {
+    if (iter.get_char() == '\n') {
+      iter.forward_char();
+      return iter.get_offset();
+    }
+  }
+  return -1;
+}
+
 void collect_widget_notes(Gtk::Widget& widget, const std::function<void(int)>& fn)
 {
   if (auto* view = dynamic_cast<Gtk::TextView*>(&widget)) {
@@ -4641,17 +4673,10 @@ int MainWindow::seam_extra_through(int offset) const
     const int seam = seam_at(iter);
     if (seam > 0)
       extra += std::max(0, seam - natural_line_above(iter));
-    bool found = false;
-    while (!iter.is_end()) {
-      if (iter.get_char() == '\n') {
-        iter.forward_char();
-        found = true;
-        break;
-      }
-      iter.forward_char();
-    }
-    if (!found)
+    const int next = next_paragraph_offset(iter);
+    if (next < 0)
       break;
+    iter = buffer_->get_iter_at_offset(next);
   }
   return extra;
 }
@@ -4712,15 +4737,7 @@ int MainWindow::sheet_y(int offset) const
     block.top = top;
     block.natural = natural_line_above(iter);
     block.seam = seam_at(iter);
-    int next = -1;
-    for (auto iter_at = iter; !iter_at.is_end(); ++iter_at) {
-      if (iter_at.get_char() == '\n') {
-        auto after = iter_at;
-        after.forward_char();
-        next = after.get_offset();
-        break;
-      }
-    }
+    const int next = next_paragraph_offset(iter);
     block.end = next < 0 ? count : next;
     block.page_break = starts_sheet(block.start);
     blocks.push_back(block);
@@ -4848,17 +4865,10 @@ int MainWindow::page_content_y(int layout_y, int offset) const
       ++seam_index;
       lag = std::max(0, seam_index * per - origin);
     }
-    bool found = false;
-    while (!iter.is_end()) {
-      if (iter.get_char() == '\n') {
-        iter.forward_char();
-        found = true;
-        break;
-      }
-      iter.forward_char();
-    }
-    if (!found)
+    const int next = next_paragraph_offset(iter);
+    if (next < 0)
       break;
+    iter = buffer_->get_iter_at_offset(next);
   }
   return content + lag;
 }
@@ -5362,15 +5372,7 @@ void MainWindow::update_page_seams()
     block.top = top;
     block.natural = natural_line_above(iter);
     block.seam = seam_at(iter);
-    int next = -1;
-    for (auto at = iter; !at.is_end(); ++at) {
-      if (at.get_char() == '\n') {
-        auto after = at;
-        after.forward_char();
-        next = after.get_offset();
-        break;
-      }
-    }
+    const int next = next_paragraph_offset(iter);
     block.end = next < 0 ? count : next;
     block.page_break = starts_sheet(block.start);
     blocks.push_back(block);
@@ -5465,6 +5467,10 @@ void MainWindow::update_page_seams()
   auto sheets_for = [&](const std::vector<int>& pages, const std::vector<int>& placed) {
     std::vector<int> sheet(notes_.size(), -1);
     std::vector<char> marked(notes_.size(), 0);
+    // No marker can claim a sheet. The two buffer walks below only exist to
+    // find those markers.
+    if (notes_.empty())
+      return std::make_pair(sheet, marked);
     auto page_at = [&](int offset) {
       for (size_t i = 0; i < blocks.size(); ++i) {
         const bool inside = offset >= blocks[i].start &&

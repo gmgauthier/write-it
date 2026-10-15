@@ -447,6 +447,12 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
 {
   if (before.paragraphs.size() != after.paragraphs.size() || after.paragraphs.empty())
     return false;
+  // An empty last paragraph keeps a page break on a pad character. Retag
+  // would only store the flag, and the sheet would not show until the file
+  // was opened again. Rebuilding inserts the pad, as replace_buffer() does.
+  if (after.paragraphs.back().cell.table == 0 && after.paragraphs.back().runs.empty() &&
+      after.paragraphs.back().page_break != before.paragraphs.back().page_break)
+    return false;
   // The characters have to already be the buffer's. A table is one anchor
   // and a picture is one character; neither is the text of its runs. A cell
   // that changed has to be mounted again. Anything else is tags, and

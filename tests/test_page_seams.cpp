@@ -6,6 +6,7 @@
 // paper, and it is not stored in the document.
 
 #include "check.hpp"
+#include "document.hpp"
 #include "main_window.hpp"
 #include "view.hpp"
 
@@ -162,6 +163,46 @@ struct MainWindowProbe {
   {
     return w.buffer_->get_char_count();
   }
+  static void load_doc(MainWindow& w, const Document& doc)
+  {
+    w.undo_.clear();
+    w.replace_buffer(doc, 0);
+    w.saved_state_ = w.undo_.state_id();
+    w.save_point_ = true;
+    w.update_title();
+  }
+  static void page_break(MainWindow& w)
+  {
+    w.on_page_break();
+  }
+  static std::string message(MainWindow& w)
+  {
+    return w.message_.get_text();
+  }
+  // separator: the newline after the anchor. Otherwise the first character
+  // of the paragraph that follows the table.
+  static int past_table(MainWindow& w, bool separator)
+  {
+    if (!w.buffer_)
+      return -1;
+    for (auto iter = w.buffer_->begin(); !iter.is_end(); ++iter) {
+      if (!iter.get_child_anchor())
+        continue;
+      auto next = iter;
+      if (!next.forward_char())
+        return w.buffer_->get_char_count();
+      if (next.get_char() == '\n' && !next.get_child_anchor()) {
+        if (separator)
+          return next.get_offset();
+        auto body = next;
+        if (!body.forward_char())
+          return w.buffer_->get_char_count();
+        return body.get_offset();
+      }
+      return next.get_offset();
+    }
+    return -1;
+  }
 };
 
 }  // namespace writeit
@@ -188,6 +229,42 @@ std::string letter(int paragraphs)
   for (int i = 1; i <= paragraphs; ++i)
     text += "Paragraph " + std::to_string(i) + " of the letter.\n";
   return text;
+}
+
+int page_breaks(const writeit::Document& doc)
+{
+  int count = 0;
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.page_break)
+      ++count;
+  }
+  return count;
+}
+
+int break_index(const writeit::Document& doc)
+{
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    if (doc.paragraphs[i].page_break)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+std::string text_of(const writeit::Paragraph& paragraph)
+{
+  std::string out;
+  for (const writeit::Run& run : paragraph.runs)
+    out += run.text;
+  return out;
+}
+
+bool break_on_after(const writeit::Document& doc)
+{
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.page_break)
+      return paragraph.cell.table == 0 && text_of(paragraph) == "After";
+  }
+  return false;
 }
 
 int pages_in(const std::string& label)
@@ -249,7 +326,7 @@ int pdf_pages(const std::string& pdf)
 
 }  // namespace
 
-constexpr int kChecks = 19;
+constexpr int kChecks = 62;
 
 int main(int argc, char* argv[])
 {
@@ -387,6 +464,177 @@ int main(int argc, char* argv[])
     if (block_mid != "Page 2 of " + std::to_string(block_pages))
       std::cerr << "a third down the pushed sheet: " << block_mid << "\n";
     CHECK(block_mid == "Page 2 of " + std::to_string(block_pages));
+
+    // A page break on the blank line between two lines is one seam. The
+    // blank lines after it stay blank. Folding those paragraphs into the
+    // break painted a seam on every one of them, and the break itself did
+    // not show until the file was opened again.
+    MainWindowProbe::zoom(window, 100);
+    MainWindowProbe::load(window, "Alpha\n\nBeta\n\n\n\n");
+    settle();
+    MainWindowProbe::place(window, 6);
+    MainWindowProbe::page_break(window);
+    settle();
+    {
+      const writeit::Document broken = MainWindowProbe::doc(window);
+      const std::vector<int> one = MainWindowProbe::seam_offsets(window);
+      if (broken.paragraphs.size() != 7 || page_breaks(broken) != 1 || break_index(broken) != 1 ||
+          one.size() != 1) {
+        std::cerr << "blank break: paragraphs " << broken.paragraphs.size() << " breaks "
+                  << page_breaks(broken) << " at " << break_index(broken) << " page "
+                  << MainWindowProbe::page(window) << " offsets";
+        for (int at : one)
+          std::cerr << " " << at;
+        std::cerr << " pixels";
+        for (int px : MainWindowProbe::seams(window))
+          std::cerr << " " << px;
+        std::cerr << "\n";
+      }
+      CHECK(broken.paragraphs.size() == 7);
+      CHECK(page_breaks(broken) == 1);
+      CHECK(break_index(broken) == 1);
+      CHECK(text_of(broken.paragraphs[0]) == "Alpha");
+      CHECK(text_of(broken.paragraphs[1]).empty());
+      CHECK(text_of(broken.paragraphs[2]) == "Beta");
+      CHECK(one.size() == 1);
+      CHECK(!one.empty() && one.front() == 6);
+      CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+      CHECK(MainWindowProbe::message(window).empty());
+    }
+    {
+      const writeit::Document broken = MainWindowProbe::doc(window);
+      MainWindowProbe::load_doc(window, broken);
+      settle();
+      const writeit::Document again = MainWindowProbe::doc(window);
+      const std::vector<int> one = MainWindowProbe::seam_offsets(window);
+      CHECK(page_breaks(again) == 1);
+      CHECK(break_index(again) == 1);
+      CHECK(one.size() == 1);
+      // The reload leaves the caret on the first line.
+      CHECK(MainWindowProbe::page(window) == "Page 1 of 2");
+    }
+    {
+      writeit::Document round;
+      const bool imported = writeit::rtf_import(writeit::rtf_export(MainWindowProbe::doc(window)), round);
+      CHECK(imported);
+      if (imported) {
+        MainWindowProbe::load_doc(window, round);
+        settle();
+      }
+      const std::vector<int> one = MainWindowProbe::seam_offsets(window);
+      if (page_breaks(MainWindowProbe::doc(window)) != 1 || one.size() != 1)
+        std::cerr << "reopen: breaks " << page_breaks(MainWindowProbe::doc(window)) << " seams "
+                  << one.size() << " page " << MainWindowProbe::page(window) << "\n";
+      CHECK(page_breaks(MainWindowProbe::doc(window)) == 1);
+      CHECK(one.size() == 1);
+      CHECK(MainWindowProbe::page(window) == "Page 1 of 2");
+    }
+
+    // The caret between two lines of text flags the second line, and that
+    // line is the only seam.
+    MainWindowProbe::load(window, "Alpha\nBeta\n");
+    settle();
+    MainWindowProbe::place(window, 5);
+    MainWindowProbe::page_break(window);
+    settle();
+    {
+      const writeit::Document broken = MainWindowProbe::doc(window);
+      const std::vector<int> one = MainWindowProbe::seam_offsets(window);
+      if (one.size() != 1 || MainWindowProbe::page(window) != "Page 2 of 2")
+        std::cerr << "between lines: seams " << one.size() << " page "
+                  << MainWindowProbe::page(window) << "\n";
+      CHECK(broken.paragraphs.size() == 3);
+      CHECK(!broken.paragraphs[0].page_break);
+      CHECK(broken.paragraphs[1].page_break);
+      CHECK(text_of(broken.paragraphs[1]) == "Beta");
+      CHECK(one.size() == 1);
+      CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+    }
+
+    // A caret on the paragraph after a table, and on the newline that ends
+    // the table's line, starts a sheet. A caret on the anchor is the table.
+    {
+      writeit::Document doc;
+      writeit::Paragraph before;
+      writeit::Run run;
+      run.text = "Before";
+      before.runs.push_back(run);
+      doc.paragraphs.push_back(before);
+      CHECK(writeit::insert_table(doc.paragraphs, 1, 2, 2, writeit::page_text_twips(doc.page)));
+      writeit::Paragraph after;
+      writeit::Run after_run;
+      after_run.text = "After";
+      after.runs.push_back(after_run);
+      doc.paragraphs.push_back(after);
+      MainWindowProbe::load_doc(window, doc);
+      settle();
+      MainWindowProbe::place(window, MainWindowProbe::past_table(window, false));
+      MainWindowProbe::page_break(window);
+      settle();
+      const writeit::Document on_after = MainWindowProbe::doc(window);
+      if (!MainWindowProbe::message(window).empty() || page_breaks(on_after) != 1)
+        std::cerr << "after table: " << MainWindowProbe::message(window) << " breaks "
+                  << page_breaks(on_after) << "\n";
+      CHECK(MainWindowProbe::message(window).empty());
+      CHECK(page_breaks(on_after) == 1);
+      CHECK(break_on_after(on_after));
+      CHECK(MainWindowProbe::seam_offsets(window).size() == 1);
+      CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+
+      MainWindowProbe::load_doc(window, doc);
+      settle();
+      MainWindowProbe::place(window, MainWindowProbe::past_table(window, true));
+      MainWindowProbe::page_break(window);
+      settle();
+      const writeit::Document on_sep = MainWindowProbe::doc(window);
+      if (!MainWindowProbe::message(window).empty())
+        std::cerr << "separator: " << MainWindowProbe::message(window) << "\n";
+      CHECK(MainWindowProbe::message(window).empty());
+      CHECK(page_breaks(on_sep) == 1);
+      CHECK(break_on_after(on_sep));
+      CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+    }
+    {
+      writeit::Document only;
+      CHECK(writeit::insert_table(only.paragraphs, 0, 2, 2, writeit::page_text_twips(only.page)));
+      MainWindowProbe::load_doc(window, only);
+      settle();
+      MainWindowProbe::place(window, MainWindowProbe::chars(window));
+      MainWindowProbe::page_break(window);
+      settle();
+      const writeit::Document broken = MainWindowProbe::doc(window);
+      bool body = false;
+      if (!broken.paragraphs.empty()) {
+        const writeit::Paragraph& last = broken.paragraphs.back();
+        body = last.page_break && last.cell.table == 0 && text_of(last).empty();
+      }
+      if (!MainWindowProbe::message(window).empty() || !body ||
+          MainWindowProbe::seam_offsets(window).size() != 1 ||
+          MainWindowProbe::page(window) != "Page 2 of 2") {
+        std::cerr << "table end: " << MainWindowProbe::message(window) << " body " << body
+                  << " page " << MainWindowProbe::page(window) << " offsets";
+        for (int at : MainWindowProbe::seam_offsets(window))
+          std::cerr << " " << at;
+        std::cerr << " pixels";
+        for (int px : MainWindowProbe::seams(window))
+          std::cerr << " " << px;
+        std::cerr << "\n";
+      }
+      CHECK(MainWindowProbe::message(window).empty());
+      CHECK(page_breaks(broken) == 1);
+      CHECK(body);
+      CHECK(MainWindowProbe::seam_offsets(window).size() == 1);
+      CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+
+      MainWindowProbe::load_doc(window, only);
+      settle();
+      MainWindowProbe::place(window, 0);
+      MainWindowProbe::page_break(window);
+      settle();
+      CHECK(MainWindowProbe::message(window) == "Cannot break the page inside a table.");
+      CHECK(page_breaks(MainWindowProbe::doc(window)) == 0);
+      CHECK(MainWindowProbe::page(window) == "Page 1 of 1");
+    }
     window.hide();
     settle();
   }
