@@ -160,7 +160,8 @@ bool operator!=(const PageSetup& a, const PageSetup& b)
 bool operator==(const Cell& a, const Cell& b)
 {
   return a.table == b.table && a.row == b.row && a.column == b.column && a.rows == b.rows &&
-         a.columns == b.columns && a.widths == b.widths;
+         a.columns == b.columns && a.widths == b.widths && a.borders_set == b.borders_set &&
+         a.borders == b.borders && a.shading == b.shading;
 }
 
 bool operator!=(const Cell& a, const Cell& b)

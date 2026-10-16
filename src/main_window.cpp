@@ -510,6 +510,7 @@ void MainWindow::build_menus()
   numbering_item_ = add_item(*format_menu, "_Numbering", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   paragraph_item_ = add_item(*format_menu, "_Paragraph…", true);
+  borders_item_ = add_item(*format_menu, "Borders and Shadin_g…", true);
   columns_item_ = add_item(*format_menu, "C_olumns…", true);
   columns_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_columns));
 
