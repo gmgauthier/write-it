@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '2.1.1',
+  version: '2.2.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -209,6 +209,13 @@ write_it_spacing_tests = executable(
   dependencies: [writeit_dep],
 )
 test('spacing', write_it_spacing_tests)
+
+write_it_borders_tests = executable(
+  'write-it-borders-tests',
+  'tests/test_borders.cpp',
+  dependencies: [writeit_dep],
+)
+test('borders', write_it_borders_tests)
 
 # Enter twice after a page break must not start another sheet.
 write_it_double_return_tests = executable(

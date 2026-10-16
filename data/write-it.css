@@ -47,6 +47,18 @@ textview.table-cell-text text {
   caret-color: #000000;
 }
 
+/* Stored cell borders replace the 1.0 line. A cairo fill shows through. */
+frame.table-cell.cell-borders {
+  border: none;
+}
+frame.table-cell.cell-shade {
+  background-color: transparent;
+}
+textview.table-cell-text.cell-shade,
+textview.table-cell-text.cell-shade text {
+  background-color: transparent;
+}
+
 .ruler {
   background-color: #f4f3f2;
   border-bottom: 1px solid #c8c6c4;

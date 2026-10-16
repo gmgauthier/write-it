@@ -87,13 +87,18 @@ struct ParaFormat {
   // Half-points the line spacing is drawn against. 22 is 11 pt, which a tag
   // from before this slice means.
   int basis = 22;
+  // Paragraph borders and shading. A tag from before this slice leaves them
+  // plain. A cell's own frame rides on `cell` (borders_set, borders, shading).
+  Borders borders;
+  Shading shading;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
 {
   return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
          a.direct == b.direct && a.page_break == b.page_break && a.cell == b.cell &&
-         a.spacing == b.spacing && a.basis == b.basis;
+         a.spacing == b.spacing && a.basis == b.basis && a.borders == b.borders &&
+         a.shading == b.shading;
 }
 
 inline ParaFormat para_format(const Paragraph& paragraph)
@@ -108,6 +113,8 @@ inline ParaFormat para_format(const Paragraph& paragraph)
   format.cell = paragraph.cell;
   format.spacing = paragraph.spacing;
   format.basis = basis_half_points(paragraph);
+  format.borders = paragraph.borders;
+  format.shading = paragraph.shading;
   return format;
 }
 
@@ -211,6 +218,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // drops it, and the file never stores it.
   void update_page_seams();
   void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
+  void draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr);
+  void draw_cell_paragraph_borders(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
   int natural_line_above(const Gtk::TextIter& iter) const;
   // Seam pixels above `offset` that are not part of the laid-out text. A
   // heading's own space, which a seam replaces on screen, is put back.
@@ -471,6 +480,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_align_toggled(Align align);
   void show_align();
   void on_paragraph();
+  void on_borders();
   // Named styles (styles.cpp).
   std::vector<Style> sheet() const;
   void fill_style_combo();
@@ -903,6 +913,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bullets_item_ = nullptr;
   Gtk::MenuItem* numbering_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
+  Gtk::MenuItem* borders_item_ = nullptr;
   Gtk::MenuItem* style_item_ = nullptr;
   Gtk::MenuItem* align_left_item_ = nullptr;
   Gtk::MenuItem* align_center_item_ = nullptr;
