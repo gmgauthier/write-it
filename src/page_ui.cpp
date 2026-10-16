@@ -2,6 +2,7 @@
 
 #include "main_window.hpp"
 
+#include "border_draw.hpp"
 #include "para_check.hpp"
 
 #include <giomm/memoryinputstream.h>
@@ -477,7 +478,58 @@ class CellFrame : public Gtk::Frame {
     return width_;
   }
 
+  // borders_set false and a plain shading keep the 1.0 frame. Anything the
+  // dialog stored is drawn here, including every side none.
+  void set_cell_chrome(const Cell& cell, double zoom)
+  {
+    borders_set_ = cell.borders_set;
+    borders_ = cell.borders;
+    shading_ = cell.shading;
+    zoom_ = zoom;
+    set_shadow_type(borders_set_ ? Gtk::SHADOW_NONE : Gtk::SHADOW_IN);
+    auto context = get_style_context();
+    if (borders_set_)
+      context->add_class("cell-borders");
+    else
+      context->remove_class("cell-borders");
+    Rgb rgb;
+    const bool shade = shading_color(shading_, rgb);
+    if (shade)
+      context->add_class("cell-shade");
+    else
+      context->remove_class("cell-shade");
+    if (Gtk::Widget* child = get_child()) {
+      auto child_context = child->get_style_context();
+      if (shade)
+        child_context->add_class("cell-shade");
+      else
+        child_context->remove_class("cell-shade");
+    }
+    queue_draw();
+  }
+
  protected:
+  bool on_draw(const Cairo::RefPtr<Cairo::Context>& cr) override
+  {
+    Rgb rgb;
+    const bool shade = shading_color(shading_, rgb);
+    if (!borders_set_ && !shade)
+      return Gtk::Frame::on_draw(cr);
+    const int width = std::max(0, get_allocated_width());
+    const int height = std::max(0, get_allocated_height());
+    if (shade)
+      cr->set_source_rgb(rgb.red / 255.0, rgb.green / 255.0, rgb.blue / 255.0);
+    else
+      cr->set_source_rgb(1, 1, 1);
+    cr->rectangle(0, 0, width, height);
+    cr->fill();
+    if (!borders_set_)
+      return Gtk::Frame::on_draw(cr);
+    const bool drawn = Gtk::Frame::on_draw(cr);
+    paint_borders(cr, 0, 0, width, height, borders_, zoom_);
+    return drawn;
+  }
+
   Gtk::SizeRequestMode get_request_mode_vfunc() const override
   {
     return Gtk::SIZE_REQUEST_HEIGHT_FOR_WIDTH;
@@ -490,6 +542,10 @@ class CellFrame : public Gtk::Frame {
 
  private:
   int width_ = 1;
+  bool borders_set_ = false;
+  Borders borders_;
+  Shading shading_;
+  double zoom_ = 1;
 };
 
 int px_to_twips(int px, double zoom)
@@ -595,6 +651,13 @@ class TableSheet : public Gtk::Grid {
         view->set_vexpand(true);
         view->get_style_context()->add_class("table-cell-text");
         frame->add(*view);
+        frame->set_cell_chrome(slot.front().cell, window_.zoom_factor());
+        view->signal_draw().connect(
+            [this, view](const Cairo::RefPtr<Cairo::Context>& cr) {
+              window_.draw_cell_paragraph_borders(*view, cr);
+              return false;
+            },
+            true);
         attach(*frame, column, row, 1, 1);
         frames_[static_cast<size_t>(row)][static_cast<size_t>(column)] = frame;
         views_[static_cast<size_t>(row)][static_cast<size_t>(column)] = view;
@@ -759,7 +822,11 @@ class TableSheet : public Gtk::Grid {
         twips = widths_[static_cast<size_t>(column)];
       const int px = column_display_px(twips, zoom);
       for (int row = 0; row < rows_; ++row) {
-        frames_[static_cast<size_t>(row)][static_cast<size_t>(column)]->set_column_px(px);
+        CellFrame* frame = frames_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        frame->set_column_px(px);
+        const auto& slot = forms_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        if (!slot.empty())
+          frame->set_cell_chrome(slot.front().cell, zoom);
         Gtk::TextView* view = views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
         view->override_font(desc);
         window_.restyle_buffer(view->get_buffer());

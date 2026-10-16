@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <iterator>
@@ -406,6 +407,12 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
   if (!own(paragraph.direct, kDirectAlign, paragraph.align != from.align))
     paragraph.align = to.align;
   restyle_spacing(paragraph.spacing, paragraph.direct, from.spacing, to.spacing);
+  if (!own(paragraph.direct, kDirectBorders, paragraph.borders != from.borders))
+    paragraph.borders = to.borders;
+  paragraph.borders = clamp_borders(paragraph.borders);
+  if (!own(paragraph.direct, kDirectShading, paragraph.shading != from.shading))
+    paragraph.shading = to.shading;
+  paragraph.shading = clamp_shading(paragraph.shading);
   if (paragraph.heading == from.heading)
     paragraph.heading = to.heading;
   paragraph.style = to.name;
@@ -424,6 +431,12 @@ Style restyle_style(Style style, const Style& from, const Style& to)
   unsigned none = 0;
   restyle_indents(style.indents, none, from.indents, to.indents);
   restyle_spacing(style.spacing, none, from.spacing, to.spacing);
+  if (style.borders == from.borders)
+    style.borders = to.borders;
+  style.borders = clamp_borders(style.borders);
+  if (style.shading == from.shading)
+    style.shading = to.shading;
+  style.shading = clamp_shading(style.shading);
   if (style.align == from.align)
     style.align = to.align;
   return style;
@@ -631,6 +644,168 @@ bool operator!=(const Spacing& a, const Spacing& b)
   return !(a == b);
 }
 
+const char* border_style_name(BorderStyle style)
+{
+  switch (clamp_border_style(static_cast<int>(style))) {
+    case BorderStyle::Single:
+      return "Single";
+    case BorderStyle::Thick:
+      return "Thick";
+    case BorderStyle::Double:
+      return "Double";
+    case BorderStyle::Dotted:
+      return "Dotted";
+    case BorderStyle::Dashed:
+      return "Dashed";
+    case BorderStyle::Hairline:
+      return "Hairline";
+    case BorderStyle::DotDash:
+      return "Dot dash";
+    case BorderStyle::DotDotDash:
+      return "Dot dot dash";
+    case BorderStyle::Triple:
+      return "Triple";
+    case BorderStyle::Inset:
+      return "Inset";
+    case BorderStyle::Outset:
+      return "Outset";
+    case BorderStyle::Emboss:
+      return "Emboss";
+    case BorderStyle::Engrave:
+      return "Engrave";
+    case BorderStyle::None:
+      return "None";
+  }
+  return "None";
+}
+
+BorderStyle clamp_border_style(int style)
+{
+  if (style < static_cast<int>(BorderStyle::None) || style > static_cast<int>(BorderStyle::Engrave))
+    return BorderStyle::None;
+  return static_cast<BorderStyle>(style);
+}
+
+bool side_plain(const BorderSide& side)
+{
+  return side.style == BorderStyle::None;
+}
+
+bool borders_plain(const Borders& borders)
+{
+  return side_plain(borders.top) && side_plain(borders.left) && side_plain(borders.bottom) &&
+         side_plain(borders.right);
+}
+
+bool shading_plain(const Shading& shading)
+{
+  return shading.pattern <= 0 && shading.foreground == Ink::Auto && shading.background == Ink::Auto;
+}
+
+BorderSide clamp_side(BorderSide side)
+{
+  side.style = clamp_border_style(static_cast<int>(side.style));
+  side.color = ink_clamp(static_cast<int>(side.color));
+  if (side.style == BorderStyle::None) {
+    side.width = 0;
+    side.color = Ink::Auto;
+    side.space = 0;
+    side.shadow = false;
+    return side;
+  }
+  side.width = std::max(0, std::min(kMaxIndent, side.width));
+  if (side.width == 0)
+    side.width = kDefaultBorderWidth;
+  side.space = std::max(0, std::min(kMaxIndent, side.space));
+  return side;
+}
+
+Borders clamp_borders(Borders borders)
+{
+  borders.top = clamp_side(borders.top);
+  borders.left = clamp_side(borders.left);
+  borders.bottom = clamp_side(borders.bottom);
+  borders.right = clamp_side(borders.right);
+  return borders;
+}
+
+Shading clamp_shading(Shading shading)
+{
+  shading.pattern = std::max(0, std::min(kMaxShading, shading.pattern));
+  shading.foreground = ink_clamp(static_cast<int>(shading.foreground));
+  shading.background = ink_clamp(static_cast<int>(shading.background));
+  return shading;
+}
+
+bool shading_color(const Shading& shading, Rgb& out)
+{
+  const Shading paint = clamp_shading(shading);
+  if (shading_plain(paint))
+    return false;
+  const Rgb paper{255, 255, 255};
+  const Rgb fill = paint.background == Ink::Auto ? paper : ink_rgb(paint.background);
+  Rgb pattern = fill;
+  if (paint.foreground != Ink::Auto)
+    pattern = ink_rgb(paint.foreground);
+  else if (paint.pattern > 0 && paint.pattern < kMaxShading)
+    pattern = ink_rgb(Ink::Black);
+  if (paint.pattern <= 0) {
+    if (paint.background == Ink::Auto)
+      return false;
+    out = fill;
+    return true;
+  }
+  if (paint.pattern >= kMaxShading) {
+    out = pattern;
+    return true;
+  }
+  const double mix = static_cast<double>(paint.pattern) / static_cast<double>(kMaxShading);
+  auto blend = [mix](int fore, int back) {
+    return std::max(0,
+                    std::min(255, static_cast<int>(std::lround(fore * mix + back * (1.0 - mix)))));
+  };
+  out.red = blend(pattern.red, fill.red);
+  out.green = blend(pattern.green, fill.green);
+  out.blue = blend(pattern.blue, fill.blue);
+  return true;
+}
+
+bool operator==(const BorderSide& a, const BorderSide& b)
+{
+  const BorderSide left = clamp_side(a);
+  const BorderSide right = clamp_side(b);
+  return left.style == right.style && left.width == right.width && left.color == right.color &&
+         left.space == right.space && left.shadow == right.shadow;
+}
+
+bool operator!=(const BorderSide& a, const BorderSide& b)
+{
+  return !(a == b);
+}
+
+bool operator==(const Borders& a, const Borders& b)
+{
+  return a.top == b.top && a.left == b.left && a.bottom == b.bottom && a.right == b.right;
+}
+
+bool operator!=(const Borders& a, const Borders& b)
+{
+  return !(a == b);
+}
+
+bool operator==(const Shading& a, const Shading& b)
+{
+  const Shading left = clamp_shading(a);
+  const Shading right = clamp_shading(b);
+  return left.pattern == right.pattern && left.foreground == right.foreground &&
+         left.background == right.background;
+}
+
+bool operator!=(const Shading& a, const Shading& b)
+{
+  return !(a == b);
+}
+
 Spacing clamp_spacing(Spacing spacing)
 {
   spacing.before = std::max(0, std::min(kMaxIndent, spacing.before));
@@ -733,7 +908,8 @@ bool operator!=(const ListFormat& a, const ListFormat& b)
 bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
-         a.align == b.align && a.spacing == b.spacing && a.list == b.list && a.cell == b.cell &&
+         a.align == b.align && a.spacing == b.spacing && a.borders == b.borders &&
+         a.shading == b.shading && a.list == b.list && a.cell == b.cell &&
          a.page_break == b.page_break && same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
@@ -1088,9 +1264,10 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& x = a.paragraphs[i];
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.style != y.style || x.indents != y.indents ||
-        x.align != y.align || x.spacing != y.spacing || x.list.kind != y.list.kind ||
-        x.list.level != y.list.level || x.cell != y.cell || x.page_break != y.page_break ||
-        !same_runs(x.runs, y.runs) || !same_mark(x, y))
+        x.align != y.align || x.spacing != y.spacing || x.borders != y.borders ||
+        x.shading != y.shading || x.list.kind != y.list.kind || x.list.level != y.list.level ||
+        x.cell != y.cell || x.page_break != y.page_break || !same_runs(x.runs, y.runs) ||
+        !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -1118,7 +1295,8 @@ bool operator==(const Style& a, const Style& b)
 {
   return a.name == b.name && a.based_on == b.based_on && a.next == b.next &&
          same_format(a.format, b.format) && a.indents == b.indents && a.align == b.align &&
-         a.spacing == b.spacing && a.heading == b.heading;
+         a.spacing == b.spacing && a.borders == b.borders && a.shading == b.shading &&
+         a.heading == b.heading;
 }
 
 bool operator!=(const Style& a, const Style& b)
@@ -1374,6 +1552,12 @@ void take_paragraph_style(Paragraph& paragraph, const Style& to)
     paragraph.spacing.value = to.spacing.value;
   }
   paragraph.spacing = clamp_spacing(paragraph.spacing);
+  if ((paragraph.direct & kDirectBorders) == 0)
+    paragraph.borders = to.borders;
+  paragraph.borders = clamp_borders(paragraph.borders);
+  if ((paragraph.direct & kDirectShading) == 0)
+    paragraph.shading = to.shading;
+  paragraph.shading = clamp_shading(paragraph.shading);
   paragraph.heading = to.heading;
   paragraph.style = to.name;
 }

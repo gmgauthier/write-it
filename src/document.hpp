@@ -186,6 +186,148 @@ void apply_line_spacing(Spacing& spacing, int sl, int slmult);
 // writer omits unless a style has to be turned off. Exactly 0 is negative 0.
 void line_spacing_raw(const Spacing& spacing, int& sl, int& slmult);
 
+// Word 97's border line styles, in the order Borders and Shading lists them
+// after None. None is the absence of a side, not a stroke.
+enum class BorderStyle : int {
+  None = 0,
+  Single = 1,
+  Thick = 2,
+  Double = 3,
+  Dotted = 4,
+  Dashed = 5,
+  Hairline = 6,
+  DotDash = 7,
+  DotDotDash = 8,
+  Triple = 9,
+  Inset = 10,
+  Outset = 11,
+  Emboss = 12,
+  Engrave = 13,
+};
+
+// One edge. Width and space are twips. Colour Auto is the window text, which
+// is black. A side that is None ignores the rest.
+struct BorderSide {
+  BorderStyle style = BorderStyle::None;
+  int width = 0;
+  Ink color = Ink::Auto;
+  int space = 0;
+  bool shadow = false;
+};
+
+// The four edges Word 97's paragraph and cell borders store. Between and bar
+// (\brdrbtw, \brdrbar) are not.
+struct Borders {
+  BorderSide top;
+  BorderSide left;
+  BorderSide bottom;
+  BorderSide right;
+};
+
+// Shading as RTF writes it. `pattern` is \shadingN: hundredths of a percent,
+// 0 clear through 10000 solid. Foreground is the pattern colour (\cfpat) and
+// background is the fill (\cbpat). Auto is none. Decorative patterns
+// (\bghoriz and the rest) are not stored.
+struct Shading {
+  int pattern = 0;
+  Ink foreground = Ink::Auto;
+  Ink background = Ink::Auto;
+};
+
+// Turning a side on starts here: a single line, 1/2 pt, automatic.
+constexpr int kDefaultBorderWidth = 10;
+constexpr int kMaxShading = 10000;
+// Word 97's width list, 1/4 pt through 6 pt.
+constexpr int kBorderWidths[] = {5, 10, 15, 20, 30, 45, 60, 90, 120};
+constexpr int kBorderWidthCount = 9;
+
+// Word 97's pattern list: Clear, Solid, then the percent steps.
+struct ShadeStep {
+  int pattern;
+  const char* name;
+};
+constexpr ShadeStep kShadeSteps[] = {
+    {0, "Clear"},    {10000, "Solid (100%)"}, {500, "5%"},     {1000, "10%"}, {1250, "12.5%"},
+    {1500, "15%"},   {2000, "20%"},           {2500, "25%"},   {3000, "30%"}, {3500, "35%"},
+    {3750, "37.5%"}, {4000, "40%"},           {4500, "45%"},   {5000, "50%"}, {5500, "55%"},
+    {6000, "60%"},   {6250, "62.5%"},         {6500, "65%"},   {7000, "70%"}, {7500, "75%"},
+    {8000, "80%"},   {8500, "85%"},           {8750, "87.5%"}, {9000, "90%"}, {9500, "95%"},
+};
+constexpr int kShadeStepCount = 25;
+
+const char* border_style_name(BorderStyle style);
+BorderStyle clamp_border_style(int style);
+BorderSide clamp_side(BorderSide side);
+Borders clamp_borders(Borders borders);
+Shading clamp_shading(Shading shading);
+bool side_plain(const BorderSide& side);
+bool borders_plain(const Borders& borders);
+bool shading_plain(const Shading& shading);
+// The colour this shading paints. False when it paints nothing (clear, and
+// both colours automatic). A percent mixes the pattern colour over the fill;
+// an automatic pattern colour is black, and solid with an automatic pattern
+// colour is the fill.
+bool shading_color(const Shading& shading, Rgb& out);
+bool operator==(const BorderSide& a, const BorderSide& b);
+bool operator!=(const BorderSide& a, const BorderSide& b);
+bool operator==(const Borders& a, const Borders& b);
+bool operator!=(const Borders& a, const Borders& b);
+bool operator==(const Shading& a, const Shading& b);
+bool operator!=(const Shading& a, const Shading& b);
+
+// A box of one style. 3-D is inset on the top and left, outset on the bottom
+// and right, which is how Word 97 writes it so the file round-trips.
+inline Borders border_box(BorderStyle style, int width, Ink color, int space = 0,
+                          bool shadow = false)
+{
+  BorderSide side;
+  side.style = style;
+  side.width = width;
+  side.color = color;
+  side.space = space;
+  side.shadow = shadow;
+  Borders borders;
+  borders.top = side;
+  borders.left = side;
+  borders.bottom = side;
+  borders.right = side;
+  return borders;
+}
+
+inline Borders border_threed(int width, Ink color)
+{
+  Borders borders;
+  borders.top.style = BorderStyle::Inset;
+  borders.left.style = BorderStyle::Inset;
+  borders.bottom.style = BorderStyle::Outset;
+  borders.right.style = BorderStyle::Outset;
+  borders.top.width = borders.left.width = borders.bottom.width = borders.right.width = width;
+  borders.top.color = borders.left.color = borders.bottom.color = borders.right.color = color;
+  return borders;
+}
+
+inline BorderSide& border_at(Borders& borders, int edge)
+{
+  if (edge == 1)
+    return borders.left;
+  if (edge == 2)
+    return borders.bottom;
+  if (edge == 3)
+    return borders.right;
+  return borders.top;
+}
+
+inline const BorderSide& border_at(const Borders& borders, int edge)
+{
+  if (edge == 1)
+    return borders.left;
+  if (edge == 2)
+    return borders.bottom;
+  if (edge == 3)
+    return borders.right;
+  return borders.top;
+}
+
 // A bulleted or numbered list item. The list sits on top of the indents: the
 // label hangs in the first-line indent and the text starts at the left one.
 // Numbers are not stored; list_numbers() works them out from the paragraphs.
@@ -248,6 +390,8 @@ struct Style {
   Indents indents;
   Align align = Align::Left;
   Spacing spacing;
+  Borders borders;
+  Shading shading;
   // The outline level the style gives: 0 for body text, 1 through 6.
   int heading = 0;
 };
@@ -270,6 +414,12 @@ struct Cell {
   int rows = 0;
   int columns = 0;
   std::vector<int> widths;
+  // False keeps the 1.0 frame and writes no cell borders, so a file from
+  // before this milestone is unchanged. True stores the edges, including
+  // every side none, which writes \brdrnone and draws no frame.
+  bool borders_set = false;
+  Borders borders;
+  Shading shading;
 };
 
 struct Paragraph {
@@ -281,6 +431,8 @@ struct Paragraph {
   Indents indents;
   Align align = Align::Left;
   Spacing spacing;
+  Borders borders;
+  Shading shading;
   ListFormat list;
   std::vector<Run> runs;
   // An empty paragraph's own character format, its paragraph mark's in Word:
@@ -310,6 +462,8 @@ constexpr unsigned kDirectBefore = 16;
 constexpr unsigned kDirectAfter = 32;
 // The line rule and its value, together.
 constexpr unsigned kDirectLine = 64;
+constexpr unsigned kDirectBorders = 128;
+constexpr unsigned kDirectShading = 256;
 
 struct Document {
   std::vector<Paragraph> paragraphs;

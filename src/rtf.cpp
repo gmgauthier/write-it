@@ -280,6 +280,119 @@ enum class ListTable { None, Lists, Overrides };
 // outside it. Pict collects hex instead of characters.
 enum class Story { Body, Header, Footer, Note, Pict };
 
+// A border or shading control word. Skip is \brdrbtw or \brdrbar: not stored,
+// and it drops the side the next property would have filled.
+enum class Brd { None, ParaEdge, CellEdge, Prop, ParaShade, CellShade, Skip };
+
+Brd classify_border(const std::string& word, int& edge)
+{
+  edge = 0;
+  if (word == "brdrt" || word == "clbrdrt") {
+    edge = 0;
+    return word[0] == 'c' ? Brd::CellEdge : Brd::ParaEdge;
+  }
+  if (word == "brdrl" || word == "clbrdrl") {
+    edge = 1;
+    return word[0] == 'c' ? Brd::CellEdge : Brd::ParaEdge;
+  }
+  if (word == "brdrb" || word == "clbrdrb") {
+    edge = 2;
+    return word[0] == 'c' ? Brd::CellEdge : Brd::ParaEdge;
+  }
+  if (word == "brdrr" || word == "clbrdrr") {
+    edge = 3;
+    return word[0] == 'c' ? Brd::CellEdge : Brd::ParaEdge;
+  }
+  if (word == "brdrbtw" || word == "brdrbar")
+    return Brd::Skip;
+  if (word == "brdrs" || word == "brdrth" || word == "brdrdb" || word == "brdrdot" ||
+      word == "brdrdash" || word == "brdrhair" || word == "brdrdashd" || word == "brdrdashdd" ||
+      word == "brdrtriple" || word == "brdrinset" || word == "brdroutset" || word == "brdremboss" ||
+      word == "brdrengrave" || word == "brdrnone" || word == "brdrw" || word == "brdrcf" ||
+      word == "brsp" || word == "brdrsh")
+    return Brd::Prop;
+  if (word == "shading" || word == "cbpat" || word == "cfpat")
+    return Brd::ParaShade;
+  if (word == "clshdng" || word == "clcbpat" || word == "clcfpat")
+    return Brd::CellShade;
+  return Brd::None;
+}
+
+// An edge word starts the side over: single, 1/2 pt, automatic, no shadow.
+// The words after it replace those. \brdrnone clears the side.
+void open_side(BorderSide& side)
+{
+  side = BorderSide{};
+  side.style = BorderStyle::Single;
+  side.width = kDefaultBorderWidth;
+}
+
+void apply_side_prop(BorderSide& side, const std::string& word, bool has_param, int param,
+                     Ink color)
+{
+  if (word == "brdrnone") {
+    side = BorderSide{};
+    return;
+  }
+  auto styled = [&](BorderStyle style) {
+    side.style = style;
+    if (side.width <= 0)
+      side.width = kDefaultBorderWidth;
+  };
+  if (word == "brdrs")
+    styled(BorderStyle::Single);
+  else if (word == "brdrth")
+    styled(BorderStyle::Thick);
+  else if (word == "brdrdb")
+    styled(BorderStyle::Double);
+  else if (word == "brdrdot")
+    styled(BorderStyle::Dotted);
+  else if (word == "brdrdash")
+    styled(BorderStyle::Dashed);
+  else if (word == "brdrhair")
+    styled(BorderStyle::Hairline);
+  else if (word == "brdrdashd")
+    styled(BorderStyle::DotDash);
+  else if (word == "brdrdashdd")
+    styled(BorderStyle::DotDotDash);
+  else if (word == "brdrtriple")
+    styled(BorderStyle::Triple);
+  else if (word == "brdrinset")
+    styled(BorderStyle::Inset);
+  else if (word == "brdroutset")
+    styled(BorderStyle::Outset);
+  else if (word == "brdremboss")
+    styled(BorderStyle::Emboss);
+  else if (word == "brdrengrave")
+    styled(BorderStyle::Engrave);
+  else if (word == "brdrw" && has_param) {
+    side.width = std::max(0, std::min(kMaxIndent, param));
+    if (side.style == BorderStyle::None)
+      side.style = BorderStyle::Single;
+  } else if (word == "brdrcf") {
+    side.color = color;
+    if (side.style == BorderStyle::None) {
+      side.style = BorderStyle::Single;
+      side.width = kDefaultBorderWidth;
+    }
+  } else if (word == "brsp" && has_param) {
+    side.space = std::max(0, std::min(kMaxIndent, param));
+  } else if (word == "brdrsh") {
+    side.shadow = !has_param || param != 0;
+  }
+}
+
+void apply_shade_word(Shading& shading, const std::string& word, bool has_param, int param,
+                      Ink color)
+{
+  if ((word == "shading" || word == "clshdng") && has_param)
+    shading.pattern = std::max(0, std::min(kMaxShading, param));
+  else if (word == "cbpat" || word == "clcbpat")
+    shading.background = color;
+  else if (word == "cfpat" || word == "clcfpat")
+    shading.foreground = color;
+}
+
 struct State {
   int font = 0;
   int half_points = 22;
@@ -299,6 +412,8 @@ struct State {
   Indents indents;
   Align align = Align::Left;
   Spacing spacing;
+  Borders borders;
+  Shading shading;
   // The \sl and \slmult in force, so a later word of the pair recomputes the
   // rule. Single leaves both at 0. Exactly 0 is \sl-0: an int cannot tell
   // that from \sl0, so line_sl_negative records the minus. line_sl_set and
@@ -394,6 +509,15 @@ struct StyleEntry {
   bool sl_seen = false;
   bool mult_seen = false;
   bool sl_before_mult = false;
+  Borders borders;
+  Shading shading;
+  // Which edges and shading words this entry named. \pard names them all, so
+  // the style does not inherit those from its base.
+  bool side_seen[4] = {};
+  bool shade_pat = false;
+  bool shade_bg = false;
+  bool shade_fg = false;
+  int border_edge = -1;
   std::optional<int> heading;
 };
 // A style resolved against its bases, in the reader's own terms.
@@ -410,6 +534,8 @@ struct ReadStyle {
   Indents indents;
   Align align = Align::Left;
   Spacing spacing;
+  Borders borders;
+  Shading shading;
   int heading = 0;
 };
 
@@ -449,6 +575,8 @@ class Reader {
           final_indents_ = state_.indents;
           final_align_ = state_.align;
           final_spacing_ = state_.spacing;
+          final_borders_ = state_.borders;
+          final_shading_ = state_.shading;
           final_marks_ = state_.marks;
           final_style_ = state_.style;
           closed_ = true;
@@ -759,6 +887,9 @@ class Reader {
       state_.indents = normal.indents;
       state_.align = normal.align;
       state_.spacing = normal.spacing;
+      state_.borders = normal.borders;
+      state_.shading = normal.shading;
+      border_aim_ = BorderAim::None;
       sync_line_raw();
       state_.marks = ListMarks{};
       state_.intbl = false;
@@ -835,6 +966,14 @@ class Reader {
       state_.line_mult_set = true;
       apply_line_words();
       return;
+    }
+    {
+      int edge = 0;
+      const Brd kind = classify_border(word, edge);
+      if (kind != Brd::None) {
+        take_border(kind, edge, word, has_param, param);
+        return;
+      }
     }
     if (word == "plain") {
       char_seen_ = true;
@@ -985,6 +1124,9 @@ class Reader {
     }
     if (word == "cellx" && has_param) {
       cell_rights_.push_back(param);
+      cell_edges_.push_back(cell_edge_);
+      cell_edge_ = CellEdge{};
+      border_aim_ = BorderAim::None;
       return;
     }
     if (word == "intbl") {
@@ -1472,6 +1614,32 @@ class Reader {
       e.sl_seen = false;
       e.mult_seen = false;
       e.sl_before_mult = false;
+      e.borders = Borders{};
+      e.shading = Shading{};
+      e.side_seen[0] = e.side_seen[1] = e.side_seen[2] = e.side_seen[3] = true;
+      e.shade_pat = e.shade_bg = e.shade_fg = true;
+      e.border_edge = -1;
+    } else {
+      int edge = 0;
+      const Brd kind = classify_border(word, edge);
+      if (kind == Brd::ParaEdge) {
+        e.border_edge = edge;
+        e.side_seen[edge] = true;
+        open_side(border_at(e.borders, edge));
+      } else if (kind == Brd::Skip) {
+        e.border_edge = -1;
+      } else if (kind == Brd::Prop && e.border_edge >= 0) {
+        apply_side_prop(border_at(e.borders, e.border_edge), word, has_param, param,
+                        color_of(has_param ? param : 0));
+      } else if (kind == Brd::ParaShade) {
+        apply_shade_word(e.shading, word, has_param, param, color_of(has_param ? param : 0));
+        if (word == "shading")
+          e.shade_pat = true;
+        else if (word == "cbpat")
+          e.shade_bg = true;
+        else if (word == "cfpat")
+          e.shade_fg = true;
+      }
     }
   }
 
@@ -1588,6 +1756,28 @@ class Reader {
       }
     }
     r.spacing = clamp_spacing(r.spacing);
+    if (e.side_seen[0] || e.side_seen[1] || e.side_seen[2] || e.side_seen[3]) {
+      Borders borders = base ? base->borders : Borders{};
+      if (e.side_seen[0])
+        borders.top = e.borders.top;
+      if (e.side_seen[1])
+        borders.left = e.borders.left;
+      if (e.side_seen[2])
+        borders.bottom = e.borders.bottom;
+      if (e.side_seen[3])
+        borders.right = e.borders.right;
+      r.borders = clamp_borders(borders);
+    }
+    if (e.shade_pat || e.shade_bg || e.shade_fg) {
+      Shading shading = base ? base->shading : Shading{};
+      if (e.shade_pat)
+        shading.pattern = e.shading.pattern;
+      if (e.shade_bg)
+        shading.background = e.shading.background;
+      if (e.shade_fg)
+        shading.foreground = e.shading.foreground;
+      r.shading = clamp_shading(shading);
+    }
     // A level from the file, else from a "heading N" name (LibreOffice
     // writes none in its sheet), else the base's.
     if (e.heading)
@@ -1649,6 +1839,8 @@ class Reader {
       style.indents = r.indents;
       style.align = r.align;
       style.spacing = r.spacing;
+      style.borders = r.borders;
+      style.shading = r.shading;
       style.heading = r.heading;
       sheet.push_back(style);
     }
@@ -1764,6 +1956,47 @@ class Reader {
     apply_line_spacing(state_.spacing, state_.line_sl, state_.line_mult);
   }
 
+  // One border or shading word in the body or a row. A style entry has its
+  // own copy of this, because a style has no cell.
+  void take_border(Brd kind, int edge, const std::string& word, bool has_param, int param)
+  {
+    const Ink color = color_of(has_param ? param : 0);
+    if (kind == Brd::Skip) {
+      border_aim_ = BorderAim::None;
+      return;
+    }
+    if (kind == Brd::ParaEdge) {
+      border_aim_ = BorderAim::Paragraph;
+      border_edge_ = edge;
+      open_side(border_at(state_.borders, edge));
+      return;
+    }
+    if (kind == Brd::CellEdge) {
+      border_aim_ = BorderAim::Cell;
+      border_edge_ = edge;
+      cell_edge_.borders_set = true;
+      open_side(border_at(cell_edge_.borders, edge));
+      return;
+    }
+    if (kind == Brd::Prop) {
+      if (border_aim_ == BorderAim::Paragraph)
+        apply_side_prop(border_at(state_.borders, border_edge_), word, has_param, param, color);
+      else if (border_aim_ == BorderAim::Cell) {
+        cell_edge_.borders_set = true;
+        apply_side_prop(border_at(cell_edge_.borders, border_edge_), word, has_param, param, color);
+      }
+      return;
+    }
+    if (kind == Brd::ParaShade) {
+      apply_shade_word(state_.shading, word, has_param, param, color);
+      return;
+    }
+    if (kind == Brd::CellShade) {
+      cell_edge_.shading_seen = true;
+      apply_shade_word(cell_edge_.shading, word, has_param, param, color);
+    }
+  }
+
   // \sN: the paragraph takes the style, attribute by attribute, as
   // apply_style() does, so words after it still win. A number the sheet does
   // not define is Normal.
@@ -1790,6 +2023,10 @@ class Reader {
       state_.spacing.rule = to.spacing.rule;
       state_.spacing.value = to.spacing.value;
     }
+    if (state_.borders == from.borders)
+      state_.borders = to.borders;
+    if (state_.shading == from.shading)
+      state_.shading = to.shading;
     sync_line_raw();
     if (state_.heading == from.heading) {
       state_.heading = to.heading;
@@ -1897,6 +2134,8 @@ class Reader {
     paragraph_.indents = clamp_indents(state_.indents);
     paragraph_.align = state_.align;
     paragraph_.spacing = clamp_spacing(state_.spacing);
+    paragraph_.borders = clamp_borders(state_.borders);
+    paragraph_.shading = clamp_shading(state_.shading);
     paragraph_.style = style_name(state_.style);
     paragraph_.heading = state_.heading;
     dest->push_back(paragraph_);
@@ -1993,6 +2232,9 @@ class Reader {
       table_row_ = 0;
     }
     cell_rights_.clear();
+    cell_edges_.clear();
+    cell_edge_ = CellEdge{};
+    border_aim_ = BorderAim::None;
     table_col_ = 0;
     row_open_ = true;
     row_start_ = paragraphs_.size();
@@ -2033,6 +2275,16 @@ class Reader {
       paragraphs_[i].cell.columns = std::max(1, columns);
       paragraphs_[i].cell.widths = widths;
       paragraphs_[i].cell.rows = table_row_ + 1;
+      const int column = paragraphs_[i].cell.column;
+      if (column < 0 || column >= static_cast<int>(cell_edges_.size()))
+        continue;
+      const CellEdge& cell_edge = cell_edges_[static_cast<size_t>(column)];
+      if (cell_edge.borders_set) {
+        paragraphs_[i].cell.borders_set = true;
+        paragraphs_[i].cell.borders = clamp_borders(cell_edge.borders);
+      }
+      if (cell_edge.shading_seen)
+        paragraphs_[i].cell.shading = clamp_shading(cell_edge.shading);
     }
     row_open_ = false;
     state_.intbl = false;
@@ -2070,6 +2322,8 @@ class Reader {
     paragraph_.indents = clamp_indents(live ? state_.indents : final_indents_);
     paragraph_.align = live ? state_.align : final_align_;
     paragraph_.spacing = clamp_spacing(live ? state_.spacing : final_spacing_);
+    paragraph_.borders = clamp_borders(live ? state_.borders : final_borders_);
+    paragraph_.shading = clamp_shading(live ? state_.shading : final_shading_);
     paragraph_.style = style_name(live ? state_.style : final_style_);
     paragraphs_.push_back(paragraph_);
     marks_.push_back(live ? state_.marks : final_marks_);
@@ -2111,6 +2365,8 @@ class Reader {
       merged.align = paragraph.align;
       merged.indents = paragraph.indents;
       merged.spacing = paragraph.spacing;
+      merged.borders = paragraph.borders;
+      merged.shading = paragraph.shading;
       merged.page_break = paragraph.page_break;
       merged.cell = paragraph.cell;
       merged.list = resolve(marks_[i]);
@@ -2153,6 +2409,8 @@ class Reader {
         merged.align = source[n].align;
         merged.indents = source[n].indents;
         merged.spacing = source[n].spacing;
+        merged.borders = source[n].borders;
+        merged.shading = source[n].shading;
         merged.page_break = source[n].page_break;
         merged.list = n < marks.size() ? resolve(marks[n]) : ListFormat{};
         for (Run& run : source[n].runs) {
@@ -2185,6 +2443,10 @@ class Reader {
     auto fit = [text](Paragraph& paragraph) {
       paragraph.indents = clamp_indents(paragraph.indents, text);
       paragraph.spacing = clamp_spacing(paragraph.spacing);
+      paragraph.borders = clamp_borders(paragraph.borders);
+      paragraph.shading = clamp_shading(paragraph.shading);
+      paragraph.cell.borders = clamp_borders(paragraph.cell.borders);
+      paragraph.cell.shading = clamp_shading(paragraph.cell.shading);
       if (paragraph.list.has_own)
         paragraph.list.own = clamp_indents(paragraph.list.own, text);
     };
@@ -2200,6 +2462,8 @@ class Reader {
     for (Style& style : doc.styles) {
       style.indents = clamp_indents(style.indents, text);
       style.spacing = clamp_spacing(style.spacing);
+      style.borders = clamp_borders(style.borders);
+      style.shading = clamp_shading(style.shading);
     }
   }
 
@@ -2278,6 +2542,22 @@ class Reader {
   bool row_open_ = false;
   size_t row_start_ = 0;
   std::vector<int> cell_rights_;
+  // Cell borders accumulate until \cellx, which files them with that edge.
+  // They are row state: \pard does not clear them, and a group must not either,
+  // so they stay off State.
+  enum class BorderAim { None, Paragraph, Cell };
+  struct CellEdge {
+    bool borders_set = false;
+    bool shading_seen = false;
+    Borders borders;
+    Shading shading;
+  };
+  BorderAim border_aim_ = BorderAim::None;
+  int border_edge_ = 0;
+  CellEdge cell_edge_;
+  std::vector<CellEdge> cell_edges_;
+  Borders final_borders_;
+  Shading final_shading_;
   // A character control word since the last paragraph ended: an empty
   // paragraph with one has a format of its own (Paragraph::mark).
   bool char_seen_ = false;
@@ -2482,6 +2762,115 @@ void write_spacing(std::ostringstream& out, const Spacing& spacing, const Spacin
   }
 }
 
+const char* border_style_word(BorderStyle style)
+{
+  switch (style) {
+    case BorderStyle::Single:
+      return "\\brdrs";
+    case BorderStyle::Thick:
+      return "\\brdrth";
+    case BorderStyle::Double:
+      return "\\brdrdb";
+    case BorderStyle::Dotted:
+      return "\\brdrdot";
+    case BorderStyle::Dashed:
+      return "\\brdrdash";
+    case BorderStyle::Hairline:
+      return "\\brdrhair";
+    case BorderStyle::DotDash:
+      return "\\brdrdashd";
+    case BorderStyle::DotDotDash:
+      return "\\brdrdashdd";
+    case BorderStyle::Triple:
+      return "\\brdrtriple";
+    case BorderStyle::Inset:
+      return "\\brdrinset";
+    case BorderStyle::Outset:
+      return "\\brdroutset";
+    case BorderStyle::Emboss:
+      return "\\brdremboss";
+    case BorderStyle::Engrave:
+      return "\\brdrengrave";
+    case BorderStyle::None:
+      return "\\brdrnone";
+  }
+  return "\\brdrnone";
+}
+
+// A side that differs from the style is written whole, because the reader
+// starts the side over at the edge word. None turns the style's side off.
+// `edge` is \brdrt or \clbrdrt. `always` writes None too, which a cell needs
+// so an explicit empty frame is not read back as the 1.0 frame.
+void write_one_side(std::ostringstream& out, const char* edge, const BorderSide& side,
+                    const BorderSide* from, bool always)
+{
+  const BorderSide mine = clamp_side(side);
+  const BorderSide base = from ? clamp_side(*from) : BorderSide{};
+  if (!always && mine == base)
+    return;
+  if (mine.style == BorderStyle::None) {
+    if (always || base.style != BorderStyle::None)
+      out << edge << "\\brdrnone";
+    return;
+  }
+  out << edge << border_style_word(mine.style) << "\\brdrw" << mine.width;
+  if (mine.color != Ink::Auto || (from && base.color != mine.color))
+    out << "\\brdrcf" << static_cast<int>(mine.color);
+  if (mine.space != 0 || (from && base.space != mine.space))
+    out << "\\brsp" << mine.space;
+  if (mine.shadow)
+    out << "\\brdrsh";
+}
+
+void write_borders(std::ostringstream& out, const Borders& borders, const Borders* base)
+{
+  const Borders mine = clamp_borders(borders);
+  const Borders from = base ? clamp_borders(*base) : Borders{};
+  write_one_side(out, "\\brdrt", mine.top, base ? &from.top : nullptr, false);
+  write_one_side(out, "\\brdrl", mine.left, base ? &from.left : nullptr, false);
+  write_one_side(out, "\\brdrb", mine.bottom, base ? &from.bottom : nullptr, false);
+  write_one_side(out, "\\brdrr", mine.right, base ? &from.right : nullptr, false);
+}
+
+void write_cell_borders(std::ostringstream& out, const Borders& borders)
+{
+  const Borders mine = clamp_borders(borders);
+  write_one_side(out, "\\clbrdrt", mine.top, nullptr, true);
+  write_one_side(out, "\\clbrdrl", mine.left, nullptr, true);
+  write_one_side(out, "\\clbrdrb", mine.bottom, nullptr, true);
+  write_one_side(out, "\\clbrdrr", mine.right, nullptr, true);
+}
+
+void write_shading(std::ostringstream& out, const Shading& shading, const Shading* base)
+{
+  const Shading mine = clamp_shading(shading);
+  const Shading from = base ? clamp_shading(*base) : Shading{};
+  if (mine == from)
+    return;
+  if (shading_plain(mine)) {
+    out << "\\shading0\\cbpat0\\cfpat0";
+    return;
+  }
+  if (mine.pattern != from.pattern)
+    out << "\\shading" << mine.pattern;
+  if (mine.background != from.background)
+    out << "\\cbpat" << static_cast<int>(mine.background);
+  if (mine.foreground != from.foreground)
+    out << "\\cfpat" << static_cast<int>(mine.foreground);
+}
+
+void write_cell_shading(std::ostringstream& out, const Shading& shading)
+{
+  const Shading mine = clamp_shading(shading);
+  if (shading_plain(mine))
+    return;
+  out << "\\clshdng" << mine.pattern;
+  if (mine.background != Ink::Auto)
+    out << "\\clcbpat" << static_cast<int>(mine.background);
+  if (mine.foreground != Ink::Auto)
+    out << "\\clcfpat" << static_cast<int>(mine.foreground);
+}
+
 }  // namespace
 
 std::string rtf_export(const Document& doc)
@@ -2675,6 +3064,19 @@ std::string rtf_export(const Document& doc)
         see_run(run);
       if (const Run* mark = mark_of(paragraph))
         see_run(*mark);
+      auto see_ink = [&](Ink ink) {
+        if (ink != Ink::Auto)
+          uses_color = true;
+      };
+      for (const BorderSide& side :
+           {paragraph.borders.top, paragraph.borders.left, paragraph.borders.bottom,
+            paragraph.borders.right, paragraph.cell.borders.top, paragraph.cell.borders.left,
+            paragraph.cell.borders.bottom, paragraph.cell.borders.right})
+        see_ink(side.color);
+      see_ink(paragraph.shading.foreground);
+      see_ink(paragraph.shading.background);
+      see_ink(paragraph.cell.shading.foreground);
+      see_ink(paragraph.cell.shading.background);
     }
   };
   see_paragraphs(doc.paragraphs);
@@ -2682,8 +3084,18 @@ std::string rtf_export(const Document& doc)
   see_paragraphs(doc.footer);
   for (const std::vector<Paragraph>& note : doc.notes)
     see_paragraphs(note);
-  for (const Style& style : sheet)
+  for (const Style& style : sheet) {
     see_run(style.format);
+    auto see_ink = [&](Ink ink) {
+      if (ink != Ink::Auto)
+        uses_color = true;
+    };
+    for (const BorderSide& side :
+         {style.borders.top, style.borders.left, style.borders.bottom, style.borders.right})
+      see_ink(side.color);
+    see_ink(style.shading.foreground);
+    see_ink(style.shading.background);
+  }
 
   std::ostringstream out;
   out << "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1\n{\\fonttbl";
@@ -2744,6 +3156,8 @@ std::string rtf_export(const Document& doc)
       else if (up && up->align != Align::Left)
         out << "\\ql";
       write_spacing(out, style.spacing, up ? &up->spacing : nullptr);
+      write_borders(out, style.borders, up ? &up->borders : nullptr);
+      write_shading(out, style.shading, up ? &up->shading : nullptr);
       if (style.heading >= 1 && style.heading <= 6)
         out << "\\outlinelevel" << (style.heading - 1);
       else if ((up && up->heading != 0) || builtin_heading(style.name) != 0)
@@ -2873,6 +3287,8 @@ std::string rtf_export(const Document& doc)
     }
     write_overrides(paragraph, plain_style);
     write_spacing(out, paragraph.spacing, plain_style ? &plain_style->spacing : nullptr);
+    write_borders(out, paragraph.borders, plain_style ? &plain_style->borders : nullptr);
+    write_shading(out, paragraph.shading, plain_style ? &plain_style->shading : nullptr);
     if (ls > 0)
       out << "\\ls" << ls << "\\ilvl" << clamp_list(paragraph.list).level;
     write_outline(paragraph, plain_style);
@@ -2933,6 +3349,19 @@ std::string rtf_export(const Document& doc)
           int width = 1440;
           if (c < static_cast<int>(paragraph.cell.widths.size()) && paragraph.cell.widths[c] > 0)
             width = paragraph.cell.widths[c];
+          const Paragraph* holder = &paragraph;
+          for (size_t j = index; j < doc.paragraphs.size(); ++j) {
+            const Paragraph& other = doc.paragraphs[j];
+            if (other.cell.table != id || other.cell.row != row)
+              break;
+            if (other.cell.column == c) {
+              holder = &other;
+              break;
+            }
+          }
+          if (holder->cell.borders_set)
+            write_cell_borders(out, holder->cell.borders);
+          write_cell_shading(out, holder->cell.shading);
           edge += width;
           out << "\\cellx" << edge;
         }
@@ -2951,6 +3380,8 @@ std::string rtf_export(const Document& doc)
       }
       write_overrides(paragraph, cell_style_fmt);
       write_spacing(out, paragraph.spacing, cell_style_fmt ? &cell_style_fmt->spacing : nullptr);
+      write_borders(out, paragraph.borders, cell_style_fmt ? &cell_style_fmt->borders : nullptr);
+      write_shading(out, paragraph.shading, cell_style_fmt ? &cell_style_fmt->shading : nullptr);
       if (list.kind != ListKind::None)
         out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
       write_outline(paragraph, cell_style_fmt);

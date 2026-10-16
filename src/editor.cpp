@@ -2,6 +2,7 @@
 
 #include "main_window.hpp"
 
+#include "border_draw.hpp"
 #include "filename.hpp"
 #include "font_sizes.hpp"
 #include "open_plan.hpp"
@@ -258,11 +259,85 @@ bool spacing_in_tag(const ParaFormat& format)
   return !(format.spacing == Spacing{});
 }
 
+// Borders and shading use their own prefix. A fixed extra block on "para"
+// would land on a cell tag's size for some column counts, so old tags would
+// parse as the wrong shape.
+bool chrome_in_tag(const ParaFormat& format)
+{
+  return !borders_plain(format.borders) || !shading_plain(format.shading) ||
+         format.cell.borders_set || !shading_plain(format.cell.shading);
+}
+
+void append_side(std::string& name, const BorderSide& side)
+{
+  const BorderSide clamped = clamp_side(side);
+  append_field(name, static_cast<int>(clamped.style));
+  append_field(name, clamped.width);
+  append_field(name, static_cast<int>(clamped.color));
+  append_field(name, clamped.space);
+  append_field(name, clamped.shadow ? 1 : 0);
+}
+
+void append_shade(std::string& name, const Shading& shading)
+{
+  const Shading clamped = clamp_shading(shading);
+  append_field(name, clamped.pattern);
+  append_field(name, static_cast<int>(clamped.foreground));
+  append_field(name, static_cast<int>(clamped.background));
+}
+
+// 47 ints: four paragraph sides, paragraph shading, borders_set, four cell
+// sides, cell shading. Sides are top, left, bottom, right.
+void append_chrome(std::string& name, const ParaFormat& format)
+{
+  append_side(name, format.borders.top);
+  append_side(name, format.borders.left);
+  append_side(name, format.borders.bottom);
+  append_side(name, format.borders.right);
+  append_shade(name, format.shading);
+  append_field(name, format.cell.borders_set ? 1 : 0);
+  append_side(name, format.cell.borders.top);
+  append_side(name, format.cell.borders.left);
+  append_side(name, format.cell.borders.bottom);
+  append_side(name, format.cell.borders.right);
+  append_shade(name, format.cell.shading);
+}
+
+void append_para_chrome(std::string& name, const Borders& borders, const Shading& shading)
+{
+  append_side(name, borders.top);
+  append_side(name, borders.left);
+  append_side(name, borders.bottom);
+  append_side(name, borders.right);
+  append_shade(name, shading);
+}
+
+BorderSide side_from(const std::vector<int>& values, size_t at)
+{
+  BorderSide side;
+  side.style = clamp_border_style(values[at]);
+  side.width = values[at + 1];
+  side.color = ink_clamp(values[at + 2]);
+  side.space = values[at + 3];
+  side.shadow = values[at + 4] != 0;
+  return clamp_side(side);
+}
+
+Shading shading_from(const std::vector<int>& values, size_t at)
+{
+  Shading shading;
+  shading.pattern = values[at];
+  shading.foreground = ink_clamp(values[at + 1]);
+  shading.background = ink_clamp(values[at + 2]);
+  return clamp_shading(shading);
+}
+
 std::string para_name(const ParaFormat& format)
 {
   const Indents& indents = format.indents;
   const ListFormat& list = format.list;
-  std::string name = "para";
+  const bool chrome = chrome_in_tag(format);
+  std::string name = chrome ? "parab" : "para";
   for (const int value :
        {indents.left, indents.right, indents.first, static_cast<int>(format.align),
         static_cast<int>(list.kind), list.level, list.has_own ? 1 : 0, list.own.left,
@@ -270,28 +345,21 @@ std::string para_name(const ParaFormat& format)
     append_field(name, value);
   // A plain paragraph keeps the fourteen-part tag it has always had.
   const bool plain = !format.page_break && format.cell.table == 0 && format.cell.widths.empty();
-  if (plain && !spacing_in_tag(format)) {
-    name += '\x1f';
-    name += format.style;
-    return name;
+  if (!plain) {
+    append_field(name, format.page_break ? 1 : 0);
+    append_field(name, format.cell.table);
+    append_field(name, format.cell.row);
+    append_field(name, format.cell.column);
+    append_field(name, format.cell.rows);
+    append_field(name, format.cell.columns);
+    append_field(name, static_cast<int>(format.cell.widths.size()));
+    for (int width : format.cell.widths)
+      append_field(name, width);
   }
-  if (plain) {
-    append_spacing(name, format);
-    name += '\x1f';
-    name += format.style;
-    return name;
-  }
-  append_field(name, format.page_break ? 1 : 0);
-  append_field(name, format.cell.table);
-  append_field(name, format.cell.row);
-  append_field(name, format.cell.column);
-  append_field(name, format.cell.rows);
-  append_field(name, format.cell.columns);
-  append_field(name, static_cast<int>(format.cell.widths.size()));
-  for (int width : format.cell.widths)
-    append_field(name, width);
   if (spacing_in_tag(format))
     append_spacing(name, format);
+  if (chrome)
+    append_chrome(name, format);
   name += '\x1f';
   name += format.style;
   return name;
@@ -299,18 +367,46 @@ std::string para_name(const ParaFormat& format)
 
 bool parse_para(const std::string& name, ParaFormat& format)
 {
-  const std::string prefix = std::string("para") + '\x1f';
-  if (name.compare(0, prefix.size(), prefix) != 0)
+  // "parab" is one character longer than "para", so a tag from before borders
+  // still matches "para" and nothing else.
+  bool border_tag = false;
+  size_t prefix = 0;
+  const std::string parab = std::string("parab") + '\x1f';
+  const std::string para = std::string("para") + '\x1f';
+  if (name.compare(0, parab.size(), parab) == 0) {
+    border_tag = true;
+    prefix = parab.size();
+  } else if (name.compare(0, para.size(), para) == 0) {
+    prefix = para.size();
+  } else {
     return false;
+  }
   std::vector<std::string> parts;
   std::string current;
-  for (size_t i = prefix.size(); i <= name.size(); ++i) {
+  for (size_t i = prefix; i <= name.size(); ++i) {
     if (i == name.size() || name[i] == '\x1f') {
       parts.push_back(current);
       current.clear();
     } else {
       current.push_back(name[i]);
     }
+  }
+  // The 47 border ints sit immediately before the style name. Peel them so
+  // the size classes below stay the ones a tag has always had.
+  std::vector<int> chrome;
+  if (border_tag) {
+    if (parts.size() < 48)
+      return false;
+    const size_t first = parts.size() - 48;
+    try {
+      for (size_t i = first; i < parts.size() - 1; ++i)
+        chrome.push_back(std::stoi(parts[i]));
+    } catch (const std::exception&) {
+      return false;
+    }
+    if (chrome.size() != 47)
+      return false;
+    parts.erase(parts.begin() + static_cast<std::ptrdiff_t>(first), parts.end() - 1);
   }
   // Thirteen numbers, then the style's name. Spacing adds five numbers before
   // the style. A page break or a table cell adds its own numbers, and spacing
@@ -395,6 +491,21 @@ bool parse_para(const std::string& name, ParaFormat& format)
       format.spacing = clamp_spacing(format.spacing);
     }
   }
+  format.borders = Borders{};
+  format.shading = Shading{};
+  if (border_tag) {
+    format.borders.top = side_from(chrome, 0);
+    format.borders.left = side_from(chrome, 5);
+    format.borders.bottom = side_from(chrome, 10);
+    format.borders.right = side_from(chrome, 15);
+    format.shading = shading_from(chrome, 20);
+    format.cell.borders_set = chrome[23] != 0;
+    format.cell.borders.top = side_from(chrome, 24);
+    format.cell.borders.left = side_from(chrome, 29);
+    format.cell.borders.bottom = side_from(chrome, 34);
+    format.cell.borders.right = side_from(chrome, 39);
+    format.cell.shading = shading_from(chrome, 44);
+  }
   format.style = parts.back();
   return true;
 }
@@ -417,33 +528,45 @@ int heading_level_name(const std::string& name)
 // paragraph has any. The body's para tag carries the page margins, so a cell
 // does not use it. Four numbers is a cell from before spacing.
 std::string cpara_name(const Indents& indents, Align align, const Spacing& spacing, int basis,
-                       int heading)
+                       int heading, const Borders& borders, const Shading& shading)
 {
-  std::string name = "cpara";
+  const bool chrome = !borders_plain(borders) || !shading_plain(shading);
+  std::string name = chrome ? "cparab" : "cpara";
   append_field(name, indents.left);
   append_field(name, indents.right);
   append_field(name, indents.first);
   append_field(name, static_cast<int>(align));
-  if (spacing == Spacing{})
-    return name;
-  append_field(name, spacing.before);
-  append_field(name, spacing.after);
-  append_field(name, static_cast<int>(spacing.rule));
-  append_field(name, spacing.value);
-  append_field(name, basis);
-  append_field(name, heading);
+  if (!(spacing == Spacing{})) {
+    append_field(name, spacing.before);
+    append_field(name, spacing.after);
+    append_field(name, static_cast<int>(spacing.rule));
+    append_field(name, spacing.value);
+    append_field(name, basis);
+    append_field(name, heading);
+  }
+  if (chrome)
+    append_para_chrome(name, borders, shading);
   return name;
 }
 
 bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacing& spacing,
-                 int& basis, int& heading)
+                 int& basis, int& heading, Borders& borders, Shading& shading)
 {
-  const std::string prefix = std::string("cpara") + '\x1f';
-  if (name.compare(0, prefix.size(), prefix) != 0)
+  bool border_tag = false;
+  size_t prefix = 0;
+  const std::string cparab = std::string("cparab") + '\x1f';
+  const std::string cpara = std::string("cpara") + '\x1f';
+  if (name.compare(0, cparab.size(), cparab) == 0) {
+    border_tag = true;
+    prefix = cparab.size();
+  } else if (name.compare(0, cpara.size(), cpara) == 0) {
+    prefix = cpara.size();
+  } else {
     return false;
+  }
   std::vector<int> values;
   std::string current;
-  for (size_t i = prefix.size(); i <= name.size(); ++i) {
+  for (size_t i = prefix; i <= name.size(); ++i) {
     if (i == name.size() || name[i] == '\x1f') {
       if (current.empty())
         return false;
@@ -458,6 +581,21 @@ bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacin
     } else {
       current.push_back(name[i]);
     }
+  }
+  borders = Borders{};
+  shading = Shading{};
+  if (border_tag) {
+    if (values.size() < 23)
+      return false;
+    const size_t base = values.size() - 23;
+    if (base != 4 && base != 10)
+      return false;
+    borders.top = side_from(values, base);
+    borders.left = side_from(values, base + 5);
+    borders.bottom = side_from(values, base + 10);
+    borders.right = side_from(values, base + 15);
+    shading = shading_from(values, base + 20);
+    values.resize(base);
   }
   if ((values.size() != 4 && values.size() != 10) || values[3] < 0 ||
       values[3] > static_cast<int>(Align::Justify))
@@ -885,6 +1023,7 @@ void MainWindow::build_editor()
   activate(find_item_, [this] { present_find(false); });
   activate(replace_item_, [this] { present_find(true); });
   activate(paragraph_item_, [this] { on_paragraph(); });
+  activate(borders_item_, [this] { on_borders(); });
   activate(bullets_item_, [this] { toggle_list_kind(ListKind::Bullet); });
   activate(numbering_item_, [this] { toggle_list_kind(ListKind::Number); });
   activate(spelling_item_, [this] { on_spelling(); });
@@ -1396,6 +1535,8 @@ Document MainWindow::capture() const
         paragraph.cell = pending_para_.cell;
         paragraph.spacing = pending_para_.spacing;
         paragraph.basis = pending_para_.basis;
+        paragraph.borders = pending_para_.borders;
+        paragraph.shading = pending_para_.shading;
       } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
         paragraph.align = doc.paragraphs.back().align;
@@ -1408,6 +1549,8 @@ Document MainWindow::capture() const
         paragraph.cell = doc.paragraphs.back().cell;
         paragraph.spacing = doc.paragraphs.back().spacing;
         paragraph.basis = doc.paragraphs.back().basis;
+        paragraph.borders = doc.paragraphs.back().borders;
+        paragraph.shading = doc.paragraphs.back().shading;
       }
     }
     // The outline level belongs to the paragraph's style. A heading tag on
@@ -1466,6 +1609,8 @@ Document MainWindow::capture() const
           paragraph.cell = format.cell;
           paragraph.spacing = format.spacing;
           paragraph.basis = format.basis;
+          paragraph.borders = format.borders;
+          paragraph.shading = format.shading;
           have_para = true;
         }
       }
@@ -1603,6 +1748,10 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       pending_para_.indents = clamp_indents(paragraph.indents);
       pending_para_.list = clamp_list(paragraph.list);
       pending_para_.spacing = clamp_spacing(paragraph.spacing);
+      pending_para_.borders = clamp_borders(paragraph.borders);
+      pending_para_.shading = clamp_shading(paragraph.shading);
+      pending_para_.cell.borders = clamp_borders(paragraph.cell.borders);
+      pending_para_.cell.shading = clamp_shading(paragraph.cell.shading);
       pending_para_set_ = true;
       if (paragraph.mark) {
         pending_mark_ = *paragraph.mark;
@@ -2401,9 +2550,16 @@ void MainWindow::restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
     Spacing spacing;
     int basis = 22;
     int heading = 0;
-    if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading)) {
+    Borders borders;
+    Shading shading;
+    if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading)) {
       std::string font = "Sans";
       style_cell_para(tag, indents, align, spacing, basis, heading, font);
+      Rgb rgb;
+      if (shading_color(shading, rgb))
+        tag->property_paragraph_background() = rgb_hex(rgb);
+      else
+        tag->property_paragraph_background_set() = false;
     }
   });
 }
@@ -2779,7 +2935,8 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::Tex
     return {};
   const int basis = basis_half_points(paragraph);
   const Glib::ustring name =
-      cpara_name(paragraph.indents, paragraph.align, paragraph.spacing, basis, paragraph.heading);
+      cpara_name(paragraph.indents, paragraph.align, paragraph.spacing, basis, paragraph.heading,
+                 paragraph.borders, paragraph.shading);
   auto table = buffer->get_tag_table();
   auto tag = table->lookup(name);
   if (!tag) {
@@ -2788,6 +2945,9 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::Tex
     // restyle jump to a different line.
     style_cell_para(tag, paragraph.indents, paragraph.align, paragraph.spacing, basis,
                     paragraph.heading, "Sans");
+    Rgb rgb;
+    if (shading_color(paragraph.shading, rgb))
+      tag->property_paragraph_background() = rgb_hex(rgb);
     table->add(tag);
   }
   return tag;
@@ -3911,8 +4071,12 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
   format.direct = raw.direct;
   format.page_break = raw.page_break;
   format.cell = raw.cell;
+  format.cell.borders = clamp_borders(raw.cell.borders);
+  format.cell.shading = clamp_shading(raw.cell.shading);
   format.spacing = clamp_spacing(raw.spacing);
   format.basis = raw.basis >= 2 ? raw.basis : 22;
+  format.borders = clamp_borders(raw.borders);
+  format.shading = clamp_shading(raw.shading);
   const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
@@ -3933,6 +4097,11 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
 {
   if (format.cell.table != 0)
     tag->property_paragraph_background() = "#f4f4f4";
+  else {
+    Rgb rgb;
+    if (shading_color(format.shading, rgb))
+      tag->property_paragraph_background() = rgb_hex(rgb);
+  }
   if (format.align == Align::Center)
     tag->property_justification() = Gtk::JUSTIFY_CENTER;
   else if (format.align == Align::Right)
@@ -4515,11 +4684,17 @@ void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
         format.direct |= kDirectAfter;
       if (!same_spacing_line(format.spacing, paragraph.spacing))
         format.direct |= kDirectLine;
+      if (!(format.borders == paragraph.borders))
+        format.direct |= kDirectBorders;
+      if (!(format.shading == paragraph.shading))
+        format.direct |= kDirectShading;
       paragraph.indents = format.indents;
       paragraph.align = format.align;
       paragraph.list = format.list;
       paragraph.spacing = format.spacing;
       paragraph.basis = format.basis;
+      paragraph.borders = format.borders;
+      paragraph.shading = format.shading;
       paragraph.direct = format.direct;
     }
   });
@@ -4615,6 +4790,8 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     paragraph.page_break = format.page_break;
     paragraph.cell = format.cell;
     paragraph.spacing = format.spacing;
+    paragraph.borders = format.borders;
+    paragraph.shading = format.shading;
     // No runs here. The line's size comes from the buffer, or a 20 pt
     // paragraph would be drawn as 11 pt after OK.
     paragraph.basis = basis_half_at(at);
@@ -4649,6 +4826,10 @@ void MainWindow::tag_paragraph(int start, const ParaFormat& format)
     pending_para_.indents = clamp_indents(format.indents);
     pending_para_.list = clamp_list(format.list);
     pending_para_.spacing = clamp_spacing(format.spacing);
+    pending_para_.borders = clamp_borders(format.borders);
+    pending_para_.shading = clamp_shading(format.shading);
+    pending_para_.cell.borders = clamp_borders(format.cell.borders);
+    pending_para_.cell.shading = clamp_shading(format.cell.shading);
     if (pending_para_.basis < 2)
       pending_para_.basis = 22;
     pending_para_set_ = true;
@@ -5538,6 +5719,8 @@ Paragraph MainWindow::label_paragraph(size_t index, int offset) const
   paragraph.direct = format.direct;
   paragraph.spacing = format.spacing;
   paragraph.basis = format.basis;
+  paragraph.borders = format.borders;
+  paragraph.shading = format.shading;
   // What capture() would give list_label_layout(): the first run's format,
   // an empty paragraph's mark, or neither.
   const auto iter = buffer_->get_iter_at_offset(offset);
@@ -6773,6 +6956,175 @@ void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
   }
 }
 
+void MainWindow::draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  if (!buffer_)
+    return;
+  // A plain document has no "parab" tag. One walk of the tag table, then
+  // nothing else, so typing does not measure every paragraph.
+  bool any = false;
+  buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (any)
+      return;
+    const std::string name = tag_name(tag);
+    if (name.size() >= 5 && name.compare(0, 5, "parab") == 0)
+      any = true;
+  });
+  if (!any)
+    return;
+  Gdk::Rectangle visible;
+  text_.get_visible_rect(visible);
+  double clip_x1 = 0;
+  double clip_y1 = 0;
+  double clip_x2 = 0;
+  double clip_y2 = 0;
+  cr->get_clip_extents(clip_x1, clip_y1, clip_x2, clip_y2);
+  int ignored = 0;
+  int clip_top = 0;
+  int clip_bottom = 0;
+  text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::floor(clip_y1)),
+                                ignored, clip_top);
+  text_.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::ceil(clip_y2)),
+                                ignored, clip_bottom);
+  const int view_top = std::max(visible.get_y(), clip_top);
+  const int view_bottom = std::min(visible.get_y() + visible.get_height(), clip_bottom);
+  if (view_bottom < view_top)
+    return;
+  Gtk::TextIter top;
+  int top_y = 0;
+  text_.get_line_at_y(top, view_top, top_y);
+  const int count = buffer_->get_char_count();
+  const double zoom = zoom_factor();
+  const int width = text_.get_allocated_width();
+  const ViewGeometry sheet = geometry();
+  // The seam (or draft's short gap) is pixels-above on the first line. It is
+  // the sheet above and the pasteboard, not part of the paragraph.
+  auto leading_px = [](const Gtk::TextIter& at) {
+    const int seam = seam_at(at);
+    if (seam > 0)
+      return seam;
+    int gap = 0;
+    for (const auto& tag : at.get_tags()) {
+      if (!is_draft_gap(tag_name(tag)) || !tag->property_pixels_above_lines_set())
+        continue;
+      gap = std::max(gap, static_cast<int>(tag->property_pixels_above_lines()));
+    }
+    return gap;
+  };
+  for (int offset = paragraph_start(top.get_offset()); offset < count;) {
+    const int end = paragraph_end(offset);
+    auto iter = buffer_->get_iter_at_offset(offset);
+    int y = 0;
+    int height = 0;
+    text_.get_line_yrange(iter, y, height);
+    if (y > view_bottom)
+      break;
+    ParaFormat format;
+    if (auto tag = para_tag_at(iter))
+      parse_para(tag_name(tag), format);
+    if (format.cell.table == 0 && !borders_plain(format.borders)) {
+      auto last = buffer_->get_iter_at_offset(end > offset ? end - 1 : offset);
+      int last_y = 0;
+      int last_height = 0;
+      text_.get_line_yrange(last, last_y, last_height);
+      const Borders borders = clamp_borders(format.borders);
+      const double left =
+          margin_left() + indent_px(format.indents.left) - indent_px(borders.left.space);
+      const double right =
+          width - margin_right() - indent_px(format.indents.right) + indent_px(borders.right.space);
+      int window_x = 0;
+      int window_top = 0;
+      int window_bottom = 0;
+      const int top_buf =
+          border_top_y(y, leading_px(iter), indent_px(borders.top.space), sheet.margin_y);
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top_buf, window_x, window_top);
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, last_y + last_height, window_x,
+                                    window_bottom);
+      const double top_edge = window_top;
+      const double bottom_edge = window_bottom + indent_px(borders.bottom.space);
+      if (right > left && bottom_edge > top_edge && window_bottom >= view_top)
+        paint_borders(cr, left, top_edge, right, bottom_edge, borders, zoom);
+    }
+    if (end <= offset)
+      break;
+    offset = end;
+  }
+}
+
+void MainWindow::draw_cell_paragraph_borders(Gtk::TextView& view,
+                                             const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  bool any = false;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (any)
+      return;
+    const std::string name = tag_name(tag);
+    if (name.size() >= 6 && name.compare(0, 6, "cparab") == 0)
+      any = true;
+  });
+  if (!any)
+    return;
+  const int count = buffer->get_char_count();
+  const double zoom = zoom_factor();
+  const int width = view.get_allocated_width();
+  for (int offset = 0; offset <= count;) {
+    auto iter = buffer->get_iter_at_offset(std::min(offset, count));
+    Indents indents;
+    Align align = Align::Left;
+    Spacing spacing;
+    int basis = 22;
+    int heading = 0;
+    Borders borders;
+    Shading shading;
+    bool found = false;
+    for (const auto& tag : iter.get_tags()) {
+      if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading)) {
+        found = true;
+        break;
+      }
+    }
+    int end = offset;
+    auto cursor = buffer->get_iter_at_offset(std::min(offset, count));
+    while (!cursor.is_end()) {
+      const bool newline = cursor.get_char() == '\n';
+      cursor.forward_char();
+      end = cursor.get_offset();
+      if (newline)
+        break;
+    }
+    if (found && !borders_plain(borders)) {
+      int y = 0;
+      int height = 0;
+      view.get_line_yrange(buffer->get_iter_at_offset(std::min(offset, count)), y, height);
+      auto last = buffer->get_iter_at_offset(end > offset ? end - 1 : offset);
+      int last_y = 0;
+      int last_height = 0;
+      view.get_line_yrange(last, last_y, last_height);
+      const Borders box = clamp_borders(borders);
+      const double left =
+          view.get_left_margin() + indent_px(indents.left) - indent_px(box.left.space);
+      const double right =
+          width - view.get_right_margin() - indent_px(indents.right) + indent_px(box.right.space);
+      int window_x = 0;
+      int window_top = 0;
+      int window_bottom = 0;
+      view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, y, window_x, window_top);
+      view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, last_y + last_height, window_x,
+                                   window_bottom);
+      const double top_edge = window_top - indent_px(box.top.space);
+      const double bottom_edge = window_bottom + indent_px(box.bottom.space);
+      if (right > left && bottom_edge > top_edge)
+        paint_borders(cr, left, top_edge, right, bottom_edge, box, zoom);
+    }
+    if (end <= offset || end >= count)
+      break;
+    offset = end;
+  }
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,
@@ -6783,6 +7135,8 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   // The gray between sheets. Painted after the text, so the text view's
   // white does not cover it. Nothing is typed in that band.
   draw_page_seams(cr);
+  // A border-only document still draws. Lists are painted after this.
+  draw_paragraph_borders(cr);
   if (!any_list())
     return false;
   const std::vector<ListLine>& lines = list_lines();
@@ -7299,6 +7653,434 @@ void MainWindow::on_paragraph()
     if (spacing_changed)
       format.spacing = chosen_spacing;
   });
+}
+
+void MainWindow::on_borders()
+{
+  // Word 97's Format > Borders and Shading. Apply to is the paragraph, or
+  // the whole cell when one is being edited. Switching Apply to drops edits
+  // to the other target. Cancel writes nothing.
+  const bool have_cell = editing_cell();
+  const ParaFormat paragraph = focused_para();
+  Borders cell_borders;
+  Shading cell_shading;
+  bool cell_set = false;
+  int cell_table = 0;
+  if (have_cell) {
+    if (TableSheet* sheet = editing_sheet()) {
+      int row = 0;
+      int column = 0;
+      int caret = 0;
+      int bound = 0;
+      if (cell_place(*sheet, row, column, caret, bound)) {
+        if (const Paragraph* form = cell_paragraph_at(row, column, std::min(caret, bound))) {
+          cell_borders = form->cell.borders;
+          cell_shading = form->cell.shading;
+          cell_set = form->cell.borders_set;
+          cell_table = form->cell.table;
+        }
+      }
+    }
+  }
+
+  enum class Setting { None, Box, Shadow, ThreeD, Custom };
+  auto recognize = [](const Borders& borders) {
+    const Borders box = clamp_borders(borders);
+    if (borders_plain(box))
+      return Setting::None;
+    const bool bare =
+        !box.top.shadow && !box.left.shadow && !box.bottom.shadow && !box.right.shadow;
+    const bool same_width = box.top.width == box.left.width && box.top.width == box.bottom.width &&
+                            box.top.width == box.right.width;
+    const bool same_color = box.top.color == box.left.color && box.top.color == box.bottom.color &&
+                            box.top.color == box.right.color;
+    if (bare && same_width && same_color && box.top.style == BorderStyle::Inset &&
+        box.left.style == BorderStyle::Inset && box.bottom.style == BorderStyle::Outset &&
+        box.right.style == BorderStyle::Outset)
+      return Setting::ThreeD;
+    if (box.top == box.left && box.top == box.bottom && box.top == box.right &&
+        box.top.style != BorderStyle::None)
+      return box.top.shadow ? Setting::Shadow : Setting::Box;
+    return Setting::Custom;
+  };
+
+  Gtk::Dialog dialog("Borders and Shading", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+
+  auto* book = Gtk::manage(new Gtk::Notebook());
+  book->set_margin_top(12);
+  book->set_margin_start(12);
+  book->set_margin_end(12);
+  auto* borders_page = Gtk::manage(new Gtk::Grid());
+  borders_page->set_row_spacing(8);
+  borders_page->set_column_spacing(12);
+  borders_page->set_margin_top(12);
+  borders_page->set_margin_bottom(12);
+  borders_page->set_margin_start(12);
+  borders_page->set_margin_end(12);
+  auto* shade_page = Gtk::manage(new Gtk::Grid());
+  shade_page->set_row_spacing(8);
+  shade_page->set_column_spacing(12);
+  shade_page->set_margin_top(12);
+  shade_page->set_margin_bottom(12);
+  shade_page->set_margin_start(12);
+  shade_page->set_margin_end(12);
+
+  auto* setting_combo = Gtk::manage(new Gtk::ComboBoxText());
+  setting_combo->append("None");
+  setting_combo->append("Box");
+  setting_combo->append("Shadow");
+  setting_combo->append("3-D");
+  setting_combo->append("Custom");
+  auto* style_combo = Gtk::manage(new Gtk::ComboBoxText());
+  for (int style = static_cast<int>(BorderStyle::Single);
+       style <= static_cast<int>(BorderStyle::Engrave); ++style)
+    style_combo->append(border_style_name(static_cast<BorderStyle>(style)));
+  auto* color_combo = Gtk::manage(new Gtk::ComboBoxText());
+  auto* fill_combo = Gtk::manage(new Gtk::ComboBoxText());
+  auto* pattern_color = Gtk::manage(new Gtk::ComboBoxText());
+  for (Gtk::ComboBoxText* combo : {color_combo, fill_combo, pattern_color}) {
+    combo->append(ink_name(Ink::Auto, false));
+    for (int ink = 1; ink <= 16; ++ink)
+      combo->append(ink_name(static_cast<Ink>(ink), false));
+  }
+  auto* width_combo = Gtk::manage(new Gtk::ComboBoxText());
+  std::vector<int> width_values;
+  auto width_label = [](int twips) {
+    static const char* labels[] = {"1/4 pt",   "1/2 pt", "3/4 pt",   "1 pt", "1 1/2 pt",
+                                   "2 1/4 pt", "3 pt",   "4 1/2 pt", "6 pt"};
+    for (int i = 0; i < kBorderWidthCount; ++i) {
+      if (kBorderWidths[i] == twips)
+        return std::string(labels[i]);
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.2f pt", static_cast<double>(twips) / 20.0);
+    return std::string(buf);
+  };
+  for (int i = 0; i < kBorderWidthCount; ++i) {
+    width_values.push_back(kBorderWidths[i]);
+    width_combo->append(width_label(kBorderWidths[i]));
+  }
+  auto* pattern_combo = Gtk::manage(new Gtk::ComboBoxText());
+  std::vector<int> pattern_values;
+  auto pattern_label = [](int pattern) {
+    for (int i = 0; i < kShadeStepCount; ++i) {
+      if (kShadeSteps[i].pattern == pattern)
+        return std::string(kShadeSteps[i].name);
+    }
+    if (pattern % 100 == 0)
+      return std::to_string(pattern / 100) + "%";
+    if (pattern % 100 == 50)
+      return std::to_string(pattern / 100) + ".5%";
+    return std::to_string(pattern);
+  };
+  for (int i = 0; i < kShadeStepCount; ++i) {
+    pattern_values.push_back(kShadeSteps[i].pattern);
+    pattern_combo->append(kShadeSteps[i].name);
+  }
+  auto* top_check = Gtk::manage(new Gtk::CheckButton("_Top", true));
+  auto* left_check = Gtk::manage(new Gtk::CheckButton("_Left", true));
+  auto* bottom_check = Gtk::manage(new Gtk::CheckButton("_Bottom", true));
+  auto* right_check = Gtk::manage(new Gtk::CheckButton("_Right", true));
+  auto* checks = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 12));
+  checks->pack_start(*top_check, Gtk::PACK_SHRINK);
+  checks->pack_start(*left_check, Gtk::PACK_SHRINK);
+  checks->pack_start(*bottom_check, Gtk::PACK_SHRINK);
+  checks->pack_start(*right_check, Gtk::PACK_SHRINK);
+
+  auto label = [](const char* text, Gtk::Widget& target) {
+    auto* item = Gtk::manage(new Gtk::Label(text, true));
+    item->set_halign(Gtk::ALIGN_START);
+    item->set_mnemonic_widget(target);
+    return item;
+  };
+  borders_page->attach(*label("_Setting:", *setting_combo), 0, 0, 1, 1);
+  borders_page->attach(*setting_combo, 1, 0, 1, 1);
+  borders_page->attach(*label("St_yle:", *style_combo), 0, 1, 1, 1);
+  borders_page->attach(*style_combo, 1, 1, 1, 1);
+  borders_page->attach(*label("C_olor:", *color_combo), 0, 2, 1, 1);
+  borders_page->attach(*color_combo, 1, 2, 1, 1);
+  borders_page->attach(*label("_Width:", *width_combo), 0, 3, 1, 1);
+  borders_page->attach(*width_combo, 1, 3, 1, 1);
+  borders_page->attach(*checks, 0, 4, 2, 1);
+  shade_page->attach(*label("_Fill:", *fill_combo), 0, 0, 1, 1);
+  shade_page->attach(*fill_combo, 1, 0, 1, 1);
+  shade_page->attach(*label("_Pattern:", *pattern_combo), 0, 1, 1, 1);
+  shade_page->attach(*pattern_combo, 1, 1, 1, 1);
+  shade_page->attach(*label("Pattern colo_ur:", *pattern_color), 0, 2, 1, 1);
+  shade_page->attach(*pattern_color, 1, 2, 1, 1);
+  book->append_page(*borders_page, "Borders");
+  book->append_page(*shade_page, "Shading");
+
+  auto* apply = Gtk::manage(new Gtk::ComboBoxText());
+  apply->append("Paragraph");
+  if (have_cell)
+    apply->append("Cell");
+  auto* apply_row = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 12));
+  apply_row->set_margin_top(8);
+  apply_row->set_margin_bottom(12);
+  apply_row->set_margin_start(12);
+  apply_row->set_margin_end(12);
+  apply_row->pack_start(*label("_Apply to:", *apply), Gtk::PACK_SHRINK);
+  apply_row->pack_start(*apply, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*book, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*apply_row, Gtk::PACK_SHRINK);
+
+  struct Chrome {
+    Borders borders;
+    Shading shading;
+  };
+  Chrome working;
+  bool filling = false;
+
+  auto select_width = [&](int twips) {
+    const int want = twips > 0 ? twips : kDefaultBorderWidth;
+    for (size_t i = 0; i < width_values.size(); ++i) {
+      if (width_values[i] == want) {
+        width_combo->set_active(static_cast<int>(i));
+        return;
+      }
+    }
+    width_values.push_back(want);
+    width_combo->append(width_label(want));
+    width_combo->set_active(static_cast<int>(width_values.size()) - 1);
+  };
+  auto select_pattern = [&](int pattern) {
+    for (size_t i = 0; i < pattern_values.size(); ++i) {
+      if (pattern_values[i] == pattern) {
+        pattern_combo->set_active(static_cast<int>(i));
+        return;
+      }
+    }
+    pattern_values.push_back(pattern);
+    pattern_combo->append(pattern_label(pattern));
+    pattern_combo->set_active(static_cast<int>(pattern_values.size()) - 1);
+  };
+  auto chosen_style = [&]() {
+    const int row = style_combo->get_active_row_number();
+    if (row < 0)
+      return BorderStyle::Single;
+    return clamp_border_style(row + 1);
+  };
+  auto chosen_width = [&]() {
+    const int row = width_combo->get_active_row_number();
+    if (row < 0 || row >= static_cast<int>(width_values.size()))
+      return kDefaultBorderWidth;
+    return width_values[static_cast<size_t>(row)];
+  };
+  auto chosen_ink = [](Gtk::ComboBoxText& combo) {
+    const int row = combo.get_active_row_number();
+    return ink_clamp(row < 0 ? 0 : row);
+  };
+  auto sensitize = [&]() {
+    const Setting setting =
+        static_cast<Setting>(std::max(0, setting_combo->get_active_row_number()));
+    const bool none = setting == Setting::None;
+    const bool custom = setting == Setting::Custom;
+    style_combo->set_sensitive(!none && setting != Setting::ThreeD);
+    color_combo->set_sensitive(!none);
+    width_combo->set_sensitive(!none);
+    top_check->set_sensitive(custom);
+    left_check->set_sensitive(custom);
+    bottom_check->set_sensitive(custom);
+    right_check->set_sensitive(custom);
+  };
+  auto pull_borders = [&]() {
+    if (filling)
+      return;
+    const Setting setting =
+        static_cast<Setting>(std::max(0, setting_combo->get_active_row_number()));
+    if (setting == Setting::None) {
+      working.borders = Borders{};
+      return;
+    }
+    const BorderStyle style = chosen_style();
+    const int width = chosen_width();
+    const Ink color = chosen_ink(*color_combo);
+    auto paint = [&](BorderSide& side, bool on, BorderStyle which, bool shadow) {
+      const int space = clamp_side(side).space;
+      if (!on) {
+        side = BorderSide{};
+        return;
+      }
+      side.style = which;
+      side.width = width;
+      side.color = color;
+      side.space = space;
+      side.shadow = shadow;
+      side = clamp_side(side);
+    };
+    if (setting == Setting::ThreeD) {
+      paint(working.borders.top, true, BorderStyle::Inset, false);
+      paint(working.borders.left, true, BorderStyle::Inset, false);
+      paint(working.borders.bottom, true, BorderStyle::Outset, false);
+      paint(working.borders.right, true, BorderStyle::Outset, false);
+      return;
+    }
+    if (setting == Setting::Box || setting == Setting::Shadow) {
+      const bool shadow = setting == Setting::Shadow;
+      paint(working.borders.top, true, style, shadow);
+      paint(working.borders.left, true, style, shadow);
+      paint(working.borders.bottom, true, style, shadow);
+      paint(working.borders.right, true, style, shadow);
+      return;
+    }
+    auto custom = [&](BorderSide& side, bool on) {
+      const bool shadow = side.shadow;
+      paint(side, on, style, shadow);
+    };
+    custom(working.borders.top, top_check->get_active());
+    custom(working.borders.left, left_check->get_active());
+    custom(working.borders.bottom, bottom_check->get_active());
+    custom(working.borders.right, right_check->get_active());
+  };
+  auto pull_shading = [&]() {
+    if (filling)
+      return;
+    const int row = pattern_combo->get_active_row_number();
+    const int pattern = row >= 0 && row < static_cast<int>(pattern_values.size())
+                            ? pattern_values[static_cast<size_t>(row)]
+                            : 0;
+    working.shading.pattern = pattern;
+    working.shading.background = chosen_ink(*fill_combo);
+    working.shading.foreground = chosen_ink(*pattern_color);
+    working.shading = clamp_shading(working.shading);
+  };
+  auto show_checks = [&]() {
+    const bool was = filling;
+    filling = true;
+    top_check->set_active(working.borders.top.style != BorderStyle::None);
+    left_check->set_active(working.borders.left.style != BorderStyle::None);
+    bottom_check->set_active(working.borders.bottom.style != BorderStyle::None);
+    right_check->set_active(working.borders.right.style != BorderStyle::None);
+    filling = was;
+  };
+  auto load = [&](bool cell) {
+    filling = true;
+    if (cell && !cell_set)
+      working.borders = border_box(BorderStyle::Single, kDefaultBorderWidth, Ink::Auto);
+    else if (cell)
+      working.borders = cell_borders;
+    else
+      working.borders = paragraph.borders;
+    working.shading = cell ? cell_shading : paragraph.shading;
+    working.borders = clamp_borders(working.borders);
+    working.shading = clamp_shading(working.shading);
+    const Setting setting = recognize(working.borders);
+    setting_combo->set_active(static_cast<int>(setting));
+    BorderSide sample;
+    sample.style = BorderStyle::Single;
+    sample.width = kDefaultBorderWidth;
+    for (int edge = 0; edge < 4; ++edge) {
+      const BorderSide side = clamp_side(border_at(working.borders, edge));
+      if (side.style == BorderStyle::None)
+        continue;
+      sample = side;
+      break;
+    }
+    BorderStyle shown = sample.style;
+    if (shown == BorderStyle::None || setting == Setting::ThreeD)
+      shown = BorderStyle::Single;
+    style_combo->set_active(std::max(0, static_cast<int>(shown) - 1));
+    color_combo->set_active(static_cast<int>(sample.color));
+    select_width(sample.width);
+    show_checks();
+    fill_combo->set_active(static_cast<int>(working.shading.background));
+    select_pattern(working.shading.pattern);
+    pattern_color->set_active(static_cast<int>(working.shading.foreground));
+    sensitize();
+    filling = false;
+  };
+
+  setting_combo->signal_changed().connect([&] {
+    if (filling)
+      return;
+    pull_borders();
+    show_checks();
+    sensitize();
+  });
+  auto on_line = [&]() {
+    if (filling)
+      return;
+    pull_borders();
+  };
+  style_combo->signal_changed().connect(on_line);
+  color_combo->signal_changed().connect(on_line);
+  width_combo->signal_changed().connect(on_line);
+  top_check->signal_toggled().connect(on_line);
+  left_check->signal_toggled().connect(on_line);
+  bottom_check->signal_toggled().connect(on_line);
+  right_check->signal_toggled().connect(on_line);
+  auto on_shade = [&]() {
+    if (filling)
+      return;
+    pull_shading();
+  };
+  fill_combo->signal_changed().connect(on_shade);
+  pattern_combo->signal_changed().connect(on_shade);
+  pattern_color->signal_changed().connect(on_shade);
+  apply->signal_changed().connect([&] {
+    if (filling)
+      return;
+    load(apply->get_active_row_number() == 1);
+  });
+
+  filling = true;
+  apply->set_active(have_cell ? 1 : 0);
+  filling = false;
+  load(have_cell);
+  dialog.show_all();
+  if (dialog.run() != Gtk::RESPONSE_OK) {
+    restore_edit_focus();
+    return;
+  }
+  const bool cell = have_cell && apply->get_active_row_number() == 1;
+  const Borders borders = clamp_borders(working.borders);
+  const Shading shading = clamp_shading(working.shading);
+  if (!cell) {
+    apply_para_edit([&](ParaFormat& format) {
+      format.borders = borders;
+      format.shading = shading;
+    });
+    return;
+  }
+  TableSheet* sheet = editing_sheet();
+  if (!sheet) {
+    restore_edit_focus();
+    return;
+  }
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound) || cell_table == 0) {
+    restore_edit_focus();
+    return;
+  }
+  const int id = cell_table;
+  const Document before = capture();
+  Document after = before;
+  bool touched = false;
+  for (Paragraph& item : after.paragraphs) {
+    if (item.cell.table != id || item.cell.row != row || item.cell.column != column)
+      continue;
+    item.cell.borders_set = true;
+    item.cell.borders = borders;
+    item.cell.shading = shading;
+    touched = true;
+  }
+  if (!touched || before == after) {
+    restore_edit_focus();
+    return;
+  }
+  const CellEdit saved = cell_edit_;
+  hold_view();
+  commit_document(before, after);
+  restore_cell_edit(saved);
+  release_view();
 }
 
 void MainWindow::build_find()
