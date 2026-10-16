@@ -7,7 +7,7 @@
 #include <cctype>
 #include <string>
 
-constexpr int kChecks = 95;
+constexpr int kChecks = 107;
 
 namespace {
 
@@ -39,6 +39,15 @@ writeit::Paragraph body(const char* text)
   writeit::Paragraph paragraph;
   paragraph.runs.push_back(text_run(text));
   return paragraph;
+}
+
+const writeit::Paragraph* placed(const writeit::Document& doc, int row, int column)
+{
+  for (const writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0 && paragraph.cell.row == row && paragraph.cell.column == column)
+      return &paragraph;
+  }
+  return nullptr;
 }
 
 writeit::Paragraph cell(const char* text)
@@ -338,6 +347,55 @@ int main()
     CHECK(border_top_y(1000, 500, 10, 40) == 1490);
     CHECK(border_top_y(1000, 500, 100, 40) == 1460);
     CHECK(border_top_y(100, 2000, 0, 36) == 2100);
+  }
+
+  {
+    Document doc = blank_document("Sans", 11);
+    doc.paragraphs[0] = body("Before");
+    CHECK(insert_table(doc.paragraphs, 1, 2, 2, 6000));
+    const Borders red = border_box(BorderStyle::Single, 20, Ink::Red);
+    const Borders blue = border_box(BorderStyle::Double, 30, Ink::Blue);
+    doc.paragraphs[1].cell.borders_set = true;
+    doc.paragraphs[1].cell.borders = red;
+    doc.paragraphs[2].cell.shading.pattern = 10000;
+    doc.paragraphs[2].cell.shading.foreground = Ink::Yellow;
+    doc.paragraphs[3].cell.borders_set = true;
+    doc.paragraphs[3].cell.borders = blue;
+    CHECK(insert_table_row(doc.paragraphs, 1));
+    const Paragraph* kept = placed(doc, 0, 0);
+    const Paragraph* beside = placed(doc, 0, 1);
+    const Paragraph* added_left = placed(doc, 1, 0);
+    const Paragraph* added_right = placed(doc, 1, 1);
+    const Paragraph* shifted = placed(doc, 2, 0);
+    CHECK(kept && added_left && added_left->cell.borders_set && added_left->cell.borders == red);
+    CHECK(beside && added_right && !added_right->cell.borders_set &&
+          added_right->cell.shading == beside->cell.shading);
+    CHECK(shifted && shifted->cell.borders == blue);
+    CHECK(doc.paragraphs[1].cell.rows == 3);
+  }
+
+  {
+    Document doc = blank_document("Sans", 11);
+    doc.paragraphs[0] = body("Before");
+    CHECK(insert_table(doc.paragraphs, 1, 2, 2, 6000));
+    const Borders red = border_box(BorderStyle::Single, 20, Ink::Red);
+    const Borders blue = border_box(BorderStyle::Double, 30, Ink::Blue);
+    doc.paragraphs[1].cell.borders_set = true;
+    doc.paragraphs[1].cell.borders = red;
+    doc.paragraphs[2].cell.shading.pattern = 10000;
+    doc.paragraphs[2].cell.shading.foreground = Ink::Yellow;
+    doc.paragraphs[3].cell.borders_set = true;
+    doc.paragraphs[3].cell.borders = blue;
+    CHECK(insert_table_column(doc.paragraphs, 1));
+    const Paragraph* top_new = placed(doc, 0, 1);
+    const Paragraph* top_old = placed(doc, 0, 2);
+    const Paragraph* low_new = placed(doc, 1, 1);
+    const Paragraph* low_source = placed(doc, 1, 0);
+    CHECK(top_new && top_new->cell.borders_set && top_new->cell.borders == red);
+    CHECK(top_old && !top_old->cell.borders_set && top_old->cell.shading.foreground == Ink::Yellow);
+    CHECK(low_new && low_source && low_new->cell.borders == blue &&
+          low_source->cell.borders == blue);
+    CHECK(doc.paragraphs[1].cell.columns == 3);
   }
 
   {

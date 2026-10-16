@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### Insert Row and Insert Column copy one cell’s borders and shading onto every new cell
-
-- Severity: incorrect
-- Confidence: medium
-- Where: `src/page.cpp` `insert_table_row`, `insert_table_column`, `empty_cell`.
-- Trigger: Give two cells in one row different borders or shading. Table → Insert Row, or Insert Column, with the caret in one of those cells.
-- Outcome: Every new cell receives that one cell’s borders and shading. The cell beside it keeps its own. `DEVELOPMENT.md` says Word 97 decides what the milestone table does not spell out. Word 97 gives each new cell the borders and shading of the cell in its own column, for a new row, or of the cell in its own row, for a new column.
-
 ### Typing in a long document misses the 50 ms gate
 
 - Severity: incorrect
@@ -53,6 +45,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Insert Row and Insert Column copy one cell’s borders and shading onto every new cell
+
+- Fixed in 2.2.1.
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/page.cpp` `insert_table_row`, `insert_table_column`, `chrome_from`.
+- Trigger: Give two cells in one row different borders or shading. Table → Insert Row, or Insert Column, with the caret in one of those cells.
+- Outcome: A new row gives each cell the borders and shading of the cell above it in that column. A new column gives each cell the borders and shading of the cell beside it in that row. A cell with no stored border stays that way. Insert Row still inserts below the caret’s row.
 
 ### A header, a footer, or a footnote does not draw its border or its shading
 

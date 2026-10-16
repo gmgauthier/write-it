@@ -87,6 +87,24 @@ Paragraph empty_cell(const Cell& like, int row, int column)
   return paragraph;
 }
 
+// The cell already in this row and column, so a new neighbour keeps that
+// cell's borders and shading. A missing cell keeps the table's geometry and
+// a plain frame.
+Cell chrome_from(const std::vector<Paragraph>& paragraphs, int id, int row, int column,
+                 const Cell& geometry)
+{
+  for (const Paragraph& paragraph : paragraphs) {
+    const Cell& other = paragraph.cell;
+    if (other.table == id && other.row == row && other.column == column)
+      return other;
+  }
+  Cell plain = geometry;
+  plain.borders_set = false;
+  plain.borders = Borders{};
+  plain.shading = Shading{};
+  return plain;
+}
+
 }  // namespace
 
 std::string image_type_of(const std::string& data)
@@ -267,8 +285,9 @@ bool insert_table_row(std::vector<Paragraph>& paragraphs, size_t index)
   if (!found)
     return false;
   for (int column = cell.columns - 1; column >= 0; --column) {
+    const Cell source = chrome_from(paragraphs, cell.table, cell.row, column, cell);
     paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(insert_at),
-                      empty_cell(cell, row, column));
+                      empty_cell(source, row, column));
   }
   stamp_table(paragraphs, cell.table);
   return true;
@@ -323,7 +342,7 @@ bool insert_table_column(std::vector<Paragraph>& paragraphs, size_t index)
     if (at == paragraphs.size())
       continue;
     paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(at) + 1,
-                      empty_cell(cell, row, column + 1));
+                      empty_cell(paragraphs[at].cell, row, column + 1));
   }
   for (Paragraph& paragraph : paragraphs) {
     if (paragraph.cell.table != id || paragraph.cell.widths.empty())
