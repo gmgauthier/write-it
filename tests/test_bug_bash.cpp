@@ -10,11 +10,14 @@
 #include "main_window.hpp"
 #include "view.hpp"
 
+#include <cairomm/context.h>
+#include <cairomm/surface.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <glibmm/miscutils.h>
 #include <gtkmm.h>
 
+#include <cstring>
 #include <iostream>
 #include <string>
 
@@ -194,6 +197,75 @@ struct MainWindowProbe {
   {
     return selection_start(window.notes_view_);
   }
+
+  static bool paragraph_yellow(Gtk::TextView& view)
+  {
+    auto buffer = view.get_buffer();
+    if (!buffer || buffer->get_char_count() == 0)
+      return false;
+    GtkTextAttributes* attrs = gtk_text_attributes_new();
+    gtk_text_iter_get_attributes(buffer->begin().gobj(), attrs);
+    const bool yellow = attrs->pg_bg_color != nullptr && attrs->pg_bg_color->red > 60000 &&
+                        attrs->pg_bg_color->green > 60000 && attrs->pg_bg_color->blue < 2000;
+    gtk_text_attributes_unref(attrs);
+    return yellow;
+  }
+
+  static bool paints_red(Gtk::TextView& view)
+  {
+    const int w = view.get_allocated_width();
+    const int h = view.get_allocated_height();
+    if (w < 2 || h < 2)
+      return false;
+    auto surface = Cairo::ImageSurface::create(Cairo::FORMAT_ARGB32, w, h);
+    auto cr = Cairo::Context::create(surface);
+    cr->rectangle(0, 0, w, h);
+    cr->clip();
+    cr->set_source_rgb(1, 1, 1);
+    cr->paint();
+    gtk_widget_draw(GTK_WIDGET(view.gobj()), cr->cobj());
+    surface->flush();
+    const unsigned char* data = surface->get_data();
+    const int stride = surface->get_stride();
+    for (int y = 0; y < h; ++y) {
+      const unsigned char* row = data + static_cast<size_t>(y) * static_cast<size_t>(stride);
+      for (int x = 0; x < w; ++x) {
+        unsigned pixel = 0;
+        std::memcpy(&pixel, row + static_cast<size_t>(x) * 4, 4);
+        const unsigned red = (pixel >> 16) & 0xff;
+        const unsigned green = (pixel >> 8) & 0xff;
+        const unsigned blue = pixel & 0xff;
+        if (red > 180 && green < 80 && blue < 80)
+          return true;
+      }
+    }
+    return false;
+  }
+
+  static bool header_yellow(MainWindow& window)
+  {
+    return paragraph_yellow(window.header_view_);
+  }
+  static bool header_red(MainWindow& window)
+  {
+    return paints_red(window.header_view_);
+  }
+  static bool footer_yellow(MainWindow& window)
+  {
+    return paragraph_yellow(window.footer_view_);
+  }
+  static bool footer_red(MainWindow& window)
+  {
+    return paints_red(window.footer_view_);
+  }
+  static bool note_yellow(MainWindow& window)
+  {
+    return paragraph_yellow(window.notes_view_);
+  }
+  static bool note_red(MainWindow& window)
+  {
+    return paints_red(window.notes_view_);
+  }
 };
 
 }  // namespace writeit
@@ -347,6 +419,37 @@ Document notes_doc()
   return doc;
 }
 
+Document chrome_doc()
+{
+  Document doc = writeit::blank_document("Sans", 11);
+  Run body;
+  body.font = "Sans";
+  body.size = 11;
+  body.text = "alpha";
+  doc.paragraphs[0].runs.push_back(body);
+  auto story = [](const char* text) {
+    Paragraph paragraph;
+    Run run;
+    run.font = "Sans";
+    run.size = 11;
+    run.text = text;
+    paragraph.runs.push_back(run);
+    paragraph.borders = writeit::border_box(writeit::BorderStyle::Single, 120, writeit::Ink::Red);
+    paragraph.shading.background = writeit::Ink::Yellow;
+    return paragraph;
+  };
+  doc.header.push_back(story("Head"));
+  doc.footer.push_back(story("Foot"));
+  doc.notes.push_back({story("Noted")});
+  Run mark;
+  mark.font = "Sans";
+  mark.size = 11;
+  mark.text = "1";
+  mark.note = 1;
+  doc.paragraphs[0].runs.push_back(mark);
+  return doc;
+}
+
 int markers(const Document& doc, int& number, std::string& text)
 {
   int count = 0;
@@ -366,7 +469,7 @@ int markers(const Document& doc, int& number, std::string& text)
 
 }  // namespace
 
-constexpr int kChecks = 31;
+constexpr int kChecks = 37;
 
 int main(int argc, char* argv[])
 {
@@ -498,6 +601,16 @@ int main(int argc, char* argv[])
     MainWindowProbe::undo(window);
     settle();
     CHECK(MainWindowProbe::doc(window).notes.size() == 2);
+
+    MainWindowProbe::zoom(window, 100);
+    MainWindowProbe::load(window, chrome_doc());
+    settle();
+    CHECK(MainWindowProbe::header_yellow(window));
+    CHECK(MainWindowProbe::header_red(window));
+    CHECK(MainWindowProbe::footer_yellow(window));
+    CHECK(MainWindowProbe::footer_red(window));
+    CHECK(MainWindowProbe::note_yellow(window));
+    CHECK(MainWindowProbe::note_red(window));
   }
   return suite_test::done("bug-bash", kChecks);
 }

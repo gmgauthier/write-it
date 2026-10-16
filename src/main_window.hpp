@@ -220,6 +220,15 @@ class MainWindow : public Gtk::ApplicationWindow {
   void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_cell_paragraph_borders(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
+  // A header, footer, or note has no paragraph tag. The border is painted
+  // from the stored paragraph, around the text, and the shading is a tag.
+  void paint_story_border(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                          const Paragraph& paragraph, int offset, int len);
+  void draw_story_borders(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
+                          const Cairo::RefPtr<Cairo::Context>& cr);
+  void draw_note_borders(Gtk::TextView& view, const std::vector<std::vector<Paragraph>>& notes,
+                         const Cairo::RefPtr<Cairo::Context>& cr);
+  void on_story_draw(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
   int natural_line_above(const Gtk::TextIter& iter) const;
   // Seam pixels above `offset` that are not part of the laid-out text. A
   // heading's own space, which a seam replaces on screen, is put back.

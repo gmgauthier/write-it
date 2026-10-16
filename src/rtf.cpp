@@ -3458,6 +3458,8 @@ std::string rtf_export(const Document& doc)
     else if (given_style && given_style->align != Align::Left)
       out << "\\ql";
     write_spacing(out, paragraph.spacing, given_style ? &given_style->spacing : nullptr);
+    write_borders(out, paragraph.borders, given_style ? &given_style->borders : nullptr);
+    write_shading(out, paragraph.shading, given_style ? &given_style->shading : nullptr);
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.

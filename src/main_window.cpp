@@ -756,6 +756,17 @@ void MainWindow::build_page()
   prepare_story(notes_view_);
   notes_view_.set_no_show_all(false);
   prepare_story(footer_view_);
+  auto connect_story = [this](Gtk::TextView& view) {
+    view.signal_draw().connect(
+        [this, &view](const Cairo::RefPtr<Cairo::Context>& cr) {
+          on_story_draw(view, cr);
+          return false;
+        },
+        true);
+  };
+  connect_story(header_view_);
+  connect_story(notes_view_);
+  connect_story(footer_view_);
   note_label_.set_halign(Gtk::ALIGN_START);
   note_label_.set_valign(Gtk::ALIGN_START);
   note_marks_.put(note_label_, 0, 0);
