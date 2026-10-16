@@ -177,11 +177,13 @@ struct Spacing {
 // Named rules ignore value. At least, Exactly and Multiple compare it.
 bool same_spacing_line(const Spacing& a, const Spacing& b);
 Spacing clamp_spacing(Spacing spacing);
-// \sl and \slmult as read. sl 0 is single. A negative sl is exactly. A
-// positive sl with slmult is 240, 360, 480 or multiple; without it, at least.
+// \sl and \slmult as read. sl 0 is single, including \sl0\slmult1. A negative
+// sl is exactly. A positive sl with slmult is 240, 360, 480 or multiple;
+// without it, at least. Exactly 0, at least 0 and multiple 0 are told apart
+// by the reader before this is called: \sl-0, \sl0\slmult0, and \slmult1\sl0.
 void apply_line_spacing(Spacing& spacing, int sl, int slmult);
 // The \sl and \slmult that write this rule back. Single is 0 and 0, which the
-// writer omits unless a style has to be turned off.
+// writer omits unless a style has to be turned off. Exactly 0 is negative 0.
 void line_spacing_raw(const Spacing& spacing, int& sl, int& slmult);
 
 // A bulleted or numbered list item. The list sits on top of the indents: the
@@ -583,6 +585,44 @@ bool document_needs_custom_undo(const Document& before, const Document& after);
 // Where each note starts in the joined note text, as character offsets: 0,
 // then just after every blank line. GTK counts characters, not UTF-8 bytes.
 std::vector<int> note_break_offsets(const std::string& utf8);
+
+// What one paragraph contributes to a story view. An empty paragraph, or one
+// that is only a picture, is a single space, so the join is not a blank line.
+// Whitespace-only text is kept. A picture beside text contributes the text.
+std::string paragraph_plain(const Paragraph& paragraph);
+// Paragraphs joined by one newline. An empty story is empty.
+std::string story_plain_text(const std::vector<Paragraph>& story);
+
+// Gives one paragraph the style `to`, keeping a value that differs from the
+// style it is in even when the direct bit is unset. A file stores that
+// difference with no bit. take_paragraph_style() does not.
+void restyle_paragraph_kept(Paragraph& paragraph, const std::vector<Style>& sheet, const Style& to);
+
+// Notes whose markers were deleted. remap[0] is 0. remap[old] is the new
+// 1-based number, or 0 when that note had no marker in the body (cells live
+// there). `notes` is the kept stories, in the new order.
+struct NoteDrop {
+  std::vector<std::vector<Paragraph>> notes;
+  std::vector<int> remap;
+  bool changed = false;
+};
+
+NoteDrop drop_unmarked_notes(const Document& doc);
+// Writes the new numbers onto body markers. A marker whose text is empty or
+// the old number takes the new number's text. A dropped note's marker loses
+// its note.
+void apply_note_remap(Document& doc, const std::vector<int>& remap);
+
+// Body offsets of paragraphs whose list id changed between `before` and
+// `after`. A cell is skipped: a table is one anchor, and tagging each cell
+// as its own paragraph lands the new list on the wrong body paragraph.
+struct ListRetag {
+  int offset = 0;
+  size_t index = 0;
+};
+
+std::vector<ListRetag> list_retag_offsets(const std::vector<Paragraph>& before,
+                                          const std::vector<Paragraph>& after);
 
 // A header, footer, or note taking the keyboard leaves the cell that was
 // being edited. The body taking it does not: a file dialog and the Table

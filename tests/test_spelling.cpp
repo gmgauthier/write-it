@@ -49,7 +49,7 @@ std::function<bool(const std::string&)> list(std::initializer_list<const char*> 
 
 }  // namespace
 
-constexpr int kChecks = 68;
+constexpr int kChecks = 80;
 
 int main()
 {
@@ -196,6 +196,33 @@ int main()
     Paragraph paragraph = words({"sat"});
     CHECK(!writeit::replace_word(paragraph, 0, 4, "x"));
     CHECK(paragraph.runs[0].text == "sat");
+  }
+
+  {
+    Paragraph paragraph;
+    paragraph.runs.push_back(text("hel"));
+    Run picture;
+    picture.image = writeit::Image{};
+    paragraph.runs.push_back(picture);
+    paragraph.runs.push_back(text("lo"));
+    const std::vector<SpellMiss> misses = writeit::spelling_misses({paragraph}, list({}));
+    CHECK(misses.size() == 2);
+    CHECK(!misses.empty() && misses[0].word == "hel");
+    CHECK(misses.size() > 1 && misses[1].word == "lo");
+    CHECK(misses.size() > 1 && misses[1].begin == 4);
+    Paragraph replaced = paragraph;
+    CHECK(writeit::replace_word(replaced, 0, 3, "ham"));
+    CHECK(replaced.runs[0].text == "ham");
+    CHECK(replaced.runs.size() > 2 && replaced.runs[2].text == "lo");
+    CHECK(writeit::replace_word(paragraph, 4, 6, "go"));
+    CHECK(paragraph.runs[0].text == "hel");
+    CHECK(paragraph.runs.size() > 2 && paragraph.runs[2].text == "go");
+  }
+  {
+    const std::vector<SpellMiss> misses =
+        writeit::spelling_misses({words({"don\u2019t"})}, list({}));
+    CHECK(misses.size() == 1);
+    CHECK(!misses.empty() && misses[0].word == "don\u2019t");
   }
 
   return suite_test::done("spelling", kChecks);

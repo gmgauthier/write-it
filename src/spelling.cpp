@@ -30,6 +30,7 @@ struct Code {
   size_t len = 1;
   bool letter = false;
   unsigned char ascii = 0;
+  gunichar cp = 0;
 };
 
 Code code_at(const std::string& text, size_t i)
@@ -40,6 +41,7 @@ Code code_at(const std::string& text, size_t i)
   const auto c = static_cast<unsigned char>(text[i]);
   if (c < 0x80) {
     code.ascii = c;
+    code.cp = c;
     code.letter = std::isalpha(c) != 0;
     return code;
   }
@@ -50,21 +52,44 @@ Code code_at(const std::string& text, size_t i)
   code.len = static_cast<size_t>(g_utf8_next_char(p) - p);
   if (code.len == 0)
     code.len = 1;
+  code.cp = u;
   code.letter = g_unichar_isalpha(u) != 0;
   return code;
 }
 
-bool word_join(unsigned char c)
+// An apostrophe, a curly apostrophe, or an ASCII hyphen. An em dash is not one.
+bool word_join(const Code& code)
 {
-  return c == '\'' || c == '-';
+  if (code.cp == 0x2019)
+    return true;
+  return code.len == 1 && (code.ascii == '\'' || code.ascii == '-');
+}
+
+// A picture between two letters is a word break. The break is a byte in the
+// spelling text only when the run before the picture ended on a letter, so
+// a picture that already follows a space keeps the offsets it had.
+bool ends_with_letter(const std::string& text)
+{
+  if (text.empty())
+    return false;
+  size_t i = 0;
+  Code last;
+  while (i < text.size()) {
+    last = code_at(text, i);
+    i += last.len;
+  }
+  return last.letter;
 }
 
 std::string paragraph_text(const Paragraph& paragraph)
 {
   std::string text;
   for (const Run& run : paragraph.runs) {
-    if (run.image.has_value())
+    if (run.image.has_value()) {
+      if (ends_with_letter(text))
+        text.push_back('\x01');
       continue;
+    }
     text += run.text;
   }
   return text;
@@ -179,10 +204,10 @@ std::vector<SpellMiss> spelling_misses(const std::vector<Paragraph>& paragraphs,
         }
         // An apostrophe or an ASCII hyphen is part of the word only with a
         // letter after it, so a trailing mark stays punctuation.
-        if (more.len == 1 && word_join(more.ascii) && i + 1 < text.size()) {
-          const Code after = code_at(text, i + 1);
+        if (word_join(more) && i + more.len < text.size()) {
+          const Code after = code_at(text, i + more.len);
           if (after.letter) {
-            i += 1 + after.len;
+            i += more.len + after.len;
             continue;
           }
         }
@@ -252,12 +277,19 @@ bool replace_word(Paragraph& paragraph, size_t begin, size_t end, const std::str
     return false;
   bool inserted = false;
   size_t cursor = 0;
+  bool prev_letter = false;
   for (Run& run : paragraph.runs) {
-    if (run.image.has_value())
+    if (run.image.has_value()) {
+      if (prev_letter)
+        ++cursor;
+      prev_letter = false;
       continue;
+    }
     const size_t run_begin = cursor;
     const size_t run_end = cursor + run.text.size();
     cursor = run_end;
+    if (!run.text.empty())
+      prev_letter = ends_with_letter(run.text);
     if (end <= run_begin || begin >= run_end)
       continue;
     const size_t local_begin = begin > run_begin ? begin - run_begin : 0;

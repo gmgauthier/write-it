@@ -230,10 +230,49 @@ void picture_span()
   CHECK(under.height == 100);
 }
 
+void spacing_and_columns()
+{
+  // Exactly 14 pt (280 twips) on an 11 pt line of 15 px: 19 wanted, 4 extra.
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::Exactly, 280, 15, 1) == 4);
+  // At least 16 pt (320 twips) is 21 px, 6 above the same line.
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::AtLeast, 320, 15, 1) == 6);
+  // Exactly tighter than the font adds nothing.
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::Exactly, 200, 15, 1) == 0);
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::Single, 240, 15, 1) == 0);
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::Double, 480, 15, 1) == 15);
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::OneHalf, 360, 15, 1) == 8);
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::Multiple, 480, 15, 1) == 15);
+  CHECK(writeit::spacing_line_extra_px(writeit::LineRule::Multiple, 240, 15, 1) == 0);
+
+  CHECK(writeit::column_display_px(writeit::kMinCellTwips, 1) == 9);
+  CHECK(writeit::column_display_px(writeit::kMinCellTwips, 1) < 36);
+  CHECK(16 * writeit::column_display_px(writeit::kMinCellTwips, 1) <= 540);
+  CHECK(writeit::column_display_px(writeit::kMinCellTwips, 0.5) == 5);
+  CHECK(writeit::column_display_px(writeit::kMinCellTwips, 0.5) <
+        writeit::column_display_px(writeit::kMinCellTwips, 1));
+  CHECK(writeit::column_display_px(4000, 1) == 181);
+
+  // Hello\nWorld, caret just after W: the cell offset is the line start plus
+  // the place in that paragraph, plus the picture.
+  CHECK(writeit::picture_caret_in_cell(6, 1) == 8);
+
+  const writeit::FindResume focused = writeit::find_resume(true, 2, 4, 1, 9, 0);
+  CHECK(focused.view == 2);
+  CHECK(focused.origin == 4);
+  const writeit::FindResume remembered = writeit::find_resume(false, -1, 0, 3, 12, 7);
+  CHECK(remembered.view == 3);
+  CHECK(remembered.origin == 12);
+  const writeit::FindResume body = writeit::find_resume(false, -1, 0, -1, 0, 7);
+  CHECK(body.view == 0);
+  CHECK(body.origin == 7);
+  CHECK(writeit::is_spacing_gap(std::string("gap") + '\x1f' + "1"));
+  CHECK(!writeit::is_spacing_gap("gap"));
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs, loops included. Update it with the tests.
-constexpr int kChecks = 354;
+constexpr int kChecks = 377;
 
 int main()
 {
@@ -244,5 +283,6 @@ int main()
   transitions();
   mode_names();
   picture_span();
+  spacing_and_columns();
   return suite_test::done("view", kChecks);
 }

@@ -1,3 +1,18 @@
+write-it (2.1.1-1) unstable; urgency=medium
+
+  * Paragraph formatting, the ruler, Replace, and Find Next follow a cell, a header, a footer, or a note.
+  * Line spacing of 0 round-trips. At least and Exactly above the font grow the line.
+  * A heading that is also a list item keeps its space before and space after. Header, footer, and footnote spacing is drawn.
+  * Typing in a cell or a story is one undo step. Deleting a footnote marker removes that note.
+  * Spelling ends a word at a picture and keeps a curly apostrophe inside the word.
+  * Restart Numbering keeps counting past a table. Draft’s page count matches Page view.
+  * A style change reaches a cell, the header, the footer, and the notes. Save keeps a left alignment or a zero indent that overrides the style.
+  * A narrow table stays on the sheet. A markdown picture path that contains ) round-trips.
+  * A picture in a later cell paragraph leaves the caret there. A blank line in an unedited note is not another number.
+  * One window’s options stay when another window saves.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Fri, 16 Oct 2026 01:15:00 +0100
+
 write-it (2.1.0-1) unstable; urgency=medium
 
   * Format → Paragraph… sets space before, space after, and line spacing.

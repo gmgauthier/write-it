@@ -9,6 +9,21 @@
 
 namespace writeit {
 
+// Keys one action owns. A save writes these and leaves every other key.
+constexpr unsigned kSetWindow = 1u << 0;
+constexpr unsigned kSetZoom = 1u << 1;
+constexpr unsigned kSetStandardBar = 1u << 2;
+constexpr unsigned kSetFormatBar = 1u << 3;
+constexpr unsigned kSetStatusBar = 1u << 4;
+constexpr unsigned kSetToolbarsSide = 1u << 5;
+constexpr unsigned kSetFont = 1u << 6;
+constexpr unsigned kSetSize = 1u << 7;
+constexpr unsigned kSetRecentCount = 1u << 8;
+constexpr unsigned kSetLastDir = 1u << 9;
+constexpr unsigned kSetRecent = 1u << 10;
+constexpr unsigned kSetUnits = 1u << 11;
+constexpr unsigned kSetDictionary = 1u << 12;
+
 struct Settings {
   int window_width = 960;
   int window_height = 700;
@@ -37,6 +52,10 @@ struct Settings {
   void save() const;
   void load_from(const std::string& path);
   void save_to(const std::string& path) const;
+  // Writes these keys only. The rest of the file is read back first, so one
+  // window does not replace another window's zoom, units, or frame.
+  void save_fields(unsigned fields) const;
+  void save_fields_to(const std::string& path, unsigned fields) const;
 
   static std::string config_path();
 };

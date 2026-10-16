@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '2.1.0',
+  version: '2.1.1',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -232,6 +232,34 @@ write_it_markdown_escape_tests = executable(
 )
 test('markdown-escape', write_it_markdown_escape_tests)
 
+write_it_style_carry_tests = executable(
+  'write-it-style-carry-tests',
+  'tests/test_style_carry.cpp',
+  dependencies: [writeit_dep],
+)
+test('style-carry', write_it_style_carry_tests)
+
+write_it_note_marks_tests = executable(
+  'write-it-note-marks-tests',
+  'tests/test_note_marks.cpp',
+  dependencies: [writeit_dep],
+)
+test('note-marks', write_it_note_marks_tests)
+
+write_it_list_restart_tests = executable(
+  'write-it-list-restart-tests',
+  'tests/test_list_restart.cpp',
+  dependencies: [writeit_dep],
+)
+test('list-restart', write_it_list_restart_tests)
+
+write_it_undo_fold_tests = executable(
+  'write-it-undo-fold-tests',
+  'tests/test_undo_fold.cpp',
+  dependencies: [writeit_dep],
+)
+test('undo-fold', write_it_undo_fold_tests)
+
 write_it_rtf_final_page_tests = executable(
   'write-it-rtf-final-page-tests',
   'tests/test_rtf_final_page.cpp',
@@ -385,6 +413,12 @@ write_it_draft_heading_gap_tests = executable(
   dependencies: [writeit_dep],
 )
 test('draft-heading-gap', with_display, args: [write_it_draft_heading_gap_tests.full_path()], depends: write_it_draft_heading_gap_tests, timeout: 90, suite: 'ui')
+write_it_bug_bash_tests = executable(
+  'write-it-bug-bash-tests',
+  'tests/test_bug_bash.cpp',
+  dependencies: [writeit_dep],
+)
+test('bug-bash', with_display, args: [write_it_bug_bash_tests.full_path()], depends: write_it_bug_bash_tests, timeout: 90, suite: 'ui')
 write_it_tall_footnote_tests = executable(
   'write-it-tall-footnote-tests',
   'tests/test_tall_footnote.cpp',

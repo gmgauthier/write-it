@@ -308,7 +308,31 @@ void MainWindow::apply_next_style()
   restyle_run(typing_, old ? *old : styles.front(), *to);
 }
 
-void MainWindow::commit_document(const Document& before, const Document& after, int caret)
+bool MainWindow::story_typing_continues(Gtk::Widget* focused) const
+{
+  auto* view = dynamic_cast<Gtk::TextView*>(focused);
+  if (!view)
+    return false;
+  const gint64 now = g_get_monotonic_time();
+  return last_merge_kind_ == MergeKind::Story && last_typed_us_ != 0 &&
+         now - last_typed_us_ <= 1000000 && story_continue_view_ == view &&
+         story_begin_view_ == view && story_continue_caret_ >= 0 &&
+         story_continue_caret_ == story_begin_caret_;
+}
+
+void MainWindow::remember_story_caret(Gtk::Widget* focused)
+{
+  auto* view = dynamic_cast<Gtk::TextView*>(focused);
+  story_continue_view_ = view;
+  story_continue_caret_ = -1;
+  if (view && view->get_buffer())
+    story_continue_caret_ = view->get_buffer()->get_insert()->get_iter().get_offset();
+  story_begin_view_ = nullptr;
+  story_begin_caret_ = -1;
+}
+
+void MainWindow::commit_document(const Document& before, const Document& after, int caret,
+                                 bool typing)
 {
   // Typing in a note, the header, or the footer commits on the key. Grabbing
   // the body then would scroll to its caret and back, and the page would
@@ -324,6 +348,24 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   };
   if (cell_step_)
     on_cell_end();
+  if (typing && story_typing_continues(focused) && !(before == after)) {
+    const Document redo_doc = after;
+    if (undo_.fold_last_custom([this, redo_doc] {
+          restoring_ = true;
+          install_stories(redo_doc);
+          restoring_ = false;
+        })) {
+      install_stories(after);
+      last_merge_kind_ = MergeKind::Story;
+      last_typed_us_ = g_get_monotonic_time();
+      remember_story_caret(focused);
+      update_title();
+      update_actions();
+      sync_format_controls();
+      finish_focus();
+      return;
+    }
+  }
   if (before == after) {
     finish_focus();
     return;
@@ -433,8 +475,15 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
         });
   }
   close_step(false);
-  // A style change is its own undo step, never merged into typing.
-  last_typed_us_ = 0;
+  // A style change is its own undo step, never merged into typing. A key in
+  // a header, footer, or note joins the previous key when the caret did not move.
+  if (typing) {
+    last_merge_kind_ = MergeKind::Story;
+    last_typed_us_ = g_get_monotonic_time();
+    remember_story_caret(focused);
+  } else {
+    end_typing_run();
+  }
   update_title();
   update_actions();
   sync_format_controls();
@@ -563,6 +612,7 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
         pending_mark_set_ = true;
       }
     }
+    apply_spacing_gap(start, end, para_format(paragraph), paragraph.heading);
     tag_line_breaks(start, end);
   }
   list_lines_valid_ = false;

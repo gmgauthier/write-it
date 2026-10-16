@@ -157,6 +157,37 @@ int twips_to_px(int twips, double zoom)
   return static_cast<int>(std::lround(px));
 }
 
+int spacing_line_extra_px(LineRule rule, int value, int box_px, double zoom)
+{
+  const int box = std::max(1, box_px);
+  const double factor = zoom > 0 ? zoom : 1.0;
+  switch (rule) {
+    case LineRule::OneHalf:
+      return std::max(0, (box + 1) / 2);
+    case LineRule::Double:
+      return box;
+    case LineRule::AtLeast:
+    case LineRule::Exactly: {
+      const int want = static_cast<int>(std::lround(value * 96.0 / 1440.0 * factor));
+      return std::max(0, want - box);
+    }
+    case LineRule::Multiple:
+      if (value > 240)
+        return static_cast<int>(std::lround((value - 240) / 240.0 * box));
+      return 0;
+    case LineRule::Single:
+      break;
+  }
+  return 0;
+}
+
+int column_display_px(int twips, double zoom)
+{
+  const int stored = twips > 0 ? twips : kMinCellTwips;
+  const double factor = zoom > 0 ? zoom : 1.0;
+  return std::max(1, twips_to_px(std::max(kMinCellTwips, stored), factor));
+}
+
 PictureSpan picture_display_px(int src_w, int src_h, double zoom, int limit)
 {
   if (src_w <= 0 || src_h <= 0 || !(zoom > 0))
@@ -196,6 +227,12 @@ bool is_page_seam(const std::string& name)
 bool is_draft_gap(const std::string& name)
 {
   return name == "draft-gap";
+}
+
+bool is_spacing_gap(const std::string& name)
+{
+  const std::string prefix = std::string("gap") + '\x1f';
+  return name.compare(0, prefix.size(), prefix) == 0;
 }
 
 int page_seam_pixels(const std::string& name)

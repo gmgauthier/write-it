@@ -1,10 +1,10 @@
 # Bug backlog
 
-Reviewed 2026-10-15 against the 2.1.0 sources. The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX import are later majors. They are not listed here.
+Reviewed 2026-10-15 against the 2.1.0 sources. The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Later 2.0 work (borders, tabs, row and column selection, row and column colour, format painter) and later majors (sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX) are not listed here.
 
-Measured the same day on Plato, release build, with `tests/bench_key.cpp`. On 2.1.0, `plain1000` was 55.6 ms and `list1000` was 65.8 ms. Both gate lines are under 100 ms. The 50 ms specification is still not met. The standing item in Open owns the periodic rerun. Closed records the defects shipped through 1.0.23.
+Measured on Plato, release build, with `tests/bench_key.cpp`. On 2.1.0, `plain1000` was 55.6 ms and `list1000` was 65.8 ms. On 2.1.1, 2026-10-16, `plain1000` was 58.7 ms and `list1000` was 68.8 ms. Both gate lines are under 100 ms. The 50 ms specification is still not met. The standing item in Open owns the periodic rerun. The other product items from this review were fixed in 2.1.1. Closed records the defects shipped through 2.1.1.
 
-Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file.
+Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file. Columns do not snake the text. The ruler draws a tick in each gap, and RTF round-trips `\cols`. Per-section columns are 3.0. Print draws the page widget. Exactly, and a multiple below one line, stay stored and round-trip, and the screen keeps the font’s line. That limit is specified. A cell paragraph tag draws indents, alignment, and spacing, and no list. Header, footer, and note pictures stay in the file until that area is typed in. Editing replaces the story with plain paragraphs. Highlight is the toolbar control. The Options size list is whole points. Half points belong to the format size box. `paragraph_style()` uses the first style when the name and Normal are both missing, and `style_sheet()` substitutes the built-in sheet when the document’s styles are empty. Spelling does walk the header, the footer, and the notes. The draft page-break gap is 18 px at every zoom, and the page count subtracts it. Cell line spacing is measured as Sans on the body context. `editor.cpp` is long, and `MainWindow` owns the document, the view, the dialogs, and pagination. Past 100% zoom, pictures and footnote type stay at their 100% size.
 
 ## Open
 
@@ -14,7 +14,7 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Confidence: medium
 - Where: `src/editor.cpp` `MainWindow::on_user_end`; `DEVELOPMENT.md` M2 typing-speed gate
 - Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
-- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`. A 1.0.8 release build met 50 ms; those numbers are in `tests/README.md`. A 1.0.16 release build on 2026-10-13 did not: `plain1000` 128.7 ms and `list1000` 145.1 ms. A 1.0.22 release build on 2026-10-14 did not: `plain1000` 154.6 ms and `list1000` 178.4 ms. A 1.0.23 release build on 2026-10-15 did not: `plain1000` 51.4 ms and `list1000` 60.5 ms. A 2.0.0 release build the same day did not: `plain1000` 55.7 ms and `list1000` 66.6 ms. A 2.1.0 release build the same day did not: `plain1000` 55.6 ms and `list1000` 65.8 ms. The standing item below owns the periodic rerun.
+- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`. A 1.0.8 release build met 50 ms; those numbers are in `tests/README.md`. A 1.0.16 release build on 2026-10-13 did not: `plain1000` 128.7 ms and `list1000` 145.1 ms. A 1.0.22 release build on 2026-10-14 did not: `plain1000` 154.6 ms and `list1000` 178.4 ms. A 1.0.23 release build on 2026-10-15 did not: `plain1000` 51.4 ms and `list1000` 60.5 ms. A 2.0.0 release build the same day did not: `plain1000` 55.7 ms and `list1000` 66.6 ms. A 2.1.0 release build the same day did not: `plain1000` 55.6 ms and `list1000` 65.8 ms. A 2.1.1 release build on 2026-10-16 did not: `plain1000` 58.7 ms and `list1000` 68.8 ms. The standing item below owns the periodic rerun.
 
 ### Rerun the typing-speed bench, and optimize above 100 ms
 
@@ -22,7 +22,7 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Confidence: high
 - Where: `tests/bench_key.cpp` (`write-it-bench-key`). How to build and run it is `tests/README.md`.
 - Trigger: Periodically, on a release build, run `xvfb-run -a ./build-release/write-it-bench-key`. Read the `plain1000` and `list1000` gate lines. Each line is the median of three runs of 50 keys at the end of paragraph 500, process CPU, refresh included. This item stays open. A run at or under 100 ms is recorded here and does not close it.
-- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-15, release build of 2.1.0 on Plato: `plain1000` 55.6 ms, `list1000` 65.8 ms. The handlers were 25.4 ms and 28.3 ms. The 2.0.0 pair the same day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
+- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-16, release build of 2.1.1 on Plato: `plain1000` 58.7 ms, `list1000` 68.8 ms. The handlers were 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
 
 ## Test defects
 
@@ -45,6 +45,195 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Paragraph commands and the ruler follow the body caret while a cell or a story is edited
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::apply_paragraphs`, `MainWindow::focused_para`; `src/page_ui.cpp` `MainWindow::apply_cell_paragraphs`; `src/main_window.cpp` `MainWindow::on_ruler_draw`.
+- Trigger: Click in a table cell that is not the first paragraph, or put the caret in the header, the footer, or a footnote. Format → Paragraph…, or Center, or Bullets, and look at the ruler.
+- Outcome: The cell or the story takes the change. The ruler, the alignment buttons, and the list buttons show that paragraph. OK and Cancel return the keyboard there. The body paragraph at the body caret stays as it was. Bold, the font, colour, highlight, and the style combo still change the cell.
+
+### Replace in a table cell drops the match’s character format
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::replace_once`, the branch for a view other than the body.
+- Trigger: Find a formatted word inside a table cell and Replace it.
+- Outcome: The new text keeps the match’s font, size, colour, strike, and script. Replace in the body still does. Replace in a header, footer, or note stays on the plain-story path.
+
+### Line spacing of 0 comes back as single
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `apply_line_spacing`; `src/rtf.cpp` `write_spacing`.
+- Trigger: Format → Paragraph…, set At least, Exactly, or Multiple to 0, save, and reopen.
+- Outcome: At least 0, Exactly 0, and Multiple 0 come back as those rules. Exactly 0 is written `\sl-0`, At least 0 is `\sl0\slmult0`, and Multiple 0 writes `\slmult1` before `\sl0`. Bare `\sl0` and `\sl0\slmult1` stay Single. A non-zero Single, 1.5, or Double stays that rule. A shorter-than-font Exactly or Multiple is stored, and the screen keeps the font’s line.
+
+### Restart Numbering writes the list onto the wrong paragraph when a table sits in it
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `list_retag_offsets`; `src/editor.cpp` `MainWindow::renumber_list`.
+- Trigger: Two items of the same numbered list, with a table of more than one cell between them. Restart Numbering on the first item, or Continue Previous List.
+- Outcome: The first item and the item after the table take the new list. The cells stay off the list. A later paragraph is left alone. A table is one anchor, so the map uses `chars_before`. A list still counts past the paragraphs between its items.
+
+### A heading that is also a list item hides its space before and space after
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::apply_spacing_gap`, `MainWindow::raise_headings`.
+- Trigger: A heading paragraph that is also bulleted or numbered, with space before or space after set.
+- Outcome: The paragraph’s space before and space after are drawn, added to the heading’s own gaps, and the page count includes them. The list’s indent still wins over the paragraph margin. A list item that is not a heading still shows its spacing.
+
+### Header, footer, and footnote spacing is not drawn
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/page_ui.cpp` `MainWindow::tag_story_spacing`, `MainWindow::tag_note_spacing`, `MainWindow::refresh_stories`.
+- Trigger: Space before, space after, or line spacing on a paragraph in the header, the footer, or a footnote.
+- Outcome: That spacing, and a heading’s gaps, are drawn. The room a footnote takes on the sheet includes it. The story stays plain text until it is typed in, so a picture there stays in the file until then. Gap tags draw the spacing and leave the stored story as it was.
+
+### Applying a style in a cell drops formatting the file stored
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::apply_cell_style`; `src/document.cpp` `restyle_paragraph_kept`.
+- Trigger: Open an RTF cell whose run or spacing differs from its style. With the caret in that cell, apply another style, then Normal.
+- Outcome: A value the file stored that differs from the paragraph’s style is kept. A later style moves only what is not that direct formatting. A bold bit set from the toolbar in the cell is still kept.
+
+### Spelling treats the letters on either side of a picture as one word
+
+- Fixed in 2.1.1.
+- Severity: data-loss
+- Confidence: high
+- Where: `src/spelling.cpp` `paragraph_text`, `replace_word`.
+- Trigger: A paragraph has letters, then a picture, then more letters. Spelling… and Change that hit.
+- Outcome: The two sides are two words when the run before the picture ends on a letter. Change replaces one side and leaves the letters on the other. The picture stays. A picture that follows a space still sits in the following word.
+
+### Typing in a cell, a header, a footer, or a note is one undo step per key
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::on_cell_end`; `src/styles.cpp` `MainWindow::commit_document`; `src/undo.cpp` `UndoHistory::fold_last_custom`.
+- Trigger: Type several letters quickly in a table cell, or in the header, the footer, or a note. Press Ctrl+Z once.
+- Outcome: The run comes back. Typing in a cell, a header, a footer, or a note is one step until a pause of more than a second, a moved caret, an Undo or Redo, or a Save, as it is in the body.
+
+### One window’s save writes the other window’s options over the ini
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/settings.cpp` `Settings::save_fields`.
+- Trigger: Two documents are open. In one, change the measurement units, the dictionary, the default font or size, the recent-file count, the zoom, or a toolbar. In the other, Save, change zoom, toggle a toolbar, or close that window last.
+- Outcome: The second window writes the options it changed and reloads the rest from the file. The first window’s units, dictionary, font, size, recent-file count, zoom, toolbars, and frame stay in the ini.
+
+### A markdown image path that contains ) does not round-trip
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `escape_markdown_extra`, `parse_inlines`.
+- Trigger: Export a picture whose path contains `)`, such as `Screenshot (1).png`, and open that markdown.
+- Outcome: The path round-trips, and so does an alt that contains `](`. A path that exists is loaded. A missing path is still kept as `![alt](path)`.
+
+### Editing a style leaves the header, the footer, and the notes as they were
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `carry_style`.
+- Trigger: A header, footer, or note paragraph uses a named style. Format → Style… changes that style’s font, size, bold, indents, or spacing, then Save.
+- Outcome: The header, the footer, and the notes in that style follow, and so do the styles based on it. Save writes the new values. Body paragraphs, cells included, still follow.
+
+### A curly apostrophe splits a spelling word
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/spelling.cpp` `word_join`.
+- Trigger: Spell a word that uses U+2019, as in `don’t`.
+- Outcome: The curly apostrophe stays inside the word when a letter follows, as an ASCII apostrophe does. A hyphen still joins a word. An em dash still ends it.
+
+### Draft’s page count ignores ordinary overflow
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::page_content_y`.
+- Trigger: Draft view, with no manual page break and no footnote. Enough ordinary paragraphs that Page view has started a second sheet.
+- Outcome: Draft and Page view report the same page. Ordinary overflow uses the same sheet break as Page view. A short document stays on page 1 in both. A manual page break or a footnote still agrees.
+
+### Find Next repeats a match outside the body
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/editor.cpp` `MainWindow::find_next`; `src/view.hpp` `find_resume`.
+- Trigger: Find, then Next or Enter in the Find field. The match is in a cell, the header, the footer, or a footnote.
+- Outcome: The next Next or Enter selects the following match. The pasteboard scrolls so that match is in view. With the Find dialog focused, the search continues from the last hit.
+
+### At least and Exactly above the font stay on the font’s line
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/view.cpp` `spacing_line_extra_px`; `src/editor.cpp` `MainWindow::apply_spacing_pixels`.
+- Trigger: Format → Paragraph…, Line spacing At least or Exactly, with a point size larger than the paragraph’s font. 11 pt text and Exactly 14 pt or 16 pt is enough.
+- Outcome: The line grows by the extra over the font’s line, and the page count follows. A value shorter than the font adds nothing, and the screen keeps the font’s line. Single, 1.5, double, and multiple still grow from that line.
+
+### Deleting a footnote marker leaves the note on the page
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `drop_unmarked_notes`; `src/editor.cpp` `MainWindow::compact_body_notes`, `MainWindow::compact_cell_notes`.
+- Trigger: Backspace or Delete of the raised footnote marker in the body or a cell.
+- Outcome: The last marker for a note removes that note from the page and from what Save writes. A marker that remains is renumbered. Undo puts the note and its marker back. A note still sits at the foot of the sheet that holds its marker, and a wrapped note keeps its number.
+
+### A picture in a later paragraph of a cell puts the caret in an earlier one
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::insert_picture`; `src/view.hpp` `picture_caret_in_cell`.
+- Trigger: Enter in a cell, so the cell has a second paragraph. Put the caret in that later paragraph and Insert → Picture….
+- Outcome: The picture is stored in the later paragraph, and the caret comes back just after it there. The next character edits that paragraph. The body path still returns the caret just after the picture.
+
+### A blank paragraph inside an unedited note draws an extra number
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/document.cpp` `story_plain_text`, `paragraph_plain`; `src/page_ui.cpp` `story_text`.
+- Trigger: Open a document whose footnote has a blank paragraph, or a paragraph that is only a picture, between two text paragraphs. Leave the notes area unedited.
+- Outcome: That blank paragraph, or that picture-only paragraph, is not drawn as another note. A later note keeps its number. The file is not rewritten until the notes text changes. A blank line typed in the notes area still separates notes.
+
+### A narrow table column is drawn at 36 px
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/view.cpp` `column_display_px`; `src/page_ui.cpp` `CellFrame::set_column_px`, `TableSheet::relayout`.
+- Trigger: Insert a 16-column table on the default page, or any column at the 200 twip minimum. Zoom to 50% or 75% shows the same floor.
+- Outcome: A column is drawn from its stored width, and no narrower than 200 twips. Sixteen minimum columns stay inside the sheet. Zooming out shrinks a column that is under 36 px. Table Width still shows the real twips.
+
+### Save drops a left alignment or a zero indent that overrides the style
+
+- Fixed in 2.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/rtf.cpp` `write_plain`, and the cell writer beside it.
+- Trigger: A cell, header, footer, or footnote paragraph uses a style that is not left-aligned or not zero-indented. Block Text is 1 inch on each side. Set that paragraph to left, or to a zero indent. Save, then open the file again.
+- Outcome: The left alignment, the zero indent, and a cleared heading come back. The writer emits `\ql`, `\li0`, `\ri0`, and the outline level after the style word, as the body writer does. Spacing on these paths is still written.
 
 ### A selection on the first line of a later page runs up the previous sheet
 

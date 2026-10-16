@@ -157,16 +157,7 @@ bool story_present(const std::vector<Paragraph>& story)
 
 std::string story_text(const std::vector<Paragraph>& story)
 {
-  std::string out;
-  for (size_t i = 0; i < story.size(); ++i) {
-    if (i)
-      out.push_back('\n');
-    for (const Run& run : story[i].runs) {
-      if (!run.image)
-        out += run.text;
-    }
-  }
-  return out;
+  return story_plain_text(story);
 }
 
 std::string notes_text(const std::vector<std::vector<Paragraph>>& notes)
@@ -477,7 +468,7 @@ class CellFrame : public Gtk::Frame {
 
   void set_column_px(int px)
   {
-    width_ = std::max(36, px);
+    width_ = std::max(1, px);
     queue_resize();
   }
 
@@ -498,7 +489,7 @@ class CellFrame : public Gtk::Frame {
   }
 
  private:
-  int width_ = 36;
+  int width_ = 1;
 };
 
 int px_to_twips(int px, double zoom)
@@ -766,7 +757,7 @@ class TableSheet : public Gtk::Grid {
       int twips = kMinCellTwips;
       if (column < static_cast<int>(widths_.size()) && widths_[static_cast<size_t>(column)] > 0)
         twips = widths_[static_cast<size_t>(column)];
-      const int px = std::max(36, twips_to_px(twips, zoom));
+      const int px = column_display_px(twips, zoom);
       for (int row = 0; row < rows_; ++row) {
         frames_[static_cast<size_t>(row)][static_cast<size_t>(column)]->set_column_px(px);
         Gtk::TextView* view = views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
@@ -1386,6 +1377,8 @@ void MainWindow::note_cell_focus(TableSheet& sheet, int row, int column)
   if (cell_typing_on_ && (!cell_edit_.on || cell_edit_.table != sheet.table_id() ||
                           cell_edit_.row != row || cell_edit_.column != column))
     cell_typing_on_ = false;
+  story_target_ = 0;
+  story_focus_view_ = nullptr;
   cell_edit_.on = true;
   cell_edit_.table = sheet.table_id();
   cell_edit_.row = row;
@@ -1691,6 +1684,90 @@ bool MainWindow::cell_place(TableSheet& sheet, int& row, int& column, int& caret
   caret = cell_edit_.caret;
   bound = cell_edit_.bound;
   return sheet.view_at(row, column) != nullptr;
+}
+
+const Paragraph* MainWindow::cell_paragraph_at(int row, int column, int at) const
+{
+  TableSheet* sheet = editing_sheet();
+  if (!sheet)
+    return nullptr;
+  return sheet->form_at(row, column, sheet->line_at(row, column, at));
+}
+
+bool MainWindow::apply_cell_paragraphs(const std::function<void(std::vector<Paragraph>&)>& edit)
+{
+  TableSheet* sheet = editing_sheet();
+  Gtk::TextView* view = editing_cell_view();
+  if (!sheet || !view || !view->get_buffer())
+    return false;
+  int row = 0;
+  int column = 0;
+  int caret = 0;
+  int bound = 0;
+  if (!cell_place(*sheet, row, column, caret, bound))
+    return false;
+  auto cell_buffer = view->get_buffer();
+  int from = std::min(caret, bound);
+  int to = std::max(caret, bound);
+  Gtk::TextIter sel_from;
+  Gtk::TextIter sel_to;
+  if (cell_buffer->get_selection_bounds(sel_from, sel_to)) {
+    from = sel_from.get_offset();
+    to = sel_to.get_offset();
+  }
+  const int first_line = sheet->line_at(row, column, from);
+  const int last_line = sheet->line_at(row, column, to > from ? to - 1 : to);
+  const Document before = capture();
+  Document after = before;
+  std::vector<Paragraph> edited;
+  std::vector<size_t> indexes;
+  for (int line = first_line; line <= last_line; ++line) {
+    const size_t index = cell_paragraph_index(*sheet, row, column, line);
+    if (index >= after.paragraphs.size())
+      continue;
+    Paragraph& paragraph = after.paragraphs[index];
+    if (paragraph.cell.table != sheet->table_id() || paragraph.cell.row != row ||
+        paragraph.cell.column != column)
+      continue;
+    edited.push_back(paragraph);
+    indexes.push_back(index);
+  }
+  if (edited.empty())
+    return true;
+  edit(edited);
+  for (size_t i = 0; i < indexes.size(); ++i)
+    after.paragraphs[indexes[i]] = edited[i];
+  if (after.paragraphs == before.paragraphs)
+    return true;
+  const CellEdit saved = cell_edit_;
+  hold_view();
+  commit_document(before, after);
+  restore_cell_edit(saved);
+  release_view();
+  return true;
+}
+
+void MainWindow::each_cell_buffer(
+    const std::function<void(const Glib::RefPtr<Gtk::TextBuffer>&)>& visit)
+{
+  if (!buffer_ || !visit)
+    return;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (!sheet)
+      continue;
+    for (int row = 0; row < kMaxTableRows; ++row) {
+      if (!sheet->view_at(row, 0))
+        break;
+      for (int column = 0; column < kMaxTableColumns; ++column) {
+        Gtk::TextView* view = sheet->view_at(row, column);
+        if (!view)
+          break;
+        if (view->get_buffer())
+          visit(view->get_buffer());
+      }
+    }
+  }
 }
 
 size_t MainWindow::cell_paragraph_index(const TableSheet& sheet, int row, int column,
@@ -2051,7 +2128,7 @@ void MainWindow::apply_cell_style(TableSheet& sheet, const std::string& name)
       continue;
     if (paragraph.cell.row != row || paragraph.cell.column != column)
       continue;
-    take_paragraph_style(paragraph, *to_style);
+    restyle_paragraph_kept(paragraph, styles, *to_style);
     any = true;
   }
   if (!any || after.paragraphs == before.paragraphs) {
@@ -2206,6 +2283,18 @@ void MainWindow::restore_edit_focus()
       sheet->focus_slot(cell_edit_.row, cell_edit_.column);
       return;
     }
+  }
+  if (story_target_ == 1) {
+    header_view_.grab_focus();
+    return;
+  }
+  if (story_target_ == 2) {
+    footer_view_.grab_focus();
+    return;
+  }
+  if (story_target_ == 3) {
+    notes_view_.grab_focus();
+    return;
   }
   text_.grab_focus();
 }
@@ -2384,6 +2473,109 @@ void MainWindow::align_note_numbers()
   }
 }
 
+void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_spacing_gap(tag->property_name().get_value()))
+      old.push_back(tag);
+  });
+  if (!old.empty())
+    for (const auto& tag : old)
+      buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  int offset = 0;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const Paragraph& paragraph = paragraphs[i];
+    const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
+    int heading = paragraph.heading;
+    std::string font = "Sans";
+    if (const Style* style = find_style(styles_, paragraph.style)) {
+      if (style->heading >= 1 && style->heading <= 6)
+        heading = std::max(heading, style->heading);
+      if (!style->format.font.empty())
+        font = style->format.font;
+    }
+    const bool want = !(paragraph.spacing == Spacing{}) || (heading >= 1 && heading <= 6);
+    if (want && len > 0 && offset + len <= buffer->get_char_count()) {
+      const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
+                               std::to_string(paragraph.spacing.before) + '\x1f' +
+                               std::to_string(paragraph.spacing.after) + '\x1f' +
+                               std::to_string(static_cast<int>(paragraph.spacing.rule)) + '\x1f' +
+                               std::to_string(paragraph.spacing.value);
+      auto table = buffer->get_tag_table();
+      auto tag = table->lookup(name);
+      if (!tag) {
+        tag = Gtk::TextTag::create(name);
+        const int basis = paragraph.basis >= 2 ? paragraph.basis : 22;
+        apply_spacing_pixels(tag, paragraph.spacing, basis, font, heading, false);
+        table->add(tag);
+      }
+      buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                        buffer->get_iter_at_offset(offset + len));
+    }
+    offset += len;
+    if (i + 1 < paragraphs.size())
+      offset += 1;
+  }
+}
+
+void MainWindow::tag_note_spacing(Gtk::TextView& view,
+                                  const std::vector<std::vector<Paragraph>>& notes)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_spacing_gap(tag->property_name().get_value()))
+      old.push_back(tag);
+  });
+  for (const auto& tag : old)
+    buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  int offset = 0;
+  for (size_t n = 0; n < notes.size(); ++n) {
+    if (n)
+      offset += 2;
+    const std::vector<Paragraph>& paragraphs = notes[n];
+    for (size_t i = 0; i < paragraphs.size(); ++i) {
+      const Paragraph& paragraph = paragraphs[i];
+      const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
+      int heading = paragraph.heading;
+      std::string font = "Sans";
+      if (const Style* style = find_style(styles_, paragraph.style)) {
+        if (style->heading >= 1 && style->heading <= 6)
+          heading = std::max(heading, style->heading);
+        if (!style->format.font.empty())
+          font = style->format.font;
+      }
+      const bool want = !(paragraph.spacing == Spacing{}) || (heading >= 1 && heading <= 6);
+      if (want && len > 0 && offset + len <= buffer->get_char_count()) {
+        const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
+                                 std::to_string(paragraph.spacing.before) + '\x1f' +
+                                 std::to_string(paragraph.spacing.after) + '\x1f' +
+                                 std::to_string(static_cast<int>(paragraph.spacing.rule)) + '\x1f' +
+                                 std::to_string(paragraph.spacing.value);
+        auto table = buffer->get_tag_table();
+        auto tag = table->lookup(name);
+        if (!tag) {
+          tag = Gtk::TextTag::create(name);
+          const int basis = paragraph.basis >= 2 ? paragraph.basis : 22;
+          apply_spacing_pixels(tag, paragraph.spacing, basis, font, heading, false);
+          table->add(tag);
+        }
+        buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                          buffer->get_iter_at_offset(offset + len));
+      }
+      offset += len;
+      if (i + 1 < paragraphs.size())
+        offset += 1;
+    }
+  }
+}
+
 void MainWindow::refresh_stories()
 {
   const bool has = story_present(header_) || story_present(footer_);
@@ -2408,7 +2600,9 @@ void MainWindow::refresh_stories()
     loading_ = was;
   };
   fill(header_view_, story_text(header_), header_shown_);
+  tag_story_spacing(header_view_, header_);
   fill(footer_view_, story_text(footer_), footer_shown_);
+  tag_story_spacing(footer_view_, footer_);
   // A rebuild can arrive with groups from the document that was just
   // replaced. Those indexes are not this one's notes. Show the whole column
   // until the next seam pass splits it again.
@@ -2434,11 +2628,18 @@ void MainWindow::refresh_stories()
   }
   if (note_groups_.size() <= 1) {
     fill(notes_view_, notes_text(notes_), notes_shown_);
+    tag_note_spacing(notes_view_, notes_);
   } else {
     for (size_t i = 0; i < note_groups_.size(); ++i) {
       Gtk::TextView& view = i == 0 ? notes_view_ : ensure_note_band(i - 1).view;
       std::string extra;
       fill(view, note_group_text(note_groups_[i]), i == 0 ? notes_shown_ : extra);
+      std::vector<std::vector<Paragraph>> slice;
+      for (int index : note_groups_[i].indexes) {
+        if (index >= 0 && index < static_cast<int>(notes_.size()))
+          slice.push_back(notes_[static_cast<size_t>(index)]);
+      }
+      tag_note_spacing(view, slice);
     }
   }
   if (reveal_note_ > static_cast<int>(notes_.size()))
@@ -2771,9 +2972,12 @@ void MainWindow::wire_note_band(NoteBand& band)
   page_overlay_.add_overlay(band.box);
   band.size_conn =
       band.view.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
-  band.focus_in_conn = band.view.signal_focus_in_event().connect([this](GdkEventFocus*) {
+  band.focus_in_conn = band.view.signal_focus_in_event().connect([this, &band](GdkEventFocus*) {
+    story_target_ = 3;
+    story_focus_view_ = &band.view;
     note_editing_ = true;
     clear_cell_edit_on_story(false, false, true);
+    sync_format_controls();
     return false;
   });
   band.focus_out_conn = band.view.signal_focus_out_event().connect([this, &band](GdkEventFocus*) {
@@ -2785,6 +2989,12 @@ void MainWindow::wire_note_band(NoteBand& band)
   });
   band.end_conn = band.view.get_buffer()->signal_end_user_action().connect(
       [this, &band] { on_note_view_end(band.view); });
+  band.view.get_buffer()->signal_begin_user_action().connect([this, &band] {
+    if (loading_ || restoring_)
+      return;
+    story_begin_view_ = &band.view;
+    story_begin_caret_ = band.view.get_buffer()->get_insert()->get_iter().get_offset();
+  });
   band.key_conn =
       band.view.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   band.wired = true;
@@ -2975,7 +3185,7 @@ void MainWindow::on_story_end(std::vector<Paragraph>* story)
     shown = "";
     loading_ = was;
   }
-  commit_document(before, after);
+  commit_document(before, after, -1, true);
   if (focused == &header_view_ || focused == &footer_view_ || is_note_view(focused))
     focused->grab_focus();
 }
@@ -3120,7 +3330,7 @@ void MainWindow::on_note_view_end(Gtk::TextView& view)
   }
   retarget_note_markers(after, before.notes);
   Gtk::Widget* focused = get_focus();
-  commit_document(before, after);
+  commit_document(before, after, -1, true);
   if (focused == &view)
     view.grab_focus();
 }
@@ -4088,8 +4298,8 @@ void MainWindow::insert_picture(Image image)
       saved.table = sheet->table_id();
       saved.row = row;
       saved.column = column;
-      saved.caret = into + 1;
-      saved.bound = into + 1;
+      saved.caret = picture_caret_in_cell(line_start, into);
+      saved.bound = saved.caret;
       // The body insert is often still the first line. Park it on this table
       // so the rebuild does not jump the pasteboard there.
       const int count = buffer_->get_char_count();

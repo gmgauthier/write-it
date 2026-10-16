@@ -3,7 +3,7 @@
 #include "check.hpp"
 #include "document.hpp"
 
-constexpr int kChecks = 16;
+constexpr int kChecks = 20;
 
 writeit::Document paragraph(const char* text)
 {
@@ -47,6 +47,25 @@ int main()
 
   const writeit::Document bold = writeit::markdown_import("A **bold** word", "Sans", 11);
   CHECK(bold.paragraphs[0].runs[1].text == "bold" && bold.paragraphs[0].runs[1].bold);
+
+  writeit::Document image = writeit::blank_document("Sans", 11);
+  writeit::Run picture;
+  picture.font = "Sans";
+  picture.size = 11;
+  writeit::Image shot;
+  shot.alt = "a](b";
+  shot.path = "shot (1).png";
+  picture.image = shot;
+  image.paragraphs[0].runs = {picture};
+  const std::string markdown = writeit::markdown_export(image);
+  CHECK(markdown.find("![a\\](b](shot (1\\).png)") != std::string::npos);
+  const writeit::Document image_back = writeit::markdown_import(markdown, "Sans", 11);
+  CHECK(!image_back.paragraphs.empty() && !image_back.paragraphs[0].runs.empty() &&
+        image_back.paragraphs[0].runs[0].image.has_value());
+  CHECK(image_back.paragraphs[0].runs[0].image &&
+        image_back.paragraphs[0].runs[0].image->alt == "a](b");
+  CHECK(image_back.paragraphs[0].runs[0].image &&
+        image_back.paragraphs[0].runs[0].image->path == "shot (1).png");
 
   return suite_test::done("markdown-escape", kChecks);
 }

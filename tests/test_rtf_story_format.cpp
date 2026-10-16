@@ -167,10 +167,44 @@ void story_start()
   CHECK(numbers.size() == 1 && numbers[0] == 4);
 }
 
+void header_overrides()
+{
+  writeit::Document doc = writeit::blank_document("Sans", 11);
+  for (writeit::Style& style : doc.styles)
+    if (style.name == "Block Text")
+      style.align = writeit::Align::Center;
+  writeit::Paragraph header;
+  header.style = "Block Text";
+  header.align = writeit::Align::Left;
+  header.runs.push_back(text_run("Head"));
+  doc.header = {header};
+  const std::string head = group_of(writeit::rtf_export(doc), "header");
+  CHECK(head.find("\\li0") != std::string::npos);
+  CHECK(head.find("\\ri0") != std::string::npos);
+  CHECK(head.find("\\ql") != std::string::npos);
+  writeit::Document back;
+  CHECK(writeit::rtf_import(writeit::rtf_export(doc), back));
+  CHECK(back.header.size() == 1);
+  CHECK(back.header[0].align == writeit::Align::Left);
+  CHECK(back.header[0].indents.left == 0 && back.header[0].indents.right == 0);
+
+  writeit::Paragraph titled;
+  titled.style = "Heading 1";
+  titled.heading = 0;
+  titled.runs.push_back(text_run("Title"));
+  doc.header = {titled};
+  const std::string titled_head = group_of(writeit::rtf_export(doc), "header");
+  CHECK(titled_head.find("\\outlinelevel9") != std::string::npos);
+  writeit::Document titled_back;
+  CHECK(writeit::rtf_import(writeit::rtf_export(doc), titled_back));
+  CHECK(titled_back.header.size() == 1 && titled_back.header[0].heading == 0);
+}
+
 }  // namespace
 
-// plain 6, header style 7, footer bullet 6, separate numbers 8, story start 7.
-constexpr int kChecks = 34;
+// plain 6, header style 7, footer bullet 6, separate numbers 8, story start 7,
+// header overrides 10.
+constexpr int kChecks = 44;
 
 int main()
 {
@@ -179,5 +213,6 @@ int main()
   footer_bullet();
   separate_numbers();
   story_start();
+  header_overrides();
   return suite_test::done("rtf-story-format", kChecks);
 }
