@@ -2540,6 +2540,49 @@ void MainWindow::align_note_numbers()
   }
 }
 
+namespace {
+
+bool is_shade_tag(const std::string& name)
+{
+  const std::string prefix = std::string("shade") + '\x1f';
+  return name.compare(0, prefix.size(), prefix) == 0;
+}
+
+void clear_shade_tags(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
+{
+  if (!buffer)
+    return;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_shade_tag(tag->property_name().get_value()))
+      old.push_back(tag);
+  });
+  for (const auto& tag : old)
+    buffer->remove_tag(tag, buffer->begin(), buffer->end());
+}
+
+void apply_shade_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int offset, int len,
+                     const Shading& shading)
+{
+  Rgb rgb;
+  if (!buffer || len <= 0 || offset < 0 || offset + len > buffer->get_char_count())
+    return;
+  if (!shading_color(shading, rgb))
+    return;
+  const std::string name = std::string("shade") + '\x1f' + rgb_hex(rgb);
+  auto table = buffer->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    tag->property_paragraph_background() = rgb_hex(rgb);
+    table->add(tag);
+  }
+  buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                    buffer->get_iter_at_offset(offset + len));
+}
+
+}  // namespace
+
 void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs)
 {
   auto buffer = view.get_buffer();
@@ -2553,6 +2596,7 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
   if (!old.empty())
     for (const auto& tag : old)
       buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  clear_shade_tags(buffer);
   int offset = 0;
   for (size_t i = 0; i < paragraphs.size(); ++i) {
     const Paragraph& paragraph = paragraphs[i];
@@ -2566,27 +2610,31 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
         font = style->format.font;
     }
     const bool want = !(paragraph.spacing == Spacing{}) || (heading >= 1 && heading <= 6);
-    if (want && len > 0 && offset + len <= buffer->get_char_count()) {
-      const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
-                               std::to_string(paragraph.spacing.before) + '\x1f' +
-                               std::to_string(paragraph.spacing.after) + '\x1f' +
-                               std::to_string(static_cast<int>(paragraph.spacing.rule)) + '\x1f' +
-                               std::to_string(paragraph.spacing.value);
-      auto table = buffer->get_tag_table();
-      auto tag = table->lookup(name);
-      if (!tag) {
-        tag = Gtk::TextTag::create(name);
-        const int basis = paragraph.basis >= 2 ? paragraph.basis : 22;
-        apply_spacing_pixels(tag, paragraph.spacing, basis, font, heading, false);
-        table->add(tag);
+    if (len > 0 && offset + len <= buffer->get_char_count()) {
+      if (want) {
+        const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
+                                 std::to_string(paragraph.spacing.before) + '\x1f' +
+                                 std::to_string(paragraph.spacing.after) + '\x1f' +
+                                 std::to_string(static_cast<int>(paragraph.spacing.rule)) + '\x1f' +
+                                 std::to_string(paragraph.spacing.value);
+        auto table = buffer->get_tag_table();
+        auto tag = table->lookup(name);
+        if (!tag) {
+          tag = Gtk::TextTag::create(name);
+          const int basis = paragraph.basis >= 2 ? paragraph.basis : 22;
+          apply_spacing_pixels(tag, paragraph.spacing, basis, font, heading, false);
+          table->add(tag);
+        }
+        buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                          buffer->get_iter_at_offset(offset + len));
       }
-      buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
-                        buffer->get_iter_at_offset(offset + len));
+      apply_shade_tag(buffer, offset, len, paragraph.shading);
     }
     offset += len;
     if (i + 1 < paragraphs.size())
       offset += 1;
   }
+  view.queue_draw();
 }
 
 void MainWindow::tag_note_spacing(Gtk::TextView& view,
@@ -2602,6 +2650,7 @@ void MainWindow::tag_note_spacing(Gtk::TextView& view,
   });
   for (const auto& tag : old)
     buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  clear_shade_tags(buffer);
   int offset = 0;
   for (size_t n = 0; n < notes.size(); ++n) {
     if (n)
@@ -2619,27 +2668,65 @@ void MainWindow::tag_note_spacing(Gtk::TextView& view,
           font = style->format.font;
       }
       const bool want = !(paragraph.spacing == Spacing{}) || (heading >= 1 && heading <= 6);
-      if (want && len > 0 && offset + len <= buffer->get_char_count()) {
-        const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
-                                 std::to_string(paragraph.spacing.before) + '\x1f' +
-                                 std::to_string(paragraph.spacing.after) + '\x1f' +
-                                 std::to_string(static_cast<int>(paragraph.spacing.rule)) + '\x1f' +
-                                 std::to_string(paragraph.spacing.value);
-        auto table = buffer->get_tag_table();
-        auto tag = table->lookup(name);
-        if (!tag) {
-          tag = Gtk::TextTag::create(name);
-          const int basis = paragraph.basis >= 2 ? paragraph.basis : 22;
-          apply_spacing_pixels(tag, paragraph.spacing, basis, font, heading, false);
-          table->add(tag);
+      if (len > 0 && offset + len <= buffer->get_char_count()) {
+        if (want) {
+          const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
+                                   std::to_string(paragraph.spacing.before) + '\x1f' +
+                                   std::to_string(paragraph.spacing.after) + '\x1f' +
+                                   std::to_string(static_cast<int>(paragraph.spacing.rule)) +
+                                   '\x1f' + std::to_string(paragraph.spacing.value);
+          auto table = buffer->get_tag_table();
+          auto tag = table->lookup(name);
+          if (!tag) {
+            tag = Gtk::TextTag::create(name);
+            const int basis = paragraph.basis >= 2 ? paragraph.basis : 22;
+            apply_spacing_pixels(tag, paragraph.spacing, basis, font, heading, false);
+            table->add(tag);
+          }
+          buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                            buffer->get_iter_at_offset(offset + len));
         }
-        buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
-                          buffer->get_iter_at_offset(offset + len));
+        apply_shade_tag(buffer, offset, len, paragraph.shading);
       }
       offset += len;
       if (i + 1 < paragraphs.size())
         offset += 1;
     }
+  }
+  view.queue_draw();
+}
+
+void MainWindow::on_story_draw(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  if (&view == &header_view_) {
+    draw_story_borders(view, header_, cr);
+    return;
+  }
+  if (&view == &footer_view_) {
+    draw_story_borders(view, footer_, cr);
+    return;
+  }
+  auto take = [this](const NoteGroup& group) {
+    std::vector<std::vector<Paragraph>> notes;
+    for (int index : group.indexes) {
+      if (index >= 0 && index < static_cast<int>(notes_.size()))
+        notes.push_back(notes_[static_cast<size_t>(index)]);
+    }
+    return notes;
+  };
+  if (&view == &notes_view_) {
+    if (note_groups_.size() <= 1)
+      draw_note_borders(view, notes_, cr);
+    else if (!note_groups_.empty())
+      draw_note_borders(view, take(note_groups_[0]), cr);
+    return;
+  }
+  for (size_t i = 0; i < note_bands_.size(); ++i) {
+    if (!note_bands_[i] || &note_bands_[i]->view != &view)
+      continue;
+    if (i + 1 < note_groups_.size())
+      draw_note_borders(view, take(note_groups_[i + 1]), cr);
+    return;
   }
 }
 
@@ -3064,6 +3151,12 @@ void MainWindow::wire_note_band(NoteBand& band)
   });
   band.key_conn =
       band.view.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
+  band.view.signal_draw().connect(
+      [this, &band](const Cairo::RefPtr<Cairo::Context>& cr) {
+        on_story_draw(band.view, cr);
+        return false;
+      },
+      true);
   band.wired = true;
   apply_story_zoom();
 }

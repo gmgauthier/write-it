@@ -7125,6 +7125,102 @@ void MainWindow::draw_cell_paragraph_borders(Gtk::TextView& view,
   }
 }
 
+void MainWindow::paint_story_border(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                                    const Paragraph& paragraph, int offset, int len)
+{
+  if (borders_plain(paragraph.borders) || len <= 0)
+    return;
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int width = view.get_allocated_width();
+  if (width <= 0)
+    return;
+  const int count = buffer->get_char_count();
+  if (offset < 0 || offset >= count)
+    return;
+  const int end = std::min(count, offset + len);
+  auto first = buffer->get_iter_at_offset(offset);
+  auto last = buffer->get_iter_at_offset(end > offset ? end - 1 : offset);
+  int y = 0;
+  int height = 0;
+  int last_y = 0;
+  int last_height = 0;
+  view.get_line_yrange(first, y, height);
+  view.get_line_yrange(last, last_y, last_height);
+  auto gap_of = [](const Gtk::TextIter& at, bool above) {
+    int gap = 0;
+    for (const auto& tag : at.get_tags()) {
+      if (above && tag->property_pixels_above_lines_set())
+        gap = std::max(gap, static_cast<int>(tag->property_pixels_above_lines()));
+      else if (!above && tag->property_pixels_below_lines_set())
+        gap = std::max(gap, static_cast<int>(tag->property_pixels_below_lines()));
+    }
+    return gap;
+  };
+  const Borders borders = clamp_borders(paragraph.borders);
+  const int text_top = y + gap_of(first, true);
+  const int text_bottom = last_y + last_height - gap_of(last, false);
+  const double left =
+      view.get_left_margin() + indent_px(paragraph.indents.left) - indent_px(borders.left.space);
+  const double right = static_cast<double>(width) - view.get_right_margin() -
+                       indent_px(paragraph.indents.right) + indent_px(borders.right.space);
+  int window_x = 0;
+  int window_top = 0;
+  int window_bottom = 0;
+  view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, text_top - indent_px(borders.top.space),
+                               window_x, window_top);
+  view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0,
+                               text_bottom + indent_px(borders.bottom.space), window_x,
+                               window_bottom);
+  if (right > left && window_bottom > window_top)
+    paint_borders(cr, left, window_top, right, window_bottom, borders, zoom_factor());
+}
+
+void MainWindow::draw_story_borders(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
+                                    const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int count = buffer->get_char_count();
+  int offset = 0;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const Paragraph& paragraph = paragraphs[i];
+    const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
+    if (offset < count)
+      paint_story_border(view, cr, paragraph, offset, std::min(len, count - offset));
+    offset += len;
+    if (i + 1 < paragraphs.size())
+      offset += 1;
+  }
+}
+
+void MainWindow::draw_note_borders(Gtk::TextView& view,
+                                   const std::vector<std::vector<Paragraph>>& notes,
+                                   const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int count = buffer->get_char_count();
+  int offset = 0;
+  for (size_t n = 0; n < notes.size(); ++n) {
+    if (n)
+      offset += 2;
+    const std::vector<Paragraph>& paragraphs = notes[n];
+    for (size_t i = 0; i < paragraphs.size(); ++i) {
+      const Paragraph& paragraph = paragraphs[i];
+      const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
+      if (offset < count)
+        paint_story_border(view, cr, paragraph, offset, std::min(len, count - offset));
+      offset += len;
+      if (i + 1 < paragraphs.size())
+        offset += 1;
+    }
+  }
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,

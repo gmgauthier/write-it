@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### A header, a footer, or a footnote does not draw its border or its shading
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/page_ui.cpp` `MainWindow::tag_story_spacing`, `MainWindow::tag_note_spacing`, `MainWindow::refresh_stories`; `src/main_window.cpp` `prepare_story`; `src/page_ui.cpp` `MainWindow::wire_note_band`. The body paints from `on_text_draw`. A cell paints from its frame and its paragraph tag.
-- Trigger: Put the caret in the header, the footer, or a footnote. Format → Borders and Shading…, set a box or a fill, and press OK. The words stay as they were.
-- Outcome: The border and the shading are stored and written, and the page does not paint them. `DEVELOPMENT.md` M3 says a box is drawn around the paragraph’s text.
-
 ### Insert Row and Insert Column copy one cell’s borders and shading onto every new cell
 
 - Severity: incorrect
@@ -61,6 +53,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### A header, a footer, or a footnote does not draw its border or its shading
+
+- Fixed in 2.2.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::tag_story_spacing`, `MainWindow::tag_note_spacing`; `src/editor.cpp` `MainWindow::paint_story_border`; `src/main_window.cpp` story draw handlers; `src/page_ui.cpp` `MainWindow::wire_note_band`.
+- Trigger: Put the caret in the header, the footer, or a footnote. Format → Borders and Shading…, set a box or a fill, and press OK. The words stay as they were.
+- Outcome: The box is drawn around that paragraph’s text, and the shading fills it. The story stays stored and written. Space before and space after stay outside the box.
 
 ### A body paragraph’s borders and shading are left out of the file
 
