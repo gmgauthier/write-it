@@ -1,3 +1,11 @@
+write-it (2.2.1-1) unstable; urgency=medium
+
+  * A body paragraph's borders and shading round-trip.
+  * A header, a footer, and a footnote draw their border and their shading.
+  * Insert Row and Insert Column keep each neighbouring cell's borders and shading.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Fri, 16 Oct 2026 21:51:50 +0100
+
 write-it (2.2.0-1) unstable; urgency=medium
 
   * Format → Borders and Shading… sets a paragraph's borders and shading, and a table cell's borders and shading.
