@@ -358,6 +358,5 @@ int main()
     CHECK(borders_plain(back.paragraphs[0].borders));
   }
 
-  suite_test::done("borders", kChecks);
-  return 0;
+  return suite_test::done("borders", kChecks);
 }

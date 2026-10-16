@@ -8,14 +8,6 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### A body paragraph’s borders and shading are left out of the file
-
-- Severity: incorrect
-- Confidence: high
-- Where: `src/rtf.cpp` `rtf_export`, the body paragraph after `write_spacing`. Header, footer, note, and cell paragraphs already call `write_borders` and `write_shading`. `tests/test_borders.cpp` checks the body words and then returns 0, so `meson test` stays green.
-- Trigger: Format → Borders and Shading… on a body paragraph, OK, save, and reopen.
-- Outcome: The box and the shading are absent from the file. Reopen restores the style’s borders, which for Normal is none. A side that turns the style’s border off is also absent, so the style’s border comes back. `DEVELOPMENT.md` M3 says borders and shading round-trip on a paragraph.
-
 ### A header, a footer, or a footnote does not draw its border or its shading
 
 - Severity: incorrect
@@ -69,6 +61,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### A body paragraph’s borders and shading are left out of the file
+
+- Fixed in 2.2.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/rtf.cpp` `rtf_export`, the body paragraph after `write_spacing`. Header, footer, note, and cell paragraphs already call `write_borders` and `write_shading`.
+- Trigger: Format → Borders and Shading… on a body paragraph, OK, save, and reopen.
+- Outcome: The box and the shading are in the file and come back. A side that turns the style’s border off is written `\brdrnone`. A plain paragraph still omits both. The borders suite returns its failure count, so a miss fails `meson test`.
 
 ### Paragraph commands and the ruler follow the body caret while a cell or a story is edited
 
