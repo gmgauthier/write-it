@@ -1,3 +1,11 @@
+write-it (2.2.0-1) unstable; urgency=medium
+
+  * Format → Borders and Shading… sets a paragraph's borders and shading, and a table cell's borders and shading.
+  * A new table keeps the 1.0 frame until a border is chosen.
+  * A box at the start of a page stays on that sheet.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Fri, 16 Oct 2026 21:10:00 +0100
+
 write-it (2.1.1-1) unstable; urgency=medium
 
   * Paragraph formatting, the ruler, Replace, and Find Next follow a cell, a header, a footer, or a note.
