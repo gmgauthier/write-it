@@ -441,6 +441,32 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The same over all of them at once, for edits such as Bullets that look
   // at the whole selection.
   void apply_paragraphs(const std::function<void(std::vector<Paragraph>&)>& edit);
+  // The paragraph the ruler and the paragraph commands follow: the cell being
+  // edited, else the header, footer, or note that has the keyboard, else the
+  // body caret.
+  ParaFormat focused_para() const;
+  // TableSheet is only complete in page_ui.cpp. These reach a cell from here.
+  const Paragraph* cell_paragraph_at(int row, int column, int at) const;
+  bool apply_cell_paragraphs(const std::function<void(std::vector<Paragraph>&)>& edit);
+  void each_cell_buffer(const std::function<void(const Glib::RefPtr<Gtk::TextBuffer>&)>& visit);
+  // The story view that last took the keyboard, so a toolbar click still
+  // finds the note band after focus has moved.
+  Gtk::TextView* focused_story_view() const;
+  // Maps a caret in a note view onto the note and paragraph it shows.
+  bool note_at_view(Gtk::TextView& view, int caret, int& note_index, size_t& para_index) const;
+  int heading_level_of(const ParaFormat& format) const;
+  bool needs_spacing_gap(const ParaFormat& format, int heading) const;
+  Glib::RefPtr<Gtk::TextTag> spacing_gap_tag(const ParaFormat& format, int heading);
+  void apply_spacing_gap(int start, int end, const ParaFormat& format, int heading);
+  void tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs);
+  void tag_note_spacing(Gtk::TextView& view, const std::vector<std::vector<Paragraph>>& notes);
+  void retitle_note_in(const Glib::RefPtr<Gtk::TextBuffer>& buffer, const std::vector<int>& remap);
+  void retitle_note_markers(const std::vector<int>& remap, bool body, bool cells);
+  void compact_body_notes();
+  void compact_cell_notes(Document& after);
+  void end_typing_run();
+  bool story_typing_continues(Gtk::Widget* focused) const;
+  void remember_story_caret(Gtk::Widget* focused);
   void apply_align(Align align);
   void on_align_toggled(Align align);
   void show_align();
@@ -459,7 +485,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   // One undo step from `before` to `after`. The selection stays, unless
   // `caret` is given: then the caret is that offset (a page break or a
   // footnote lands in the new place).
-  void commit_document(const Document& before, const Document& after, int caret = -1);
+  // `typing` keeps a run of header, footer, or note keys as one undo step.
+  // A style change and every other caller leave it false.
+  void commit_document(const Document& before, const Document& after, int caret = -1,
+                       bool typing = false);
   // Paper, header, footer, and notes. The buffer holds none of them.
   void apply_document_page(PageSetup page);
   void install_stories(const Document& doc);
@@ -1071,6 +1100,25 @@ class MainWindow : public Gtk::ApplicationWindow {
   UndoHistory undo_;
   SideState side_before_;
   gint64 last_typed_us_ = 0;
+  // A cell key must not fold a story step, and the other way round.
+  enum class MergeKind { None, Cell, Story };
+  MergeKind last_merge_kind_ = MergeKind::None;
+  int merge_cell_table_ = 0;
+  int merge_cell_row_ = -1;
+  int merge_cell_column_ = -1;
+  int merge_cell_caret_ = -1;
+  int cell_merge_at_ = -1;
+  Gtk::TextView* story_continue_view_ = nullptr;
+  int story_continue_caret_ = -1;
+  Gtk::TextView* story_begin_view_ = nullptr;
+  int story_begin_caret_ = -1;
+  // 0 none, 1 header, 2 footer, 3 notes. Set when that story takes the
+  // keyboard, so a paragraph command still finds it after the dialog does.
+  int story_target_ = 0;
+  Gtk::TextView* story_focus_view_ = nullptr;
+  // Find Next remembers the hit when the dialog, not a text view, has focus.
+  int find_view_ = -1;
+  int find_origin_ = 0;
   // The document's style sheet; empty for the default, as in Document.
   std::vector<Style> styles_;
   // Paper, header, footer, and footnotes. The body buffer does not hold

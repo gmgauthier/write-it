@@ -106,6 +106,47 @@ void Settings::save() const
   save_to(config_path());
 }
 
+void Settings::save_fields(unsigned fields) const
+{
+  save_fields_to(config_path(), fields);
+}
+
+void Settings::save_fields_to(const std::string& path, unsigned fields) const
+{
+  Settings disk;
+  disk.load_from(path);
+  if ((fields & kSetWindow) != 0) {
+    disk.window_width = window_width;
+    disk.window_height = window_height;
+    disk.window_maximized = window_maximized;
+  }
+  if ((fields & kSetZoom) != 0)
+    disk.zoom = zoom;
+  if ((fields & kSetStandardBar) != 0)
+    disk.show_standard_toolbar = show_standard_toolbar;
+  if ((fields & kSetFormatBar) != 0)
+    disk.show_format_toolbar = show_format_toolbar;
+  if ((fields & kSetStatusBar) != 0)
+    disk.show_statusbar = show_statusbar;
+  if ((fields & kSetToolbarsSide) != 0)
+    disk.toolbars_side_by_side = toolbars_side_by_side;
+  if ((fields & kSetFont) != 0)
+    disk.default_font = default_font;
+  if ((fields & kSetSize) != 0)
+    disk.default_size = default_size;
+  if ((fields & kSetRecentCount) != 0)
+    disk.recent_count = recent_count;
+  if ((fields & kSetLastDir) != 0)
+    disk.last_dir = last_dir;
+  if ((fields & kSetRecent) != 0)
+    disk.recent = recent;
+  if ((fields & kSetUnits) != 0)
+    disk.units = units;
+  if ((fields & kSetDictionary) != 0)
+    disk.dictionary = dictionary;
+  disk.save_to(path);
+}
+
 void Settings::load_from(const std::string& path)
 {
   Glib::KeyFile kf;

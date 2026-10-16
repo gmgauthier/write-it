@@ -225,6 +225,36 @@ void UndoHistory::record_custom(std::function<void()> undo, std::function<void()
   current_->ops.push_back(std::move(op));
 }
 
+bool UndoHistory::fold_last_custom(std::function<void()> redo)
+{
+  // An open step is the key being recorded. The step to fold is the one
+  // already closed, under it. Refusing while open left every cell key as
+  // its own step: the cell buffer opens a step before the key is stored.
+  if (undo_.empty())
+    return false;
+  Step& top = *undo_.back();
+  for (Op& op : top.ops) {
+    if (op.kind != Op::Kind::Custom || !op.seen || !op.custom)
+      continue;
+    op.custom->second = std::move(redo);
+    top.id = next_id_++;
+    emit();
+    return true;
+  }
+  return false;
+}
+
+bool UndoHistory::custom_only(const Step& step) const
+{
+  if (step.ops.empty())
+    return false;
+  for (const Op& op : step.ops) {
+    if (op.kind != Op::Kind::Custom || !op.custom)
+      return false;
+  }
+  return true;
+}
+
 void UndoHistory::push_op(Op&& op)
 {
   std::vector<Op>& ops = current_->ops;
@@ -652,7 +682,9 @@ void UndoHistory::play_ops(Step& step, bool forward)
 
 int UndoHistory::undo()
 {
-  if (undo_.empty() || open_ || !buffer_)
+  if (undo_.empty() || open_)
+    return -1;
+  if (!buffer_ && !custom_only(*undo_.back()))
     return -1;
   std::unique_ptr<Step> step = std::move(undo_.back());
   undo_.pop_back();
@@ -665,7 +697,9 @@ int UndoHistory::undo()
 
 int UndoHistory::redo()
 {
-  if (redo_.empty() || open_ || !buffer_)
+  if (redo_.empty() || open_)
+    return -1;
+  if (!buffer_ && !custom_only(*redo_.back()))
     return -1;
   std::unique_ptr<Step> step = std::move(redo_.back());
   redo_.pop_back();

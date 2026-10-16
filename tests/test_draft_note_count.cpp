@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Unlicense */
 
 // Draft's page count gives a footnote the same room Page view does. The note
-// is not drawn in Draft. A body with no note stays one page in both views.
+// is not drawn in Draft. A short body stays one page. Ordinary overflow
+// counts the same sheets in Draft as in Page view.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -144,7 +145,7 @@ void room_cases()
 
 }  // namespace
 
-constexpr int kChecks = 12;
+constexpr int kChecks = 14;
 
 int main(int argc, char* argv[])
 {
@@ -211,6 +212,21 @@ int main(int argc, char* argv[])
       std::cerr << "draft, tall note: " << drafted << "\n";
     CHECK(draft_pages == 2);
     CHECK(!MainWindowProbe::note_visible(window));
+
+    MainWindowProbe::draft(window, false);
+    MainWindowProbe::load(window, letter(80, 0));
+    settle();
+    const int ordinary_page = pages_in(MainWindowProbe::page(window));
+    if (ordinary_page <= 1)
+      std::cerr << "page view, ordinary overflow: " << MainWindowProbe::page(window) << "\n";
+    CHECK(ordinary_page > 1);
+    MainWindowProbe::draft(window, true);
+    settle();
+    const int ordinary_draft = pages_in(MainWindowProbe::page(window));
+    if (ordinary_draft != ordinary_page)
+      std::cerr << "draft, ordinary overflow: " << MainWindowProbe::page(window) << " page "
+                << ordinary_page << "\n";
+    CHECK(ordinary_draft == ordinary_page);
   }
   return suite_test::done("draft-note-count", kChecks);
 }

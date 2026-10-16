@@ -104,6 +104,11 @@ class UndoHistory {
   // A change outside the buffer, as part of the open step. `seen` false: the
   // window's own state only, not an edit on its own (see close()).
   void record_custom(std::function<void()> undo, std::function<void()> redo, bool seen = true);
+  // Replaces the redo of the first seen custom operation on the top closed
+  // step. A custom step does not merge through close(). An open step does
+  // not hide that closed step. False when nothing is closed, or the top
+  // closed step has no seen custom operation.
+  bool fold_last_custom(std::function<void()> redo);
   // While suspended, buffer changes are not recorded and do not count as
   // stray edits. A table rebuild replaces the whole buffer and keeps the
   // step as a custom undo instead, because a child widget is not in the
@@ -152,6 +157,7 @@ class UndoHistory {
   void on_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
               const Gtk::TextIter& end, bool apply);
   bool is_edit(const Step& step) const;
+  bool custom_only(const Step& step) const;
   void note_tag_shape(const std::vector<std::pair<int, int>>& ranges);
   void play(Step& step, bool forward);
   void play_ops(Step& step, bool forward);

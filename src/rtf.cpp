@@ -300,9 +300,18 @@ struct State {
   Align align = Align::Left;
   Spacing spacing;
   // The \sl and \slmult in force, so a later word of the pair recomputes the
-  // rule. Single leaves both at 0.
+  // rule. Single leaves both at 0. Exactly 0 is \sl-0: an int cannot tell
+  // that from \sl0, so line_sl_negative records the minus. line_sl_set and
+  // line_mult_set are this paragraph's own words. They clear at \par, while
+  // the values stay, so a later paragraph that only writes \sl0 is single
+  // even when it inherited \slmult1. line_zero_single means this paragraph
+  // already read \sl0 as single, so a following \slmult1 stays single.
   int line_sl = 0;
   int line_mult = 0;
+  bool line_sl_negative = false;
+  bool line_sl_set = false;
+  bool line_mult_set = false;
+  bool line_zero_single = false;
   ListMarks marks;
   // The paragraph's style: an index into the style sheet.
   int style = 0;
@@ -378,6 +387,13 @@ struct StyleEntry {
   std::optional<int> after;
   std::optional<int> sl;
   std::optional<int> slmult;
+  // \sl-0 is Exactly 0. sl_seen and mult_seen are words in the entry, not
+  // the zeros \pard writes. sl_before_mult is \sl then \slmult, which is
+  // single when both values are 0; \slmult then \sl0 is multiple 0.
+  bool sl_negative = false;
+  bool sl_seen = false;
+  bool mult_seen = false;
+  bool sl_before_mult = false;
   std::optional<int> heading;
 };
 // A style resolved against its bases, in the reader's own terms.
@@ -560,11 +576,13 @@ class Reader {
     bool has_param = false;
     int param = 0;
     int sign = 1;
+    param_negative_ = false;
     if (i_ < text_.size() &&
         (text_[i_] == '-' || std::isdigit(static_cast<unsigned char>(text_[i_])))) {
       has_param = true;
       if (text_[i_] == '-') {
         sign = -1;
+        param_negative_ = true;
         ++i_;
       }
       // Stop growing past any value this reader uses, so a long digit run
@@ -805,12 +823,17 @@ class Reader {
     }
     if (word == "sl" && has_param) {
       state_.line_sl = param;
-      apply_line_spacing(state_.spacing, state_.line_sl, state_.line_mult);
+      state_.line_sl_negative = param_negative_ || param < 0;
+      state_.line_sl_set = true;
+      // A new \sl decides the rule. The single lock only stops a later \slmult1.
+      state_.line_zero_single = false;
+      apply_line_words();
       return;
     }
     if (word == "slmult" && has_param) {
       state_.line_mult = param != 0 ? 1 : 0;
-      apply_line_spacing(state_.spacing, state_.line_sl, state_.line_mult);
+      state_.line_mult_set = true;
+      apply_line_words();
       return;
     }
     if (word == "plain") {
@@ -1387,8 +1410,13 @@ class Reader {
       e.after = param;
     } else if (word == "sl" && has_param) {
       e.sl = param;
+      e.sl_negative = param_negative_ || param < 0;
+      if (!e.mult_seen)
+        e.sl_before_mult = true;
+      e.sl_seen = true;
     } else if (word == "slmult" && has_param) {
       e.slmult = param != 0 ? 1 : 0;
+      e.mult_seen = true;
     } else if (word == "outlinelevel" && has_param) {
       e.heading = outline_heading(param);
     } else if (word == "f" && has_param) {
@@ -1440,6 +1468,10 @@ class Reader {
       e.after = 0;
       e.sl = 0;
       e.slmult = 0;
+      e.sl_negative = false;
+      e.sl_seen = false;
+      e.mult_seen = false;
+      e.sl_before_mult = false;
     }
   }
 
@@ -1538,7 +1570,22 @@ class Reader {
         sl = *e.sl;
       if (e.slmult)
         mult = *e.slmult;
-      apply_line_spacing(r.spacing, sl, mult);
+      const bool neg = (e.sl_seen && e.sl_negative) || (e.sl && *e.sl < 0);
+      if (neg) {
+        r.spacing.rule = LineRule::Exactly;
+        r.spacing.value = sl < 0 ? -sl : 0;
+      } else if (e.sl_seen && e.mult_seen && sl == 0 && mult == 0) {
+        r.spacing.rule = LineRule::AtLeast;
+        r.spacing.value = 0;
+      } else if (e.sl_seen && e.mult_seen && sl == 0 && mult != 0 && !e.sl_before_mult) {
+        r.spacing.rule = LineRule::Multiple;
+        r.spacing.value = 0;
+      } else if (e.sl_seen && sl == 0 && (e.sl_before_mult || !e.mult_seen)) {
+        r.spacing.rule = LineRule::Single;
+        r.spacing.value = 240;
+      } else {
+        apply_line_spacing(r.spacing, sl, mult);
+      }
     }
     r.spacing = clamp_spacing(r.spacing);
     // A level from the file, else from a "heading N" name (LibreOffice
@@ -1663,6 +1710,58 @@ class Reader {
   void sync_line_raw()
   {
     line_spacing_raw(state_.spacing, state_.line_sl, state_.line_mult);
+    state_.line_sl_negative = state_.spacing.rule == LineRule::Exactly;
+    clear_line_words();
+  }
+
+  // Drops this paragraph's \sl and \slmult words. The values stay, so the
+  // next paragraph inherits the rule until it writes its own.
+  void clear_line_words()
+  {
+    state_.line_sl_set = false;
+    state_.line_mult_set = false;
+    state_.line_zero_single = false;
+  }
+
+  // \sl and \slmult, including the three zeros. \sl0 and \sl0\slmult1 stay
+  // single. \sl-0 is exactly 0. \sl0\slmult0 is at least 0. \slmult1\sl0 is
+  // multiple 0, and only when \slmult was written before \sl in this paragraph.
+  void apply_line_words()
+  {
+    if (state_.line_sl_negative || state_.line_sl < 0) {
+      state_.spacing.rule = LineRule::Exactly;
+      state_.spacing.value = state_.line_sl < 0 ? -state_.line_sl : 0;
+      state_.line_zero_single = false;
+      return;
+    }
+    if (state_.line_sl == 0 && state_.line_sl_set && state_.line_mult_set &&
+        state_.line_mult == 0) {
+      state_.spacing.rule = LineRule::AtLeast;
+      state_.spacing.value = 0;
+      state_.line_zero_single = false;
+      return;
+    }
+    if (state_.line_sl == 0 && state_.line_sl_set && state_.line_mult_set &&
+        state_.line_mult != 0 && !state_.line_zero_single) {
+      state_.spacing.rule = LineRule::Multiple;
+      state_.spacing.value = 0;
+      return;
+    }
+    if (state_.line_sl == 0 && state_.line_sl_set && state_.line_zero_single) {
+      state_.spacing.rule = LineRule::Single;
+      state_.spacing.value = 240;
+      return;
+    }
+    if (state_.line_sl == 0 && state_.line_sl_set && !state_.line_mult_set) {
+      state_.spacing.rule = LineRule::Single;
+      state_.spacing.value = 240;
+      state_.line_zero_single = true;
+      return;
+    }
+    if (state_.line_sl == 0 && !state_.line_sl_set)
+      return;
+    state_.line_zero_single = false;
+    apply_line_spacing(state_.spacing, state_.line_sl, state_.line_mult);
   }
 
   // \sN: the paragraph takes the style, attribute by attribute, as
@@ -1804,6 +1903,7 @@ class Reader {
     marks->push_back(state_.marks);
     paragraph_ = Paragraph{};
     paragraph_.heading = state_.heading;
+    clear_line_words();
   }
 
   // The reference mark is the digits just before {\footnote}. They often share
@@ -1977,6 +2077,7 @@ class Reader {
     paragraph_.heading = state_.heading;
     if (from_par)
       saw_par_ = true;
+    clear_line_words();
   }
 
   void commit_font()
@@ -2180,6 +2281,8 @@ class Reader {
   // A character control word since the last paragraph ended: an empty
   // paragraph with one has a format of its own (Paragraph::mark).
   bool char_seen_ = false;
+  // The control word just read had a minus, including \sl-0.
+  bool param_negative_ = false;
   Indents final_indents_;
   Align final_align_ = Align::Left;
   Spacing final_spacing_;
@@ -2354,17 +2457,27 @@ void write_spacing(std::ostringstream& out, const Spacing& spacing, const Spacin
       out << "\\sl480\\slmult1";
       break;
     case LineRule::AtLeast:
-      out << "\\sl" << mine.value;
-      if (mult)
-        out << "\\slmult0";
+      // At least 0 is \sl0\slmult0. A bare \sl0 is single.
+      if (mine.value == 0)
+        out << "\\sl0\\slmult0";
+      else {
+        out << "\\sl" << mine.value;
+        if (mult)
+          out << "\\slmult0";
+      }
       break;
     case LineRule::Exactly:
+      // The minus is kept at 0, so \sl-0 is exactly 0 and not single.
       out << "\\sl-" << mine.value;
       if (mult)
         out << "\\slmult0";
       break;
     case LineRule::Multiple:
-      out << "\\sl" << mine.value << "\\slmult1";
+      // Multiple 0 is \slmult before \sl. \sl0\slmult1 is single.
+      if (mine.value == 0)
+        out << "\\slmult1\\sl0";
+      else
+        out << "\\sl" << mine.value << "\\slmult1";
       break;
   }
 }
@@ -2719,19 +2832,16 @@ std::string rtf_export(const Document& doc)
       out << " " << escape_rtf(run.text);
     }
   };
-  write_plain = [&](const Paragraph& paragraph, int ls) {
-    if (paragraph.page_break)
-      out << "\\page";
-    out << "\\pard";
-    const int style = any_style ? style_index(paragraph.style) : -1;
-    if (style > 0)
-      out << "\\s" << style;
+  // Zero indents and left alignment are written when they differ from the
+  // style. \pard then \sN would otherwise put the style's values back.
+  auto write_overrides = [&](const Paragraph& paragraph, const Style* given) {
+    const Indents from = given ? clamp_indents(given->indents) : Indents{};
     const Indents indents = clamp_indents(paragraph.indents);
-    if (indents.left != 0)
+    if (indents.left != 0 || indents.left != from.left)
       out << "\\li" << indents.left;
-    if (indents.right != 0)
+    if (indents.right != 0 || indents.right != from.right)
       out << "\\ri" << indents.right;
-    if (indents.first != 0)
+    if (indents.first != 0 || indents.first != from.first)
       out << "\\fi" << indents.first;
     if (paragraph.align == Align::Center)
       out << "\\qc";
@@ -2739,19 +2849,33 @@ std::string rtf_export(const Document& doc)
       out << "\\qr";
     else if (paragraph.align == Align::Justify)
       out << "\\qj";
+    else if (given && given->align != Align::Left)
+      out << "\\ql";
+  };
+  auto write_outline = [&](const Paragraph& paragraph, const Style* given) {
+    if (paragraph.heading >= 1 && paragraph.heading <= 6)
+      out << "\\outlinelevel" << (paragraph.heading - 1);
+    else if (given && given->heading != 0)
+      out << "\\outlinelevel9";
+  };
+  write_plain = [&](const Paragraph& paragraph, int ls) {
+    if (paragraph.page_break)
+      out << "\\page";
+    out << "\\pard";
+    const int style = any_style ? style_index(paragraph.style) : -1;
+    if (style > 0)
+      out << "\\s" << style;
     const Style* plain_style = nullptr;
     if (any_style) {
       const int plain_index = style > 0 ? style : 0;
       if (plain_index >= 0 && static_cast<size_t>(plain_index) < sheet.size())
         plain_style = &sheet[static_cast<size_t>(plain_index)];
     }
+    write_overrides(paragraph, plain_style);
     write_spacing(out, paragraph.spacing, plain_style ? &plain_style->spacing : nullptr);
     if (ls > 0)
       out << "\\ls" << ls << "\\ilvl" << clamp_list(paragraph.list).level;
-    if (paragraph.heading >= 1 && paragraph.heading <= 6)
-      out << "\\outlinelevel" << (paragraph.heading - 1);
-    else if (style > 0 && sheet[static_cast<size_t>(style)].heading != 0)
-      out << "\\outlinelevel9";
+    write_outline(paragraph, plain_style);
     const bool had_run = [&] {
       for (const Run& run : paragraph.runs)
         if (!run.text.empty() || run.image || run.note != 0)
@@ -2819,28 +2943,17 @@ std::string rtf_export(const Document& doc)
       const int cell_style = any_style ? style_index(paragraph.style) : -1;
       if (cell_style > 0)
         out << "\\s" << cell_style;
-      const Indents cell_indents = clamp_indents(paragraph.indents);
-      if (cell_indents.left != 0)
-        out << "\\li" << cell_indents.left;
-      if (cell_indents.right != 0)
-        out << "\\ri" << cell_indents.right;
-      if (cell_indents.first != 0)
-        out << "\\fi" << cell_indents.first;
-      if (paragraph.align == Align::Center)
-        out << "\\qc";
-      else if (paragraph.align == Align::Right)
-        out << "\\qr";
-      else if (paragraph.align == Align::Justify)
-        out << "\\qj";
       const Style* cell_style_fmt = nullptr;
       if (any_style) {
         const int cell_base = cell_style > 0 ? cell_style : 0;
         if (cell_base >= 0 && static_cast<size_t>(cell_base) < sheet.size())
           cell_style_fmt = &sheet[static_cast<size_t>(cell_base)];
       }
+      write_overrides(paragraph, cell_style_fmt);
       write_spacing(out, paragraph.spacing, cell_style_fmt ? &cell_style_fmt->spacing : nullptr);
       if (list.kind != ListKind::None)
         out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
+      write_outline(paragraph, cell_style_fmt);
       emit_runs(paragraph);
       bool cell_text = false;
       for (const Run& run : paragraph.runs) {

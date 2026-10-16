@@ -2,6 +2,7 @@
 
 // A page break on a Heading 1 opens Draft's short gap. The heading's own
 // space does not win. Page view keeps the seam and does not keep the tag.
+// A heading that is also a list item keeps its space before and after.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -53,14 +54,24 @@ struct MainWindowProbe {
 
   static int pixels_above(MainWindow& window, int offset)
   {
+    return pixels_side(window, offset, true);
+  }
+
+  static int pixels_below(MainWindow& window, int offset)
+  {
+    return pixels_side(window, offset, false);
+  }
+
+  static int pixels_side(MainWindow& window, int offset, bool above)
+  {
     if (offset < 0)
       return -1;
     auto iter = window.buffer_->get_iter_at_offset(offset);
     GtkTextAttributes* attrs = gtk_text_attributes_new();
     gtk_text_iter_get_attributes(iter.gobj(), attrs);
-    const int above = attrs->pixels_above_lines;
+    const int pixels = above ? attrs->pixels_above_lines : attrs->pixels_below_lines;
     gtk_text_attributes_unref(attrs);
-    return above;
+    return pixels;
   }
 
   static bool draft_gap_on(MainWindow& window, int offset)
@@ -132,12 +143,18 @@ Document sample()
   doc.paragraphs.push_back(line("Hello", 0, false));
   doc.paragraphs.push_back(line("Title", 1, true));
   doc.paragraphs.push_back(line("Other", 1, false));
+  Paragraph item = line("Item", 1, false);
+  item.style = "Heading 1";
+  item.list.kind = writeit::ListKind::Bullet;
+  item.spacing.before = 240;
+  item.spacing.after = 240;
+  doc.paragraphs.push_back(item);
   return doc;
 }
 
 }  // namespace
 
-constexpr int kChecks = 7;
+constexpr int kChecks = 9;
 
 int main(int argc, char* argv[])
 {
@@ -175,6 +192,14 @@ int main(int argc, char* argv[])
     CHECK(title_above == 18);
     CHECK(other_above == 8);
     CHECK(hello_above != 18);
+    // 240 twips is 11 px at this zoom. The heading's 8 and 4 stay on top of that.
+    const int item = MainWindowProbe::find(window, "Item");
+    const int item_above = MainWindowProbe::pixels_above(window, item);
+    const int item_below = MainWindowProbe::pixels_below(window, item);
+    if (item_above != 19 || item_below != 15)
+      std::cerr << "list heading above " << item_above << " below " << item_below << "\n";
+    CHECK(item_above == 19);
+    CHECK(item_below == 15);
     CHECK(MainWindowProbe::priority(window, "draft-gap") >
           MainWindowProbe::priority(window, "heading-1"));
 

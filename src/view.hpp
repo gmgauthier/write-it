@@ -149,4 +149,43 @@ bool is_draft_gap(const std::string& name);
 // The height in that name, or 0 when `name` is not a page seam.
 int page_seam_pixels(const std::string& name);
 
+// Extra pixels a line-spacing rule adds inside a line, above the font's box.
+// At least and Exactly use the font's 96 dpi, the same scale as the line GTK
+// draws. A rule that asks for less than the font adds nothing: the screen
+// cannot draw a shorter line. `box_px` is that line. `zoom` scales the ask.
+int spacing_line_extra_px(LineRule rule, int value, int box_px, double zoom);
+
+// Screen width of a table column. The stored width is at least 200 twips,
+// and the pixels follow the zoom. A 36 px floor drew a legal table past the
+// sheet.
+int column_display_px(int twips, double zoom);
+
+// Caret just after a picture in a cell buffer. `line_start` is the cell
+// offset of the paragraph; `into` is the offset inside that paragraph.
+inline int picture_caret_in_cell(int line_start, int into)
+{
+  return line_start + into + 1;
+}
+
+// Where Find Next starts. A focused text view wins. Otherwise the end of the
+// last hit, when one is remembered. Otherwise the body caret, not offset 0.
+struct FindResume {
+  int view = 0;
+  int origin = 0;
+};
+
+inline FindResume find_resume(bool view_focused, int focused_view, int caret, int remembered_view,
+                              int remembered_origin, int body_caret)
+{
+  if (view_focused && focused_view >= 0)
+    return {focused_view, caret};
+  if (remembered_view >= 0)
+    return {remembered_view, remembered_origin};
+  return {0, body_caret};
+}
+
+// A spacing-only tag on a heading that is also a list item. It carries the
+// space the heading tag would hide. It sets no margin.
+bool is_spacing_gap(const std::string& name);
+
 }  // namespace writeit

@@ -21,7 +21,7 @@ std::string temp_ini()
 }
 
 // Exactly the checks this suite runs on a working temp directory.
-constexpr int kChecks = 102;
+constexpr int kChecks = 106;
 
 }  // namespace
 
@@ -259,6 +259,28 @@ int main()
     writeit::Settings into;
     from.store(into);
     CHECK(into.window_width == 1100 && into.window_height == 760 && into.window_maximized);
+  }
+
+  // One window writes the keys it changed. The other window's zoom and frame stay.
+  {
+    writeit::Settings base;
+    base.zoom = 200;
+    base.units = writeit::Units::Centimetres;
+    base.default_font = "Sans";
+    base.window_width = 960;
+    base.dictionary = "en";
+    base.save_to(path);
+    writeit::Settings window_b = base;
+    window_b.zoom = 50;
+    window_b.units = writeit::Units::Inches;
+    window_b.window_width = 400;
+    window_b.save_fields_to(path, writeit::kSetUnits);
+    writeit::Settings read;
+    read.load_from(path);
+    CHECK(read.units == writeit::Units::Inches);
+    CHECK(read.zoom == 200);
+    CHECK(read.default_font == "Sans");
+    CHECK(read.window_width == 960);
   }
 
   // View > Page / Draft is not a setting: the Config key list has no view

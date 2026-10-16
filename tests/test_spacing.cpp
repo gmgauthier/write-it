@@ -7,7 +7,7 @@
 #include <cctype>
 #include <string>
 
-constexpr int kChecks = 68;
+constexpr int kChecks = 91;
 
 namespace {
 
@@ -276,6 +276,53 @@ int main()
     CHECK(rtf_import(rtf_export(doc), back));
     CHECK(back.header.size() == 1 && back.header[0].spacing.rule == LineRule::Double &&
           back.header[0].spacing.before == 240 && back.header[0].spacing.after == 120);
+  }
+
+  {
+    Document doc = blank_document("Sans", 11);
+    doc.paragraphs.clear();
+    doc.paragraphs.push_back(line("Least0", space(0, 0, LineRule::AtLeast, 0)));
+    doc.paragraphs.push_back(line("Exact0", space(0, 0, LineRule::Exactly, 0)));
+    doc.paragraphs.push_back(line("Multi0", space(0, 0, LineRule::Multiple, 0)));
+    doc.paragraphs.push_back(line("Plain", space(0, 0, LineRule::Single, 240)));
+    const std::string written = rtf_export(doc);
+    CHECK(written.find("\\sl0\\slmult0") != std::string::npos);
+    CHECK(written.find("\\sl-0") != std::string::npos);
+    CHECK(written.find("\\slmult1\\sl0") != std::string::npos);
+    Document back;
+    CHECK(rtf_import(written, back));
+    CHECK(back.paragraphs.size() == 4);
+    CHECK(back.paragraphs[0].spacing.rule == LineRule::AtLeast &&
+          back.paragraphs[0].spacing.value == 0);
+    CHECK(back.paragraphs[1].spacing.rule == LineRule::Exactly &&
+          back.paragraphs[1].spacing.value == 0);
+    CHECK(back.paragraphs[2].spacing.rule == LineRule::Multiple &&
+          back.paragraphs[2].spacing.value == 0);
+    CHECK(back.paragraphs[3].spacing.rule == LineRule::Single);
+  }
+
+  {
+    Document doc;
+    const std::string head = kHead;
+    CHECK(rtf_import(head + "\\pard\\slmult1\\sl0 Zero\\par}", doc));
+    CHECK(doc.paragraphs.size() == 1 && doc.paragraphs[0].spacing.rule == LineRule::Multiple &&
+          doc.paragraphs[0].spacing.value == 0);
+    CHECK(rtf_import(head + "\\pard\\sl0\\slmult0 Least\\par}", doc));
+    CHECK(doc.paragraphs[0].spacing.rule == LineRule::AtLeast &&
+          doc.paragraphs[0].spacing.value == 0);
+    CHECK(rtf_import(head + "\\pard\\sl-0 Tight\\par}", doc));
+    CHECK(doc.paragraphs[0].spacing.rule == LineRule::Exactly &&
+          doc.paragraphs[0].spacing.value == 0);
+    CHECK(rtf_import(head + "\\pard\\sl480\\slmult1 one\\par\\sl0 two\\par}", doc));
+    CHECK(doc.paragraphs.size() == 2);
+    CHECK(doc.paragraphs[0].spacing.rule == LineRule::Double);
+    CHECK(doc.paragraphs[1].spacing.rule == LineRule::Single);
+    CHECK(rtf_import(head + "\\pard\\sl-0 Exact\\par Next\\par}", doc));
+    CHECK(doc.paragraphs.size() == 2);
+    CHECK(doc.paragraphs[0].spacing.rule == LineRule::Exactly &&
+          doc.paragraphs[0].spacing.value == 0);
+    CHECK(doc.paragraphs[1].spacing.rule == LineRule::Exactly &&
+          doc.paragraphs[1].spacing.value == 0);
   }
 
   return suite_test::done("spacing", kChecks);

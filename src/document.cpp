@@ -84,6 +84,9 @@ bool heading_marks(const std::string& line, int& level, std::string& body)
   return true;
 }
 
+size_t find_unescaped(const std::string& text, size_t from, const std::string& token);
+std::string unescape_markdown(const std::string& text);
+
 Paragraph parse_inlines(const std::string& text, const std::string& font, double size, int heading)
 {
   Paragraph paragraph;
@@ -109,9 +112,9 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, double
       continue;
     }
     if (text[i] == '!' && i + 1 < text.size() && text[i + 1] == '[') {
-      const size_t alt_end = text.find("](", i + 2);
+      const size_t alt_end = find_unescaped(text, i + 2, "](");
       const size_t path_end =
-          alt_end == std::string::npos ? std::string::npos : text.find(')', alt_end + 2);
+          alt_end == std::string::npos ? std::string::npos : find_unescaped(text, alt_end + 2, ")");
       if (alt_end != std::string::npos && path_end != std::string::npos) {
         flush();
         Run run;
@@ -120,8 +123,8 @@ Paragraph parse_inlines(const std::string& text, const std::string& font, double
         run.bold = bold;
         run.italic = italic;
         Image image;
-        image.alt = text.substr(i + 2, alt_end - (i + 2));
-        image.path = text.substr(alt_end + 2, path_end - (alt_end + 2));
+        image.alt = unescape_markdown(text.substr(i + 2, alt_end - (i + 2)));
+        image.path = unescape_markdown(text.substr(alt_end + 2, path_end - (alt_end + 2)));
         load_image_file(image.path, image);
         run.image = std::move(image);
         paragraph.runs.push_back(std::move(run));
@@ -175,6 +178,48 @@ std::string escape_markdown_text(const std::string& text)
   return out;
 }
 
+// The next unescaped copy of `token`. A backslash keeps the following
+// character, so a path may contain \) and an alt may contain \].
+size_t find_unescaped(const std::string& text, size_t from, const std::string& token)
+{
+  for (size_t i = from; i + token.size() <= text.size(); ++i) {
+    if (text[i] == '\\' && i + 1 < text.size()) {
+      ++i;
+      continue;
+    }
+    if (text.compare(i, token.size(), token) == 0)
+      return i;
+  }
+  return std::string::npos;
+}
+
+std::string unescape_markdown(const std::string& text)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '\\' && i + 1 < text.size()) {
+      out.push_back(text[i + 1]);
+      ++i;
+      continue;
+    }
+    out.push_back(text[i]);
+  }
+  return out;
+}
+
+std::string escape_markdown_extra(const std::string& text, char extra)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (unsigned char c : text) {
+    if (c == '\\' || c == static_cast<unsigned char>(extra))
+      out.push_back('\\');
+    out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
+
 // Emphasis is written where a run differs from its paragraph's style, so a
 // heading whose style is bold is not wrapped in **.
 std::string inline_export(const Paragraph& paragraph, const Run& style)
@@ -196,7 +241,8 @@ std::string inline_export(const Paragraph& paragraph, const Run& style)
   for (const Run& run : runs) {
     if (run.image.has_value()) {
       if (!run.image->path.empty())
-        out += "![" + run.image->alt + "](" + run.image->path + ")";
+        out += "![" + escape_markdown_extra(run.image->alt, ']') + "](" +
+               escape_markdown_extra(run.image->path, ')') + ")";
       continue;
     }
     const bool bold = run.bold && !style.bold;
@@ -394,10 +440,17 @@ void carry_style(Document& doc, std::vector<Style>& sheet, size_t index, const S
   visited[index] = true;
   const Style old = sheet[index];
   sheet[index] = updated;
-  for (Paragraph& paragraph : doc.paragraphs) {
-    if (same_name(paragraph.style, old.name))
-      restyle_paragraph(paragraph, old, updated);
-  }
+  auto carry_paragraphs = [&](std::vector<Paragraph>& paragraphs) {
+    for (Paragraph& paragraph : paragraphs) {
+      if (same_name(paragraph.style, old.name))
+        restyle_paragraph(paragraph, old, updated);
+    }
+  };
+  carry_paragraphs(doc.paragraphs);
+  carry_paragraphs(doc.header);
+  carry_paragraphs(doc.footer);
+  for (std::vector<Paragraph>& note : doc.notes)
+    carry_paragraphs(note);
   if (old.name != updated.name) {
     for (Style& style : sheet) {
       if (same_name(style.based_on, old.name))
@@ -1325,6 +1378,13 @@ void take_paragraph_style(Paragraph& paragraph, const Style& to)
   paragraph.style = to.name;
 }
 
+void restyle_paragraph_kept(Paragraph& paragraph, const std::vector<Style>& sheet, const Style& to)
+{
+  if (sheet.empty())
+    return;
+  restyle_paragraph(paragraph, paragraph_style(sheet, paragraph), to);
+}
+
 bool update_style(Document& doc, const std::string& name, const Style& changed)
 {
   std::vector<Style> sheet = style_sheet(doc);
@@ -2065,6 +2125,109 @@ void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragrap
 bool story_focus_clears_cell(bool header, bool footer, bool note)
 {
   return header || footer || note;
+}
+
+std::string paragraph_plain(const Paragraph& paragraph)
+{
+  std::string text;
+  for (const Run& run : paragraph.runs) {
+    if (run.image)
+      continue;
+    text += run.text;
+  }
+  if (text.empty())
+    return " ";
+  return text;
+}
+
+std::string story_plain_text(const std::vector<Paragraph>& story)
+{
+  std::string out;
+  for (size_t i = 0; i < story.size(); ++i) {
+    if (i)
+      out.push_back('\n');
+    out += paragraph_plain(story[i]);
+  }
+  return out;
+}
+
+namespace {
+
+bool note_marked(const std::vector<Paragraph>& paragraphs, int note)
+{
+  for (const Paragraph& paragraph : paragraphs) {
+    for (const Run& run : paragraph.runs) {
+      if (run.note == note)
+        return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+NoteDrop drop_unmarked_notes(const Document& doc)
+{
+  NoteDrop drop;
+  const int count = static_cast<int>(doc.notes.size());
+  drop.remap.assign(static_cast<size_t>(count) + 1, 0);
+  int next = 0;
+  for (int old = 1; old <= count; ++old) {
+    if (!note_marked(doc.paragraphs, old)) {
+      drop.changed = true;
+      continue;
+    }
+    ++next;
+    drop.remap[static_cast<size_t>(old)] = next;
+    drop.notes.push_back(doc.notes[static_cast<size_t>(old - 1)]);
+  }
+  if (next != count)
+    drop.changed = true;
+  return drop;
+}
+
+void apply_note_remap(Document& doc, const std::vector<int>& remap)
+{
+  if (remap.empty())
+    return;
+  for (Paragraph& paragraph : doc.paragraphs) {
+    for (Run& run : paragraph.runs) {
+      if (run.note <= 0)
+        continue;
+      const int old = run.note;
+      if (old >= static_cast<int>(remap.size()))
+        continue;
+      const int neu = remap[static_cast<size_t>(old)];
+      const std::string old_text = std::to_string(old);
+      if (neu <= 0) {
+        run.note = 0;
+        if (run.text.empty() || run.text == old_text)
+          run.text.clear();
+        continue;
+      }
+      run.note = neu;
+      if (run.text.empty() || run.text == old_text)
+        run.text = std::to_string(neu);
+    }
+  }
+}
+
+std::vector<ListRetag> list_retag_offsets(const std::vector<Paragraph>& before,
+                                          const std::vector<Paragraph>& after)
+{
+  std::vector<ListRetag> out;
+  const size_t n = std::min(before.size(), after.size());
+  for (size_t i = 0; i < n; ++i) {
+    if (after[i].cell.table != 0)
+      continue;
+    if (before[i].list.list == after[i].list.list)
+      continue;
+    ListRetag tag;
+    tag.offset = chars_before(after, i);
+    tag.index = i;
+    out.push_back(tag);
+  }
+  return out;
 }
 
 }  // namespace writeit

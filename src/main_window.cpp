@@ -348,7 +348,7 @@ bool MainWindow::on_delete_event(GdkEventAny* event)
     return true;
   window_memory_.store(settings_);
   reload_recent();
-  settings_.save();
+  settings_.save_fields(kSetWindow);
   return Gtk::ApplicationWindow::on_delete_event(event);
 }
 
@@ -421,25 +421,25 @@ void MainWindow::build_menus()
     settings_.show_standard_toolbar = standard->get_active();
     standard_bar_.set_visible(settings_.show_standard_toolbar);
     reload_recent();
-    settings_.save();
+    settings_.save_fields(kSetStandardBar);
   });
   format->signal_toggled().connect([this, format] {
     settings_.show_format_toolbar = format->get_active();
     format_bar_.set_visible(settings_.show_format_toolbar);
     reload_recent();
-    settings_.save();
+    settings_.save_fields(kSetFormatBar);
   });
   side->signal_toggled().connect([this, side] {
     settings_.toolbars_side_by_side = side->get_active();
     apply_toolbar_row();
     reload_recent();
-    settings_.save();
+    settings_.save_fields(kSetToolbarsSide);
   });
   status->signal_toggled().connect([this, status] {
     settings_.show_statusbar = status->get_active();
     status_.set_visible(settings_.show_statusbar);
     reload_recent();
-    settings_.save();
+    settings_.save_fields(kSetStatusBar);
   });
   view->append(*standard);
   view->append(*format);
@@ -765,8 +765,11 @@ void MainWindow::build_page()
   note_box_.pack_start(notes_view_, Gtk::PACK_EXPAND_WIDGET);
   notes_view_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
   notes_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    story_target_ = 3;
+    story_focus_view_ = &notes_view_;
     note_editing_ = true;
     clear_cell_edit_on_story(false, false, true);
+    sync_format_controls();
     return false;
   });
   notes_view_.signal_focus_out_event().connect([this](GdkEventFocus*) {
@@ -811,6 +814,17 @@ void MainWindow::build_page()
                    }),
                    this);
   page_.add(page_overlay_);
+  auto remember_story_begin = [this](Gtk::TextView& view) {
+    view.get_buffer()->signal_begin_user_action().connect([this, &view] {
+      if (loading_ || restoring_)
+        return;
+      story_begin_view_ = &view;
+      story_begin_caret_ = view.get_buffer()->get_insert()->get_iter().get_offset();
+    });
+  };
+  remember_story_begin(header_view_);
+  remember_story_begin(footer_view_);
+  remember_story_begin(notes_view_);
   header_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&header_); });
   footer_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&footer_); });
   notes_view_.get_buffer()->signal_end_user_action().connect([this] { on_notes_end(); });
@@ -818,23 +832,33 @@ void MainWindow::build_page()
   footer_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   notes_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   header_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    story_target_ = 1;
+    story_focus_view_ = &header_view_;
     clear_cell_edit_on_story(true, false, false);
+    sync_format_controls();
     return false;
   });
   footer_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    story_target_ = 2;
+    story_focus_view_ = &footer_view_;
     clear_cell_edit_on_story(false, true, false);
+    sync_format_controls();
     return false;
   });
   text_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   text_.signal_button_press_event().connect(
       [this](GdkEventButton*) {
         reveal_note_ = 0;
+        story_target_ = 0;
+        story_focus_view_ = nullptr;
         return false;
       },
       false);
   text_.signal_key_press_event().connect(
       [this](GdkEventKey*) {
         reveal_note_ = 0;
+        story_target_ = 0;
+        story_focus_view_ = nullptr;
         return false;
       },
       false);
@@ -1367,7 +1391,7 @@ void MainWindow::set_zoom(int zoom)
   zoom_label_.set_text(zoom_label(zoom));
   apply_page_size();
   reload_recent();
-  settings_.save();
+  settings_.save_fields(kSetZoom);
 }
 
 void MainWindow::sync_zoom_checks()
@@ -1413,7 +1437,7 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   // hangs from the top edge, the left and right indents stand on the bottom.
   if (!buffer_)
     return true;
-  const Indents indents = indents_at(cursor_offset());
+  const Indents indents = focused_para().indents;
   const int left = origin_x + margin_left();
   const int right = origin_x + page_w - margin_right();
   const double h = self.get_height();
