@@ -91,6 +91,8 @@ struct ParaFormat {
   // plain. A cell's own frame rides on `cell` (borders_set, borders, shading).
   Borders borders;
   Shading shading;
+  // Custom stops. Empty keeps the tag this program has always written.
+  std::vector<TabStop> tabs;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
@@ -98,7 +100,7 @@ inline bool operator==(const ParaFormat& a, const ParaFormat& b)
   return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
          a.direct == b.direct && a.page_break == b.page_break && a.cell == b.cell &&
          a.spacing == b.spacing && a.basis == b.basis && a.borders == b.borders &&
-         a.shading == b.shading;
+         a.shading == b.shading && a.tabs == b.tabs;
 }
 
 inline ParaFormat para_format(const Paragraph& paragraph)
@@ -115,6 +117,7 @@ inline ParaFormat para_format(const Paragraph& paragraph)
   format.basis = basis_half_points(paragraph);
   format.borders = paragraph.borders;
   format.shading = paragraph.shading;
+  format.tabs = paragraph.tabs;
   return format;
 }
 
@@ -236,10 +239,18 @@ class MainWindow : public Gtk::ApplicationWindow {
   void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_cell_paragraph_borders(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
+  // Leaders in a tab's gap, and a bar stop's line. A document with no custom
+  // stops returns before it measures a paragraph.
+  void draw_tab_marks(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr, bool cell);
   // A header, footer, or note has no paragraph tag. The border is painted
   // from the stored paragraph, around the text, and the shading is a tag.
   void paint_story_border(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
                           const Paragraph& paragraph, int offset, int len);
+  // Leaders and bar lines for a header, footer, or note, from the stored stops.
+  void paint_story_tabs(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                        const Paragraph& paragraph, int offset, int len);
+  // Pango stops on a story paragraph, which has no body paragraph tag.
+  void apply_story_tabs(Gtk::TextView& view, int offset, int len, const Paragraph& paragraph);
   void draw_story_borders(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
                           const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_note_borders(Gtk::TextView& view, const std::vector<std::vector<Paragraph>>& notes,
@@ -277,6 +288,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  bool on_ruler_press(GdkEventButton* event);
+  bool on_ruler_release(GdkEventButton* event);
+  bool on_ruler_motion(GdkEventMotion* event);
+  // Twips from the left margin for an x on the ruler, snapped to 1/8 inch.
+  int ruler_twips(int x);
+  void apply_focused_tabs(std::vector<TabStop> tabs);
   bool on_context(GdkEventButton* event);
 
   Gtk::MenuItem* add_item(Gtk::Menu& menu, const char* label, bool sensitive, guint key = 0,
@@ -443,6 +460,10 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
   void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
+  // Pango stops for this paragraph: its own, then the default grid after the
+  // last one. Positions are pixels from the layout's left edge.
+  void apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag, const std::vector<TabStop>& tabs,
+                       const Indents& indents, bool cell, bool list) const;
   // Space before, space after, and the extra a line-spacing rule adds. A page
   // break's 18 stays. A heading's own gap is included when this tag is raised
   // over the heading, because an unset property is what lets the heading show.
@@ -450,8 +471,8 @@ class MainWindow : public Gtk::ApplicationWindow {
                             int basis, const std::string& font, int heading, bool page_break) const;
   // A cell paragraph's indents, alignment, and spacing. No page margin and no list.
   void style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents, Align align,
-                       const Spacing& spacing, int basis, int heading,
-                       const std::string& font) const;
+                       const Spacing& spacing, int basis, int heading, const std::string& font,
+                       const std::vector<TabStop>& tabs) const;
   Glib::RefPtr<Gtk::TextTag> cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
                                            const Paragraph& paragraph);
   Glib::RefPtr<Gtk::TextTag> para_tag_at(Gtk::TextIter iter) const;
@@ -508,6 +529,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_align_toggled(Align align);
   void show_align();
   void on_paragraph();
+  void on_tabs();
   void on_borders();
   // Named styles (styles.cpp).
   std::vector<Style> sheet() const;
@@ -941,6 +963,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bullets_item_ = nullptr;
   Gtk::MenuItem* numbering_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
+  Gtk::MenuItem* tabs_item_ = nullptr;
   Gtk::MenuItem* borders_item_ = nullptr;
   Gtk::MenuItem* style_item_ = nullptr;
   Gtk::MenuItem* align_left_item_ = nullptr;
@@ -1179,6 +1202,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Paper, header, footer, and footnotes. The body buffer does not hold
   // them; capture() copies these, and a command records the change.
   PageSetup page_setup_{};
+  // \deftab. 720 stays off the file.
+  int default_tab_ = kDefaultTab;
+  // The alignment a click on the ruler's well will add. Dragging a stop
+  // keeps the list here until the button comes up, so the drag is one undo.
+  TabAlign ruler_kind_ = TabAlign::Left;
+  bool ruler_drag_ = false;
+  bool ruler_moved_ = false;
+  int ruler_grab_ = -1;
+  // Where the button went down, so a click inside the hit slop does not snap.
+  int ruler_press_x_ = 0;
+  std::vector<TabStop> ruler_tabs_;
   std::vector<Paragraph> header_;
   std::vector<Paragraph> footer_;
   std::vector<std::vector<Paragraph>> notes_;

@@ -655,6 +655,7 @@ class TableSheet : public Gtk::Grid {
         view->signal_draw().connect(
             [this, view](const Cairo::RefPtr<Cairo::Context>& cr) {
               window_.draw_cell_paragraph_borders(*view, cr);
+              window_.draw_tab_marks(*view, cr, true);
               return false;
             },
             true);
@@ -2583,6 +2584,60 @@ void apply_shade_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer, int offset, in
 
 }  // namespace
 
+void MainWindow::apply_story_tabs(Gtk::TextView& view, int offset, int len,
+                                  const Paragraph& paragraph)
+{
+  if (len <= 0)
+    return;
+  auto buffer = view.get_buffer();
+  if (!buffer || offset < 0 || offset + len > buffer->get_char_count())
+    return;
+  const Indents indents = clamp_indents(paragraph.indents);
+  const bool list = clamp_list(paragraph.list).kind != ListKind::None;
+  std::string name = "stab";
+  name += '\x1f';
+  name += std::to_string(clamp_default_tab(default_tab_));
+  name += '\x1f';
+  name += std::to_string(indents.left);
+  name += '\x1f';
+  name += std::to_string(indents.right);
+  name += '\x1f';
+  name += std::to_string(indents.first);
+  name += '\x1f';
+  name += list ? "1" : "0";
+  for (const TabStop& stop : clamp_tabs(paragraph.tabs)) {
+    name += '\x1f';
+    name += std::to_string(stop.position);
+    name += '\x1f';
+    name += std::to_string(static_cast<int>(stop.align));
+    name += '\x1f';
+    name += std::to_string(static_cast<int>(stop.leader));
+  }
+  auto table = buffer->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    table->add(tag);
+  }
+  // The story view's own margin is the content edge. A tag margin replaces
+  // it, so the inset is added here, the way a body tag adds the page margin.
+  const int base_left = view.get_left_margin();
+  const int base_right = view.get_right_margin();
+  if (list) {
+    tag->property_left_margin() = std::max(0, base_left + indent_px(indents.left));
+    tag->property_right_margin() = base_right + indent_px(indents.right);
+    tag->property_indent() = indent_px(list_text_start(indents)) - indent_px(indents.left);
+  } else if (!(indents == Indents{})) {
+    const int hang = std::min(0, indents.first);
+    tag->property_left_margin() = std::max(0, base_left + indent_px(indents.left + hang));
+    tag->property_right_margin() = base_right + indent_px(indents.right);
+    tag->property_indent() = indent_px(indents.first);
+  }
+  apply_tab_stops(tag, paragraph.tabs, indents, false, list);
+  buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                    buffer->get_iter_at_offset(offset + len));
+}
+
 void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs)
 {
   auto buffer = view.get_buffer();
@@ -2596,6 +2651,14 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
   if (!old.empty())
     for (const auto& tag : old)
       buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old_tabs;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    const auto name = tag->property_name().get_value();
+    if (name.compare(0, 4, "stab") == 0)
+      old_tabs.push_back(tag);
+  });
+  for (const auto& tag : old_tabs)
+    buffer->remove_tag(tag, buffer->begin(), buffer->end());
   clear_shade_tags(buffer);
   int offset = 0;
   for (size_t i = 0; i < paragraphs.size(); ++i) {
@@ -2629,6 +2692,7 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
                           buffer->get_iter_at_offset(offset + len));
       }
       apply_shade_tag(buffer, offset, len, paragraph.shading);
+      apply_story_tabs(view, offset, len, paragraph);
     }
     offset += len;
     if (i + 1 < paragraphs.size())
@@ -2649,6 +2713,14 @@ void MainWindow::tag_note_spacing(Gtk::TextView& view,
       old.push_back(tag);
   });
   for (const auto& tag : old)
+    buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old_tabs;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    const auto name = tag->property_name().get_value();
+    if (name.compare(0, 4, "stab") == 0)
+      old_tabs.push_back(tag);
+  });
+  for (const auto& tag : old_tabs)
     buffer->remove_tag(tag, buffer->begin(), buffer->end());
   clear_shade_tags(buffer);
   int offset = 0;
@@ -2687,6 +2759,7 @@ void MainWindow::tag_note_spacing(Gtk::TextView& view,
                             buffer->get_iter_at_offset(offset + len));
         }
         apply_shade_tag(buffer, offset, len, paragraph.shading);
+        apply_story_tabs(view, offset, len, paragraph);
       }
       offset += len;
       if (i + 1 < paragraphs.size())

@@ -474,6 +474,21 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
           refresh_stories();
         });
   }
+  if (clamp_default_tab(before.default_tab) != clamp_default_tab(after.default_tab)) {
+    const int old_tab = clamp_default_tab(before.default_tab);
+    const int new_tab = clamp_default_tab(after.default_tab);
+    auto apply_tab = [this](int tab) {
+      default_tab_ = tab;
+      restyle_tags();
+      tag_story_spacing(header_view_, header_);
+      tag_story_spacing(footer_view_, footer_);
+      tag_note_spacing(notes_view_, notes_);
+    };
+    if (!replaced)
+      apply_tab(new_tab);
+    undo_.record_custom([apply_tab, old_tab] { apply_tab(old_tab); },
+                        [apply_tab, new_tab] { apply_tab(new_tab); });
+  }
   close_step(false);
   // A style change is its own undo step, never merged into typing. A key in
   // a header, footer, or note joins the previous key when the caret did not move.
@@ -605,6 +620,7 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
       pending_para_ = para_format(paragraph);
       pending_para_.indents = clamp_indents(paragraph.indents);
       pending_para_.list = clamp_list(paragraph.list);
+      pending_para_.tabs = clamp_tabs(paragraph.tabs);
       pending_para_set_ = true;
       if (paragraph.mark) {
         pending_mark_ = *paragraph.mark;
