@@ -91,6 +91,8 @@ struct ParaFormat {
   // plain. A cell's own frame rides on `cell` (borders_set, borders, shading).
   Borders borders;
   Shading shading;
+  // Custom stops. Empty keeps the tag this program has always written.
+  std::vector<TabStop> tabs;
 };
 
 inline bool operator==(const ParaFormat& a, const ParaFormat& b)
@@ -98,7 +100,7 @@ inline bool operator==(const ParaFormat& a, const ParaFormat& b)
   return a.indents == b.indents && a.align == b.align && a.list == b.list && a.style == b.style &&
          a.direct == b.direct && a.page_break == b.page_break && a.cell == b.cell &&
          a.spacing == b.spacing && a.basis == b.basis && a.borders == b.borders &&
-         a.shading == b.shading;
+         a.shading == b.shading && a.tabs == b.tabs;
 }
 
 inline ParaFormat para_format(const Paragraph& paragraph)
@@ -115,6 +117,7 @@ inline ParaFormat para_format(const Paragraph& paragraph)
   format.basis = basis_half_points(paragraph);
   format.borders = paragraph.borders;
   format.shading = paragraph.shading;
+  format.tabs = paragraph.tabs;
   return format;
 }
 
@@ -214,12 +217,45 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool page_caret(int count, bool extend);
   void sync_zoom_checks();
   void queue_page_status();
+  // A character typed inside one line. Cleared when the edit can change
+  // pagination: a newline, a new paragraph format, or a line whose pixels
+  // moved. apply_page_size() then keeps the page height it already has.
+  void note_page_edit(int line, bool structure);
+  // True when the caret line's pixel box is the one remember_page_cache()
+  // stored, so the seams and the page count are still right.
+  bool page_box_unchanged() const;
+  // True when a letter is still on the paginated line, at the same zoom,
+  // view, and width, and the page already has a height. The status idle
+  // measures that line and paginates if its box moved.
+  bool page_edit_keeps_height() const;
+  void remember_page_cache();
+  // True when a character before `start`, still in the paragraph, already
+  // carries `tag`. An apply that begins at the paragraph start does not.
+  bool paragraph_keeps_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                           const Gtk::TextIter& end) const;
   // Gray pasteboard between the sheets of a long page. Screen-only: Draft
   // drops it, and the file never stores it.
   void update_page_seams();
   void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_cell_paragraph_borders(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
+  // Leaders in a tab's gap, and a bar stop's line. A document with no custom
+  // stops returns before it measures a paragraph.
+  void draw_tab_marks(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr, bool cell);
+  // A header, footer, or note has no paragraph tag. The border is painted
+  // from the stored paragraph, around the text, and the shading is a tag.
+  void paint_story_border(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                          const Paragraph& paragraph, int offset, int len);
+  // Leaders and bar lines for a header, footer, or note, from the stored stops.
+  void paint_story_tabs(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                        const Paragraph& paragraph, int offset, int len);
+  // Pango stops on a story paragraph, which has no body paragraph tag.
+  void apply_story_tabs(Gtk::TextView& view, int offset, int len, const Paragraph& paragraph);
+  void draw_story_borders(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
+                          const Cairo::RefPtr<Cairo::Context>& cr);
+  void draw_note_borders(Gtk::TextView& view, const std::vector<std::vector<Paragraph>>& notes,
+                         const Cairo::RefPtr<Cairo::Context>& cr);
+  void on_story_draw(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
   int natural_line_above(const Gtk::TextIter& iter) const;
   // Seam pixels above `offset` that are not part of the laid-out text. A
   // heading's own space, which a seam replaces on screen, is put back.
@@ -252,6 +288,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   void update_page_status();
   void on_about();
   bool on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr);
+  bool on_ruler_press(GdkEventButton* event);
+  bool on_ruler_release(GdkEventButton* event);
+  bool on_ruler_motion(GdkEventMotion* event);
+  // Twips from the left margin for an x on the ruler, snapped to 1/8 inch.
+  int ruler_twips(int x);
+  void apply_focused_tabs(std::vector<TabStop> tabs);
   bool on_context(GdkEventButton* event);
 
   Gtk::MenuItem* add_item(Gtk::Menu& menu, const char* label, bool sensitive, guint key = 0,
@@ -285,6 +327,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Document capture() const;
   // Calls of capture(), for the tests: a keystroke makes at most undo's two.
   mutable long captures_ = 0;
+  // Full pagination walks (page height and seam rebuild). A letter whose
+  // line box did not change does not add one. Tests read this.
+  mutable long page_walks_ = 0;
   // For the tests: label geometry read through get_iter_location() (which
   // lays its line out again), and label layouts built, in list drawing and
   // list measuring. A keystroke costs a few of each, however many items show.
@@ -415,6 +460,10 @@ class MainWindow : public Gtk::ApplicationWindow {
 
   Glib::RefPtr<Gtk::TextTag> para_tag(const ParaFormat& format);
   void style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const ParaFormat& format) const;
+  // Pango stops for this paragraph: its own, then the default grid after the
+  // last one. Positions are pixels from the layout's left edge.
+  void apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag, const std::vector<TabStop>& tabs,
+                       const Indents& indents, bool cell, bool list) const;
   // Space before, space after, and the extra a line-spacing rule adds. A page
   // break's 18 stays. A heading's own gap is included when this tag is raised
   // over the heading, because an unset property is what lets the heading show.
@@ -422,8 +471,8 @@ class MainWindow : public Gtk::ApplicationWindow {
                             int basis, const std::string& font, int heading, bool page_break) const;
   // A cell paragraph's indents, alignment, and spacing. No page margin and no list.
   void style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents, Align align,
-                       const Spacing& spacing, int basis, int heading,
-                       const std::string& font) const;
+                       const Spacing& spacing, int basis, int heading, const std::string& font,
+                       const std::vector<TabStop>& tabs) const;
   Glib::RefPtr<Gtk::TextTag> cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
                                            const Paragraph& paragraph);
   Glib::RefPtr<Gtk::TextTag> para_tag_at(Gtk::TextIter iter) const;
@@ -480,6 +529,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_align_toggled(Align align);
   void show_align();
   void on_paragraph();
+  void on_tabs();
   void on_borders();
   // Named styles (styles.cpp).
   std::vector<Style> sheet() const;
@@ -913,6 +963,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* bullets_item_ = nullptr;
   Gtk::MenuItem* numbering_item_ = nullptr;
   Gtk::MenuItem* paragraph_item_ = nullptr;
+  Gtk::MenuItem* tabs_item_ = nullptr;
   Gtk::MenuItem* borders_item_ = nullptr;
   Gtk::MenuItem* style_item_ = nullptr;
   Gtk::MenuItem* align_left_item_ = nullptr;
@@ -1014,6 +1065,22 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection restore_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // The last pagination, and the single-line edit that may reuse it.
+  bool page_cache_valid_ = false;
+  bool page_edit_maybe_ = false;
+  // Set for the whole user action and cleared by the status idle. A paragraph
+  // tag re-applied to a new character does not clear it; a newline or a new
+  // format does. apply_page_size() keeps the page height while it is set.
+  bool page_letter_ = false;
+  int page_cache_line_ = -1;
+  int page_edit_line_ = -1;
+  int page_cache_y_ = 0;
+  int page_cache_h_ = 0;
+  int page_cache_lines_ = 0;
+  int page_cache_width_ = 0;
+  int page_cache_notes_ = 0;
+  double page_cache_zoom_ = 0;
+  ViewMode page_cache_view_ = kDefaultView;
   // sync_table_lines() after a table has its real height. One at a time.
   sigc::connection table_sync_;
   // update_page_seams() is applying its tags. Their signals are not edits.
@@ -1135,6 +1202,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Paper, header, footer, and footnotes. The body buffer does not hold
   // them; capture() copies these, and a command records the change.
   PageSetup page_setup_{};
+  // \deftab. 720 stays off the file.
+  int default_tab_ = kDefaultTab;
+  // The alignment a click on the ruler's well will add. Dragging a stop
+  // keeps the list here until the button comes up, so the drag is one undo.
+  TabAlign ruler_kind_ = TabAlign::Left;
+  bool ruler_drag_ = false;
+  bool ruler_moved_ = false;
+  int ruler_grab_ = -1;
+  // Where the button went down, so a click inside the hit slop does not snap.
+  int ruler_press_x_ = 0;
+  std::vector<TabStop> ruler_tabs_;
   std::vector<Paragraph> header_;
   std::vector<Paragraph> footer_;
   std::vector<std::vector<Paragraph>> notes_;

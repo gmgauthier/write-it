@@ -10,6 +10,7 @@
 #include <glibmm/miscutils.h>
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 
 namespace writeit {
@@ -194,6 +195,71 @@ void lay_out_arrow(Gtk::Toolbar& bar)
     Glib::signal_idle().connect(
         sigc::bind_return(sigc::mem_fun(bar, &Gtk::Widget::queue_resize), false));
   });
+}
+
+// A Word 97 ruler mark, drawn on an 18 px ruler. Left, center, right, and
+// decimal sit on a short baseline. A bar in the well is the same short line;
+// a bar stop on the ruler itself is drawn full height by the caller.
+void stroke_tab_icon(const Cairo::RefPtr<Cairo::Context>& cr, double x, double mid, TabAlign align)
+{
+  const double cx = std::floor(x) + 0.5;
+  const double top = mid - 4.0;
+  const double base = mid + 3.0;
+  cr->set_source_rgb(0.2, 0.2, 0.2);
+  cr->set_line_width(1.0);
+  if (align == TabAlign::Bar) {
+    cr->move_to(cx, mid - 6.0);
+    cr->line_to(cx, mid + 6.0);
+    cr->stroke();
+    return;
+  }
+  if (align == TabAlign::Right) {
+    cr->move_to(cx + 3.0, top);
+    cr->line_to(cx + 3.0, base);
+    cr->line_to(cx - 4.0, base);
+  } else if (align == TabAlign::Center || align == TabAlign::Decimal) {
+    cr->move_to(cx, top);
+    cr->line_to(cx, base);
+    cr->move_to(cx - 4.0, base);
+    cr->line_to(cx + 4.0, base);
+  } else {
+    cr->move_to(cx - 3.0, top);
+    cr->line_to(cx - 3.0, base);
+    cr->line_to(cx + 4.0, base);
+  }
+  cr->stroke();
+  if (align == TabAlign::Decimal) {
+    cr->arc(cx, top - 1.5, 1.1, 0, 6.28318530718);
+    cr->fill();
+  }
+}
+
+void draw_tab_well(const Cairo::RefPtr<Cairo::Context>& cr, TabAlign align)
+{
+  cr->rectangle(1.5, 1.5, 15, 15);
+  cr->set_source_rgb(0.90, 0.89, 0.87);
+  cr->fill_preserve();
+  cr->set_source_rgb(0.35, 0.35, 0.35);
+  cr->set_line_width(1.0);
+  cr->stroke();
+  stroke_tab_icon(cr, 9, 9, align);
+}
+
+TabAlign next_ruler_kind(TabAlign kind)
+{
+  switch (kind) {
+    case TabAlign::Left:
+      return TabAlign::Center;
+    case TabAlign::Center:
+      return TabAlign::Right;
+    case TabAlign::Right:
+      return TabAlign::Decimal;
+    case TabAlign::Decimal:
+      return TabAlign::Bar;
+    case TabAlign::Bar:
+      return TabAlign::Left;
+  }
+  return TabAlign::Left;
 }
 
 }  // namespace
@@ -510,6 +576,7 @@ void MainWindow::build_menus()
   numbering_item_ = add_item(*format_menu, "_Numbering", true);
   format_menu->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   paragraph_item_ = add_item(*format_menu, "_Paragraph…", true);
+  tabs_item_ = add_item(*format_menu, "_Tabs…", true);
   borders_item_ = add_item(*format_menu, "Borders and Shadin_g…", true);
   columns_item_ = add_item(*format_menu, "C_olumns…", true);
   columns_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_columns));
@@ -731,7 +798,11 @@ void MainWindow::build_page()
 {
   ruler_.set_size_request(-1, 18);
   ruler_.get_style_context()->add_class("ruler");
+  ruler_.add_events(Gdk::BUTTON_PRESS_MASK | Gdk::BUTTON_RELEASE_MASK | Gdk::POINTER_MOTION_MASK);
   ruler_.signal_draw().connect(sigc::mem_fun(*this, &MainWindow::on_ruler_draw));
+  ruler_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_ruler_press));
+  ruler_.signal_button_release_event().connect(sigc::mem_fun(*this, &MainWindow::on_ruler_release));
+  ruler_.signal_motion_notify_event().connect(sigc::mem_fun(*this, &MainWindow::on_ruler_motion));
 
   page_.set_size_request(kScreenPageWidth, page_sheet_height(1.0));
   page_.get_style_context()->add_class("page");
@@ -756,6 +827,17 @@ void MainWindow::build_page()
   prepare_story(notes_view_);
   notes_view_.set_no_show_all(false);
   prepare_story(footer_view_);
+  auto connect_story = [this](Gtk::TextView& view) {
+    view.signal_draw().connect(
+        [this, &view](const Cairo::RefPtr<Cairo::Context>& cr) {
+          on_story_draw(view, cr);
+          return false;
+        },
+        true);
+  };
+  connect_story(header_view_);
+  connect_story(notes_view_);
+  connect_story(footer_view_);
   note_label_.set_halign(Gtk::ALIGN_START);
   note_label_.set_valign(Gtk::ALIGN_START);
   note_marks_.put(note_label_, 0, 0);
@@ -913,19 +995,24 @@ void MainWindow::build_page()
     // caret on the last lines was out of reach. Size the page again after
     // this layout whenever the text wants more height than it was given.
     // (Less is normal: an empty page, or Draft's white area, is taller.)
-    int min_h = 0;
-    int nat_h = 0;
-    text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
-    if (nat_h > allocation.get_height()) {
-      grow_page_ = true;
-      queue_page_size();
-    } else if (page_height_stale()) {
-      // The text came out shorter than the height the page was last sized
-      // to. apply_page_size() measures the text before a zoom has rewrapped
-      // it, so the request it sets from Fit width to 50% is the old, taller
-      // layout's; left there, the sheet only ever grew and its height
-      // depended on the zooms before. Size it again to the text as it is.
-      queue_page_size();
+    // A letter whose line has not been shown to move skips both measures:
+    // each one walks every paragraph, and the status idle paginates if the
+    // line's box changed.
+    if (!page_edit_keeps_height()) {
+      int min_h = 0;
+      int nat_h = 0;
+      text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
+      if (nat_h > allocation.get_height()) {
+        grow_page_ = true;
+        queue_page_size();
+      } else if (page_height_stale()) {
+        // The text came out shorter than the height the page was last sized
+        // to. apply_page_size() measures the text before a zoom has rewrapped
+        // it, so the request it sets from Fit width to 50% is the old, taller
+        // layout's; left there, the sheet only ever grew and its height
+        // depended on the zooms before. Size it again to the text as it is.
+        queue_page_size();
+      }
     }
     if (restore_scroll_)
       restore_held_view(false);
@@ -1266,7 +1353,17 @@ void MainWindow::apply_page_size()
     styled_view_ = view_;
     restyle_tags();
   }
-  int height = page_height();
+  // A letter inside a line whose box has not been shown to change keeps the
+  // height already on the page. The status idle measures that line after
+  // GTK has laid it out and paginates if the box moved.
+  int cached_h = 0;
+  int cached_w = 0;
+  page_.get_size_request(cached_w, cached_h);
+  (void)cached_w;
+  const bool reuse = page_edit_keeps_height();
+  int height = cached_h;
+  if (!reuse)
+    height = page_height();
   int current_w = 0;
   int current_h = 0;
   page_.get_size_request(current_w, current_h);
@@ -1366,6 +1463,26 @@ void MainWindow::update_page_status()
 {
   if (!buffer_)
     return;
+  // The handler kept the page height for this letter. Judge the line the
+  // caret is on now, even if a paragraph-tag signal cleared the other flag.
+  if (page_letter_) {
+    page_edit_maybe_ = true;
+    page_edit_line_ = buffer_->get_iter_at_mark(buffer_->get_insert()).get_line();
+  }
+  // The caret is still on the line we paginated, and that line's pixels did
+  // not move, so the seams and "Page n of m" are already right.
+  if (page_box_unchanged()) {
+    page_edit_maybe_ = false;
+    page_letter_ = false;
+    return;
+  }
+  page_letter_ = false;
+  // The handler kept the old page height. The line's box moved, so measure
+  // before rebuilding the seams.
+  const bool remeasure = page_edit_maybe_;
+  page_edit_maybe_ = false;
+  if (remeasure)
+    apply_page_size();
   update_page_seams();
   int end_y = 0;
   int end_h = 0;
@@ -1379,6 +1496,7 @@ void MainWindow::update_page_status()
   const Glib::ustring label = page_label(page_count(content_end, content_caret, per));
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
+  remember_page_cache();
 }
 
 void MainWindow::set_zoom(int zoom)
@@ -1436,8 +1554,10 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 
   // The current paragraph's indents, as Word 97 marks them: the first line
   // hangs from the top edge, the left and right indents stand on the bottom.
-  if (!buffer_)
+  if (!buffer_) {
+    draw_tab_well(cr, ruler_kind_);
     return true;
+  }
   const Indents indents = focused_para().indents;
   const int left = origin_x + margin_left();
   const int right = origin_x + page_w - margin_right();
@@ -1475,6 +1595,150 @@ bool MainWindow::on_ruler_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   cr->fill_preserve();
   cr->set_source_rgb(0.25, 0.25, 0.25);
   cr->stroke();
+
+  // Custom stops only. The half-inch grid stays off the ruler; Tab still
+  // lands on it. A drag previews the unsorted list so the grabbed index holds.
+  const std::vector<TabStop> live = focused_para().tabs;
+  const std::vector<TabStop>& preview = ruler_drag_ ? ruler_tabs_ : live;
+  for (const TabStop& stop : preview) {
+    const double sx = left + indent_px(stop.position) + 0.5;
+    if (stop.align == TabAlign::Bar) {
+      cr->set_source_rgb(0.2, 0.2, 0.2);
+      cr->set_line_width(1);
+      cr->move_to(sx, 2);
+      cr->line_to(sx, h - 2);
+      cr->stroke();
+    } else {
+      stroke_tab_icon(cr, sx, h / 2.0, stop.align);
+    }
+  }
+  draw_tab_well(cr, ruler_kind_);
+  return true;
+}
+
+int MainWindow::ruler_twips(int x)
+{
+  int origin_x = 0;
+  int origin_y = 0;
+  page_.translate_coordinates(ruler_, 0, 0, origin_x, origin_y);
+  const double z = zoom_factor() > 0 ? zoom_factor() : 1.0;
+  const int dx = x - (origin_x + margin_left());
+  int twips = static_cast<int>(std::lround(static_cast<double>(dx) * kScreenPageTwips /
+                                           (static_cast<double>(kScreenPageWidth) * z)));
+  if (twips < 0)
+    twips = 0;
+  // An eighth of an inch.
+  twips = ((twips + 90) / 180) * 180;
+  if (twips > kMaxIndent)
+    twips = kMaxIndent;
+  return twips;
+}
+
+bool MainWindow::on_ruler_press(GdkEventButton* event)
+{
+  if (!event || event->button != 1 || event->type != GDK_BUTTON_PRESS || !buffer_)
+    return false;
+  if (event->x < 18.0) {
+    ruler_kind_ = next_ruler_kind(ruler_kind_);
+    ruler_.queue_draw();
+    return true;
+  }
+  int origin_x = 0;
+  int origin_y = 0;
+  page_.translate_coordinates(ruler_, 0, 0, origin_x, origin_y);
+  const int left = origin_x + margin_left();
+  const int page_w = page_.get_allocated_width();
+  const int right = origin_x + page_w - margin_right();
+  std::vector<TabStop> tabs = focused_para().tabs;
+  int grab = -1;
+  double best = 6.0;
+  for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
+    const double sx = left + indent_px(tabs[static_cast<size_t>(i)].position) + 0.5;
+    const double dist = std::fabs(event->x - sx);
+    if (dist <= best) {
+      best = dist;
+      grab = i;
+    }
+  }
+  if (grab < 0) {
+    const Indents indents = focused_para().indents;
+    const double marks[3] = {left + indent_px(indents.left + indents.first) + 0.5,
+                             left + indent_px(indents.left) + 0.5,
+                             right - indent_px(indents.right) + 0.5};
+    for (double mark : marks) {
+      if (std::fabs(event->x - mark) <= 5.0)
+        return true;
+    }
+    if (static_cast<int>(tabs.size()) >= kMaxTabStops)
+      return true;
+    const int twips = ruler_twips(static_cast<int>(std::lround(event->x)));
+    for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
+      if (tabs[static_cast<size_t>(i)].position == twips) {
+        grab = i;
+        break;
+      }
+    }
+    if (grab < 0) {
+      TabStop stop;
+      stop.position = twips;
+      stop.align = ruler_kind_;
+      stop.leader = TabLeader::None;
+      tabs.push_back(stop);
+      grab = static_cast<int>(tabs.size()) - 1;
+    }
+  }
+  ruler_tabs_ = std::move(tabs);
+  ruler_grab_ = grab;
+  ruler_press_x_ = static_cast<int>(std::lround(event->x));
+  ruler_drag_ = true;
+  ruler_moved_ = false;
+  ruler_.queue_draw();
+  return true;
+}
+
+bool MainWindow::on_ruler_motion(GdkEventMotion* event)
+{
+  if (!ruler_drag_ || !event || (event->state & GDK_BUTTON1_MASK) == 0)
+    return false;
+  if (ruler_grab_ < 0 || ruler_grab_ >= static_cast<int>(ruler_tabs_.size()))
+    return false;
+  if (std::fabs(event->x - ruler_press_x_) <= 6.0)
+    return true;
+  const int twips = ruler_twips(static_cast<int>(std::lround(event->x)));
+  TabStop& stop = ruler_tabs_[static_cast<size_t>(ruler_grab_)];
+  if (stop.position != twips) {
+    stop.position = twips;
+    ruler_moved_ = true;
+    ruler_.queue_draw();
+  }
+  return true;
+}
+
+bool MainWindow::on_ruler_release(GdkEventButton* event)
+{
+  if (!event || event->button != 1 || !ruler_drag_)
+    return false;
+  std::vector<TabStop> tabs = std::move(ruler_tabs_);
+  ruler_tabs_.clear();
+  const int grab = ruler_grab_;
+  const bool moved = ruler_moved_;
+  ruler_drag_ = false;
+  ruler_moved_ = false;
+  ruler_grab_ = -1;
+  const int height = std::max(1, ruler_.get_allocated_height());
+  if (grab >= 0 && grab < static_cast<int>(tabs.size())) {
+    if (event->y < -8.0 || event->y > height + 8.0) {
+      tabs.erase(tabs.begin() + grab);
+    } else if (moved) {
+      // Last, so a stop dropped on another one wins when the list is clamped.
+      TabStop kept = tabs[static_cast<size_t>(grab)];
+      kept.position = ruler_twips(static_cast<int>(std::lround(event->x)));
+      tabs.erase(tabs.begin() + grab);
+      tabs.push_back(kept);
+    }
+  }
+  apply_focused_tabs(std::move(tabs));
+  ruler_.queue_draw();
   return true;
 }
 
@@ -1507,6 +1771,7 @@ int MainWindow::print_page_count() const
 {
   // The same count as the status bar. The widget is taller than that by the
   // gray gaps between sheets, and those gaps are not pages.
+  ++page_walks_;
   if (!buffer_)
     return 1;
   int end_y = 0;

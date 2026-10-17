@@ -373,6 +373,32 @@ constexpr int kListHang = 360;
 // Word 97's default tab stops: every half inch from the left margin.
 constexpr int kDefaultTab = 720;
 
+// Word 97's tab stops. `position` is twips from the left margin. A bar draws
+// a vertical line and does not align text. A leader fills the gap before the
+// text that landed on the stop. Pango aligns left, center, right, and
+// decimal; bar and leaders are drawn.
+enum class TabAlign { Left, Center, Right, Decimal, Bar };
+enum class TabLeader { None, Dot, Hyphen, Underline };
+
+struct TabStop {
+  int position = 0;
+  TabAlign align = TabAlign::Left;
+  TabLeader leader = TabLeader::None;
+};
+
+// Word 97's Tabs dialog holds fifty stops.
+constexpr int kMaxTabStops = 50;
+
+inline bool operator==(const TabStop& a, const TabStop& b)
+{
+  return a.position == b.position && a.align == b.align && a.leader == b.leader;
+}
+
+inline bool operator!=(const TabStop& a, const TabStop& b)
+{
+  return !(a == b);
+}
+
 // A named paragraph style, as Word 97's Format > Style: a character format
 // and a paragraph format the paragraphs using it share. Paragraphs keep their
 // own resolved formatting too; a style is applied to them, and an edit to a
@@ -392,6 +418,9 @@ struct Style {
   Spacing spacing;
   Borders borders;
   Shading shading;
+  // Custom tab stops. Empty means the default half-inch grid (or the
+  // document's \deftab). A style passes these on the way it passes borders.
+  std::vector<TabStop> tabs;
   // The outline level the style gives: 0 for body text, 1 through 6.
   int heading = 0;
 };
@@ -433,6 +462,9 @@ struct Paragraph {
   Spacing spacing;
   Borders borders;
   Shading shading;
+  // Custom tab stops. Empty uses the document's default interval. Stops set
+  // on the paragraph replace the style's when they differ.
+  std::vector<TabStop> tabs;
   ListFormat list;
   std::vector<Run> runs;
   // An empty paragraph's own character format, its paragraph mark's in Word:
@@ -464,6 +496,7 @@ constexpr unsigned kDirectAfter = 32;
 constexpr unsigned kDirectLine = 64;
 constexpr unsigned kDirectBorders = 128;
 constexpr unsigned kDirectShading = 256;
+constexpr unsigned kDirectTabs = 512;
 
 struct Document {
   std::vector<Paragraph> paragraphs;
@@ -473,6 +506,9 @@ struct Document {
   // Paper, margins, and columns. The default is omitted from the file, so a
   // document from before page setup still saves as the same bytes.
   PageSetup page;
+  // \deftab, twips. 720 is omitted so a document with no custom stops still
+  // saves as the same bytes.
+  int default_tab = kDefaultTab;
   // The header and footer stories. Empty is omitted from the file.
   std::vector<Paragraph> header;
   std::vector<Paragraph> footer;
@@ -565,6 +601,17 @@ bool indents_fit(const Indents& indents);
 
 // A level outside 0 through 8 moves to the nearer end. No list has no level.
 ListFormat clamp_list(ListFormat list);
+// Positions land on 0 through kMaxIndent, alignments and leaders on the
+// enums above. Stops share no position (the later one wins) and stay in
+// order. More than kMaxTabStops drops the rest. A bar has no leader.
+std::vector<TabStop> clamp_tabs(std::vector<TabStop> tabs);
+// 1 through kMaxIndent. Anything else is the half-inch default.
+int clamp_default_tab(int tab);
+// The next stop at or after `from` twips. Bar stops do not take text. Custom
+// stops replace the default grid through the last of them; `interval`
+// continues after that, measured from the left margin. An empty list is that
+// grid alone.
+int tab_at(const std::vector<TabStop>& stops, int interval, int from);
 // The indents a new list item takes at a level.
 Indents list_indents(int level);
 // Each paragraph's number: 0 for a bullet or plain paragraph. Numbers count

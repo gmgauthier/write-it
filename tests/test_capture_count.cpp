@@ -3,10 +3,10 @@
 // The real window, under a display. capture() copies the whole document, so
 // a keystroke must not call it for the title, the list labels it draws, or
 // the centred-item shifts: in a 1,000-paragraph document each copy costs a
-// keystroke real time. Typing one character may capture only for undo's
-// snapshot and its compare (on_user_begin and on_user_end, until undo
-// records operations instead), so at most 2 in all, and a redraw with
-// nothing changed captures nothing.
+// keystroke real time. A note-free document has nothing for
+// compact_body_notes to copy, so one character captures nothing. A letter
+// whose line box does not change does not paginate. Enter does. A redraw
+// with nothing changed captures nothing.
 //
 // Each document is opened, the caret placed in the middle, and a key pressed
 // as the keyboard sends it; the count covers every idle and draw it causes.
@@ -61,6 +61,10 @@ struct MainWindowProbe {
   static long captures(MainWindow& w)
   {
     return w.captures_;
+  }
+  static long page_walks(MainWindow& w)
+  {
+    return w.page_walks_;
   }
   // list_lines() against capture(): the first difference, or "".
   static std::string compare_lines(MainWindow& w)
@@ -215,6 +219,8 @@ void measure(writeit::MainWindow& window, const std::string& home, Kind kind)
   MainWindowProbe::text(window).grab_focus();
   MainWindowProbe::place_at_end(window, kParagraphs / 2);
   settle();
+  // Open has paginated. A later letter is measured against that.
+  CHECK(MainWindowProbe::page_walks(window) > 0);
 
   int draws = 0;
   auto counting = MainWindowProbe::text(window).signal_draw().connect(
@@ -226,13 +232,22 @@ void measure(writeit::MainWindow& window, const std::string& home, Kind kind)
 
   // One character typed.
   long before = MainWindowProbe::captures(window);
+  const long walks_before = MainWindowProbe::page_walks(window);
   press(window, GDK_KEY_x);
   settle();
   const long typed = MainWindowProbe::captures(window) - before;
-  std::cout << "  " << name_of(kind) << ": one key, " << typed << " captures, " << draws
-            << " draws\n";
+  const long walked = MainWindowProbe::page_walks(window) - walks_before;
+  std::cout << "  " << name_of(kind) << ": one key, " << typed << " captures, " << walked
+            << " page walks, " << draws << " draws\n";
   CHECK(MainWindowProbe::line_text(window, kParagraphs / 2).raw().back() == 'x');
-  CHECK(typed <= 2);
+  CHECK(typed == 0);
+  CHECK(walked == 0);
+
+  // Enter changes the line count, so the page is measured again.
+  const long enter_before = MainWindowProbe::page_walks(window);
+  press(window, GDK_KEY_Return);
+  settle();
+  CHECK(MainWindowProbe::page_walks(window) > enter_before);
 
   // A redraw with nothing changed.
   draws = 0;
@@ -340,7 +355,7 @@ void compare(const std::string& home)
 
 }  // namespace
 
-constexpr int kChecks = 22;
+constexpr int kChecks = 31;
 
 int main(int argc, char* argv[])
 {

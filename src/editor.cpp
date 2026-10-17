@@ -13,6 +13,8 @@
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
 
+#include <pango/pango.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -332,6 +334,94 @@ Shading shading_from(const std::vector<int>& values, size_t at)
   return clamp_shading(shading);
 }
 
+// A tab block sits in front of the tag this program already writes, under its
+// own prefix, so a paragraph with no stops keeps the bytes it has always had.
+enum class Peel { No, Ok, Bad };
+
+Peel peel_tabs(const std::string& name, const char* chrome_prefix, const char* plain_prefix,
+               const char* chrome_body, const char* plain_body, std::vector<TabStop>& tabs,
+               std::string& body)
+{
+  const std::string chrome_head = std::string(chrome_prefix) + '\x1f';
+  const std::string plain_head = std::string(plain_prefix) + '\x1f';
+  bool chrome = false;
+  std::string rest;
+  if (name.compare(0, chrome_head.size(), chrome_head) == 0) {
+    chrome = true;
+    rest = name.substr(chrome_head.size());
+  } else if (name.compare(0, plain_head.size(), plain_head) == 0) {
+    rest = name.substr(plain_head.size());
+  } else {
+    return Peel::No;
+  }
+  std::vector<int> nums;
+  std::string current;
+  int need = -1;
+  for (size_t i = 0; i <= rest.size(); ++i) {
+    const bool boundary = i == rest.size() || rest[i] == '\x1f';
+    if (!boundary) {
+      current.push_back(rest[i]);
+      continue;
+    }
+    if (current.empty())
+      return Peel::Bad;
+    try {
+      nums.push_back(std::stoi(current));
+    } catch (const std::exception&) {
+      return Peel::Bad;
+    }
+    current.clear();
+    if (need < 0) {
+      if (nums[0] < 1 || nums[0] > kMaxTabStops)
+        return Peel::Bad;
+      need = 1 + nums[0] * 3;
+    }
+    if (static_cast<int>(nums.size()) == need) {
+      body = chrome ? chrome_body : plain_body;
+      if (i < rest.size())
+        body.append(rest, i, std::string::npos);
+      break;
+    }
+    if (i == rest.size())
+      return Peel::Bad;
+  }
+  if (need < 0 || static_cast<int>(nums.size()) != need)
+    return Peel::Bad;
+  tabs.clear();
+  for (int n = 0; n < nums[0]; ++n) {
+    TabStop stop;
+    stop.position = nums[static_cast<size_t>(1 + n * 3)];
+    stop.align = static_cast<TabAlign>(nums[static_cast<size_t>(2 + n * 3)]);
+    stop.leader = static_cast<TabLeader>(nums[static_cast<size_t>(3 + n * 3)]);
+    tabs.push_back(stop);
+  }
+  tabs = clamp_tabs(std::move(tabs));
+  if (tabs.empty())
+    return Peel::Bad;
+  return Peel::Ok;
+}
+
+std::string prefix_tabs(std::string name, const char* old_chrome, size_t old_chrome_len,
+                        const char* old_plain, size_t old_plain_len, const char* neu_chrome,
+                        const char* neu_plain, const std::vector<TabStop>& raw)
+{
+  const std::vector<TabStop> tabs = clamp_tabs(raw);
+  if (tabs.empty())
+    return name;
+  const bool chrome = name.compare(0, old_chrome_len, old_chrome) == 0;
+  if (!chrome && name.compare(0, old_plain_len, old_plain) != 0)
+    return name;
+  std::string out = chrome ? neu_chrome : neu_plain;
+  append_field(out, static_cast<int>(tabs.size()));
+  for (const TabStop& stop : tabs) {
+    append_field(out, stop.position);
+    append_field(out, static_cast<int>(stop.align));
+    append_field(out, static_cast<int>(stop.leader));
+  }
+  out.append(name, chrome ? old_chrome_len : old_plain_len, std::string::npos);
+  return out;
+}
+
 std::string para_name(const ParaFormat& format)
 {
   const Indents& indents = format.indents;
@@ -362,33 +452,40 @@ std::string para_name(const ParaFormat& format)
     append_chrome(name, format);
   name += '\x1f';
   name += format.style;
-  return name;
+  return prefix_tabs(std::move(name), "parab", 5, "para", 4, "paratb", "parat", format.tabs);
 }
 
 bool parse_para(const std::string& name, ParaFormat& format)
 {
+  // "parat" and "paratb" carry stops and peel back to the tag underneath.
   // "parab" is one character longer than "para", so a tag from before borders
   // still matches "para" and nothing else.
+  std::vector<TabStop> tabs;
+  std::string body;
+  const Peel peeled = peel_tabs(name, "paratb", "parat", "parab", "para", tabs, body);
+  if (peeled == Peel::Bad)
+    return false;
+  const std::string& source = peeled == Peel::Ok ? body : name;
   bool border_tag = false;
   size_t prefix = 0;
   const std::string parab = std::string("parab") + '\x1f';
   const std::string para = std::string("para") + '\x1f';
-  if (name.compare(0, parab.size(), parab) == 0) {
+  if (source.compare(0, parab.size(), parab) == 0) {
     border_tag = true;
     prefix = parab.size();
-  } else if (name.compare(0, para.size(), para) == 0) {
+  } else if (source.compare(0, para.size(), para) == 0) {
     prefix = para.size();
   } else {
     return false;
   }
   std::vector<std::string> parts;
   std::string current;
-  for (size_t i = prefix; i <= name.size(); ++i) {
-    if (i == name.size() || name[i] == '\x1f') {
+  for (size_t i = prefix; i <= source.size(); ++i) {
+    if (i == source.size() || source[i] == '\x1f') {
       parts.push_back(current);
       current.clear();
     } else {
-      current.push_back(name[i]);
+      current.push_back(source[i]);
     }
   }
   // The 47 border ints sit immediately before the style name. Peel them so
@@ -506,6 +603,7 @@ bool parse_para(const std::string& name, ParaFormat& format)
     format.cell.borders.right = side_from(chrome, 39);
     format.cell.shading = shading_from(chrome, 44);
   }
+  format.tabs = peeled == Peel::Ok ? tabs : std::vector<TabStop>{};
   format.style = parts.back();
   return true;
 }
@@ -528,7 +626,8 @@ int heading_level_name(const std::string& name)
 // paragraph has any. The body's para tag carries the page margins, so a cell
 // does not use it. Four numbers is a cell from before spacing.
 std::string cpara_name(const Indents& indents, Align align, const Spacing& spacing, int basis,
-                       int heading, const Borders& borders, const Shading& shading)
+                       int heading, const Borders& borders, const Shading& shading,
+                       const std::vector<TabStop>& tabs)
 {
   const bool chrome = !borders_plain(borders) || !shading_plain(shading);
   std::string name = chrome ? "cparab" : "cpara";
@@ -546,28 +645,36 @@ std::string cpara_name(const Indents& indents, Align align, const Spacing& spaci
   }
   if (chrome)
     append_para_chrome(name, borders, shading);
-  return name;
+  return prefix_tabs(std::move(name), "cparab", 6, "cpara", 5, "cparatb", "cparat", tabs);
 }
 
 bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacing& spacing,
-                 int& basis, int& heading, Borders& borders, Shading& shading)
+                 int& basis, int& heading, Borders& borders, Shading& shading,
+                 std::vector<TabStop>& tabs)
 {
+  std::string body;
+  const Peel peeled = peel_tabs(name, "cparatb", "cparat", "cparab", "cpara", tabs, body);
+  if (peeled == Peel::Bad)
+    return false;
+  if (peeled != Peel::Ok)
+    tabs.clear();
+  const std::string& source = peeled == Peel::Ok ? body : name;
   bool border_tag = false;
   size_t prefix = 0;
   const std::string cparab = std::string("cparab") + '\x1f';
   const std::string cpara = std::string("cpara") + '\x1f';
-  if (name.compare(0, cparab.size(), cparab) == 0) {
+  if (source.compare(0, cparab.size(), cparab) == 0) {
     border_tag = true;
     prefix = cparab.size();
-  } else if (name.compare(0, cpara.size(), cpara) == 0) {
+  } else if (source.compare(0, cpara.size(), cpara) == 0) {
     prefix = cpara.size();
   } else {
     return false;
   }
   std::vector<int> values;
   std::string current;
-  for (size_t i = prefix; i <= name.size(); ++i) {
-    if (i == name.size() || name[i] == '\x1f') {
+  for (size_t i = prefix; i <= source.size(); ++i) {
+    if (i == source.size() || source[i] == '\x1f') {
       if (current.empty())
         return false;
       try {
@@ -576,10 +683,10 @@ bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacin
         return false;
       }
       current.clear();
-      if (i == name.size())
+      if (i == source.size())
         break;
     } else {
-      current.push_back(name[i]);
+      current.push_back(source[i]);
     }
   }
   borders = Borders{};
@@ -880,7 +987,7 @@ void MainWindow::build_editor()
   // marks its range for update_list_tabs(); a paragraph format can renumber
   // the items below, a character format changes only its own label's font.
   auto lists_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
-                             const Gtk::TextIter& end) {
+                             const Gtk::TextIter& end, bool applied) {
     if (seaming_ || shifting_ || tabbing_)
       return;
     const std::string name = tag_name(tag);
@@ -888,34 +995,47 @@ void MainWindow::build_editor()
         is_spacing_gap(name))
       return;
     ParaFormat ignored;
-    if (parse_para(name, ignored))
+    // Re-applying the tag the paragraph already has does not renumber. Taking
+    // one off does. A load still renumbers: the cache may not have seen this
+    // paragraph yet, and the same tag object is shared by that format.
+    if (parse_para(name, ignored) &&
+        (loading_ || restoring_ || !applied || !paragraph_keeps_tag(tag, start, end)))
       tabs_renumber_ = true;
     note_list_tabs(start, end);
     queue_list_shifts();
     queue_list_tabs();
   };
-  buffer_->signal_apply_tag().connect(lists_on_tag);
+  buffer_->signal_apply_tag().connect(
+      [lists_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                     const Gtk::TextIter& end) { lists_on_tag(tag, start, end, true); });
   buffer_->signal_apply_tag().connect(sigc::mem_fun(*this, &MainWindow::on_tag_applied));
-  buffer_->signal_remove_tag().connect(lists_on_tag);
+  buffer_->signal_remove_tag().connect(
+      [lists_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                     const Gtk::TextIter& end) { lists_on_tag(tag, start, end, false); });
   // Text edits mark their range too; a new or removed paragraph renumbers.
   buffer_->signal_insert().connect(
       [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
         auto start = end;
         start.backward_chars(static_cast<int>(text.length()));
-        if (text.find('\n') != Glib::ustring::npos) {
+        const bool structure = text.find('\n') != Glib::ustring::npos;
+        if (structure) {
           tabs_renumber_ = true;
           // The first newline of this keystroke. A page break stays on the
           // paragraph that had it; the line Enter adds does not take another.
           if (in_user_ && inserted_newline_at_ < 0)
             inserted_newline_at_ = start.get_offset();
         }
+        note_page_edit(start.get_line(), structure);
         note_list_tabs(start, end);
       },
       true);
   buffer_->signal_erase().connect(
       [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
-        if (buffer_->get_slice(start, end, true).find('\n') != Glib::ustring::npos)
+        const bool structure =
+            buffer_->get_slice(start, end, true).find('\n') != Glib::ustring::npos;
+        if (structure)
           tabs_renumber_ = true;
+        note_page_edit(start.get_line(), structure);
       },
       false);
   buffer_->signal_erase().connect(
@@ -942,14 +1062,26 @@ void MainWindow::build_editor()
           list_lines_valid_ = false;
       },
       false);
-  auto changes_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
-                               const Gtk::TextIter&) {
+  auto changes_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                               const Gtk::TextIter& end, bool applied) {
     ParaFormat ignored;
-    if (parse_para(tag_name(tag), ignored))
-      list_lines_valid_ = false;
+    if (!parse_para(tag_name(tag), ignored))
+      return;
+    // The apply-tag signal runs before the tag is added. A paragraph that
+    // already carries it is being tagged again, so the list and the line box
+    // stay as they are. Removing it does change them. A load always
+    // invalidates.
+    if (applied && !loading_ && !restoring_ && paragraph_keeps_tag(tag, start, end))
+      return;
+    list_lines_valid_ = false;
+    note_page_edit(start.get_line(), true);
   };
-  buffer_->signal_apply_tag().connect(changes_on_tag);
-  buffer_->signal_remove_tag().connect(changes_on_tag);
+  buffer_->signal_apply_tag().connect(
+      [changes_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                       const Gtk::TextIter& end) { changes_on_tag(tag, start, end, true); });
+  buffer_->signal_remove_tag().connect(
+      [changes_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                       const Gtk::TextIter& end) { changes_on_tag(tag, start, end, false); });
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
   // The style list and the Table menu focus the body while the caret is still
   // in the cell. A click or a key here is the caret actually moving.
@@ -1023,6 +1155,7 @@ void MainWindow::build_editor()
   activate(find_item_, [this] { present_find(false); });
   activate(replace_item_, [this] { present_find(true); });
   activate(paragraph_item_, [this] { on_paragraph(); });
+  activate(tabs_item_, [this] { on_tabs(); });
   activate(borders_item_, [this] { on_borders(); });
   activate(bullets_item_, [this] { toggle_list_kind(ListKind::Bullet); });
   activate(numbering_item_, [this] { toggle_list_kind(ListKind::Number); });
@@ -1537,6 +1670,7 @@ Document MainWindow::capture() const
         paragraph.basis = pending_para_.basis;
         paragraph.borders = pending_para_.borders;
         paragraph.shading = pending_para_.shading;
+        paragraph.tabs = pending_para_.tabs;
       } else if (!doc.paragraphs.empty()) {
         paragraph.indents = doc.paragraphs.back().indents;
         paragraph.align = doc.paragraphs.back().align;
@@ -1551,6 +1685,7 @@ Document MainWindow::capture() const
         paragraph.basis = doc.paragraphs.back().basis;
         paragraph.borders = doc.paragraphs.back().borders;
         paragraph.shading = doc.paragraphs.back().shading;
+        paragraph.tabs = doc.paragraphs.back().tabs;
       }
     }
     // The outline level belongs to the paragraph's style. A heading tag on
@@ -1611,6 +1746,7 @@ Document MainWindow::capture() const
           paragraph.basis = format.basis;
           paragraph.borders = format.borders;
           paragraph.shading = format.shading;
+          paragraph.tabs = format.tabs;
           have_para = true;
         }
       }
@@ -1661,6 +1797,7 @@ Document MainWindow::capture() const
     doc.paragraphs.push_back(Paragraph{});
   doc.styles = styles_;
   doc.page = page_setup_;
+  doc.default_tab = default_tab_;
   doc.header = header_;
   doc.footer = footer_;
   doc.notes = notes_;
@@ -1675,6 +1812,9 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   note_editing_ = false;
   release_note_scroll(false);
   loading_ = true;
+  page_letter_ = false;
+  page_edit_maybe_ = false;
+  page_cache_valid_ = false;
   cell_edit_ = CellEdit{};
   cell_typing_on_ = false;
   styles_ = doc.styles;
@@ -1682,6 +1822,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   if (!(page_setup_ == next_page))
     styled_zoom_ = -1;
   page_setup_ = next_page;
+  default_tab_ = clamp_default_tab(doc.default_tab);
   header_ = doc.header;
   footer_ = doc.footer;
   notes_ = doc.notes;
@@ -1750,6 +1891,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       pending_para_.spacing = clamp_spacing(paragraph.spacing);
       pending_para_.borders = clamp_borders(paragraph.borders);
       pending_para_.shading = clamp_shading(paragraph.shading);
+      pending_para_.tabs = clamp_tabs(paragraph.tabs);
       pending_para_.cell.borders = clamp_borders(paragraph.cell.borders);
       pending_para_.cell.shading = clamp_shading(paragraph.cell.shading);
       pending_para_set_ = true;
@@ -2046,6 +2188,9 @@ void MainWindow::on_user_begin()
   if (loading_ || restoring_ || dropping_pad_)
     return;
   inserted_newline_at_ = -1;
+  // A letter keeps the page height. A newline or a new paragraph format
+  // clears this before the height is chosen.
+  page_letter_ = true;
   in_user_ = true;
   touched_ = false;
   open_step();
@@ -2552,9 +2697,11 @@ void MainWindow::restyle_buffer(const Glib::RefPtr<Gtk::TextBuffer>& buffer)
     int heading = 0;
     Borders borders;
     Shading shading;
-    if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading)) {
+    std::vector<TabStop> tabs;
+    if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading,
+                    tabs)) {
       std::string font = "Sans";
-      style_cell_para(tag, indents, align, spacing, basis, heading, font);
+      style_cell_para(tag, indents, align, spacing, basis, heading, font, tabs);
       Rgb rgb;
       if (shading_color(shading, rgb))
         tag->property_paragraph_background() = rgb_hex(rgb);
@@ -2699,9 +2846,113 @@ std::vector<int> inverse_note_remap(const std::vector<int>& remap)
 
 }  // namespace
 
+void MainWindow::note_page_edit(int line, bool structure)
+{
+  if (seaming_ || dropping_pad_ || loading_ || restoring_)
+    return;
+  if (structure) {
+    page_edit_maybe_ = false;
+    page_letter_ = false;
+    return;
+  }
+  if (!page_edit_maybe_) {
+    page_edit_maybe_ = true;
+    page_edit_line_ = line;
+    return;
+  }
+  if (line != page_edit_line_) {
+    page_edit_maybe_ = false;
+    page_letter_ = false;
+  }
+}
+
+bool MainWindow::page_edit_keeps_height() const
+{
+  if (!page_letter_ || !page_cache_valid_)
+    return false;
+  if (view_ != page_cache_view_ || zoom_factor() != page_cache_zoom_)
+    return false;
+  if (text_.get_allocated_width() != page_cache_width_ || page_cache_width_ <= 1)
+    return false;
+  int width = 0;
+  int height = 0;
+  page_.get_size_request(width, height);
+  return height > 0;
+}
+
+bool MainWindow::page_box_unchanged() const
+{
+  if (!page_edit_maybe_ || !page_cache_valid_ || !buffer_)
+    return false;
+  if (page_edit_line_ != page_cache_line_ || page_edit_line_ < 0)
+    return false;
+  if (page_edit_line_ >= buffer_->get_line_count())
+    return false;
+  if (view_ != page_cache_view_ || zoom_factor() != page_cache_zoom_)
+    return false;
+  if (text_.get_allocated_width() != page_cache_width_ || page_cache_width_ <= 1)
+    return false;
+  if (buffer_->get_line_count() != page_cache_lines_)
+    return false;
+  if (note_block_px() != page_cache_notes_)
+    return false;
+  int y = 0;
+  int height = 0;
+  text_.get_line_yrange(buffer_->get_iter_at_line(page_edit_line_), y, height);
+  return y == page_cache_y_ && height == page_cache_h_ && height > 0;
+}
+
+void MainWindow::remember_page_cache()
+{
+  if (!buffer_ || text_.get_allocated_width() <= 1)
+    return;
+  const auto caret = buffer_->get_iter_at_mark(buffer_->get_insert());
+  int y = 0;
+  int height = 0;
+  text_.get_line_yrange(caret, y, height);
+  if (height <= 0)
+    return;
+  page_cache_line_ = caret.get_line();
+  page_cache_y_ = y;
+  page_cache_h_ = height;
+  page_cache_lines_ = buffer_->get_line_count();
+  page_cache_width_ = text_.get_allocated_width();
+  page_cache_notes_ = note_block_px();
+  page_cache_zoom_ = zoom_factor();
+  page_cache_view_ = view_;
+  page_cache_valid_ = true;
+}
+
+bool MainWindow::paragraph_keeps_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
+                                     const Gtk::TextIter& start, const Gtk::TextIter& /*end*/) const
+{
+  // Called from apply-tag, which runs before the tag is added. The paragraph
+  // already has it when its first character does, including a re-apply that
+  // starts there. An apply that starts later keeps the list cache when some
+  // earlier character already has it: that is the character the cache read.
+  if (!buffer_ || !tag)
+    return false;
+  const int from = paragraph_start(start.get_offset());
+  if (buffer_->get_iter_at_offset(from).has_tag(tag))
+    return true;
+  if (start.get_offset() <= from)
+    return false;
+  for (auto iter = buffer_->get_iter_at_offset(from); iter.get_offset() < start.get_offset();
+       ++iter) {
+    if (iter.has_tag(tag))
+      return true;
+  }
+  return false;
+}
+
 void MainWindow::compact_body_notes()
 {
   if (restoring_ || !undo_.is_open())
+    return;
+  // Nothing to drop, and capture() would copy every paragraph. A marker
+  // with no note is left as it is: drop_unmarked_notes is a no-op on an
+  // empty list.
+  if (notes_.empty())
     return;
   const Document doc = capture();
   const NoteDrop drop = drop_unmarked_notes(doc);
@@ -2904,7 +3155,7 @@ void MainWindow::apply_spacing_pixels(const Glib::RefPtr<Gtk::TextTag>& tag, con
 
 void MainWindow::style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const Indents& indents,
                                  Align align, const Spacing& spacing, int basis, int heading,
-                                 const std::string& font) const
+                                 const std::string& font, const std::vector<TabStop>& tabs) const
 {
   if (!tag)
     return;
@@ -2926,6 +3177,7 @@ void MainWindow::style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const In
     tag->property_indent() = indent_px(indents.first);
   }
   apply_spacing_pixels(tag, spacing, basis, font, heading, false);
+  apply_tab_stops(tag, tabs, indents, true, false);
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
@@ -2936,7 +3188,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::Tex
   const int basis = basis_half_points(paragraph);
   const Glib::ustring name =
       cpara_name(paragraph.indents, paragraph.align, paragraph.spacing, basis, paragraph.heading,
-                 paragraph.borders, paragraph.shading);
+                 paragraph.borders, paragraph.shading, paragraph.tabs);
   auto table = buffer->get_tag_table();
   auto tag = table->lookup(name);
   if (!tag) {
@@ -2944,7 +3196,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::Tex
     // Restyle passes Sans. Using the style's font here would make a zoom
     // restyle jump to a different line.
     style_cell_para(tag, paragraph.indents, paragraph.align, paragraph.spacing, basis,
-                    paragraph.heading, "Sans");
+                    paragraph.heading, "Sans", paragraph.tabs);
     Rgb rgb;
     if (shading_color(paragraph.shading, rgb))
       tag->property_paragraph_background() = rgb_hex(rgb);
@@ -4061,6 +4313,69 @@ void MainWindow::on_size_entered()
   }
 }
 
+void MainWindow::apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag,
+                                 const std::vector<TabStop>& tabs, const Indents& indents,
+                                 bool cell, bool list) const
+{
+  if (!tag)
+    return;
+  // Pango measures from the layout origin, which is the tag's left margin.
+  // That margin already includes a hang, so a stop's pixel is its distance
+  // from the same origin. A bar is drawn, not given to Pango.
+  const int origin = !cell && list ? std::max(0, indents.left)
+                                   : std::max(0, indents.left + std::min(0, indents.first));
+  const int interval = clamp_default_tab(default_tab_);
+  const std::vector<TabStop> custom = clamp_tabs(tabs);
+  struct Placed {
+    int px;
+    PangoTabAlign align;
+  };
+  std::vector<Placed> placed;
+  int last = -1;
+  auto place = [&](int position, PangoTabAlign align) {
+    const int px = indent_px(position) - indent_px(origin);
+    if (px <= 0)
+      return;
+    if (!placed.empty() && px <= placed.back().px)
+      return;
+    placed.push_back(Placed{px, align});
+  };
+  for (const TabStop& stop : custom) {
+    last = stop.position;
+    if (stop.align == TabAlign::Bar)
+      continue;
+    PangoTabAlign align = PANGO_TAB_LEFT;
+    if (stop.align == TabAlign::Center)
+      align = PANGO_TAB_CENTER;
+    else if (stop.align == TabAlign::Right)
+      align = PANGO_TAB_RIGHT;
+    else if (stop.align == TabAlign::Decimal)
+      align = PANGO_TAB_DECIMAL;
+    place(stop.position, align);
+  }
+  int pos = interval;
+  if (!custom.empty()) {
+    pos = (last / interval + 1) * interval;
+    if (pos <= last)
+      pos += interval;
+  }
+  const int reach =
+      std::max(page_text_twips(page_setup_), indents.left + std::max(0, indents.first));
+  while (static_cast<int>(placed.size()) < 64 && pos <= reach && pos < kMaxIndent) {
+    place(pos, PANGO_TAB_LEFT);
+    pos += interval;
+  }
+  if (placed.empty()) {
+    tag->property_tabs_set() = false;
+    return;
+  }
+  Pango::TabArray array(static_cast<int>(placed.size()), true);
+  for (int i = 0; i < static_cast<int>(placed.size()); ++i)
+    pango_tab_array_set_tab(array.gobj(), i, placed[static_cast<size_t>(i)].align,
+                            placed[static_cast<size_t>(i)].px);
+  tag->property_tabs() = array;
+}
+
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
 {
   ParaFormat format;
@@ -4077,6 +4392,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag(const ParaFormat& raw)
   format.basis = raw.basis >= 2 ? raw.basis : 22;
   format.borders = clamp_borders(raw.borders);
   format.shading = clamp_shading(raw.shading);
+  format.tabs = clamp_tabs(raw.tabs);
   const Glib::ustring name = para_name(format);
   auto table = buffer_->get_tag_table();
   auto tag = table->lookup(name);
@@ -4140,6 +4456,7 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
   // gap. The sheet break belongs to ordinary text.
   const bool page_break = format.page_break && format.cell.table == 0;
   apply_spacing_pixels(tag, format.spacing, format.basis, font, heading, page_break);
+  apply_tab_stops(tag, format.tabs, format.indents, false, format.list.kind != ListKind::None);
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag_at(Gtk::TextIter iter) const
@@ -4688,6 +5005,15 @@ void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
         format.direct |= kDirectBorders;
       if (!(format.shading == paragraph.shading))
         format.direct |= kDirectShading;
+      if (format.tabs != paragraph.tabs)
+        format.direct |= kDirectTabs;
+      const Style* styled = find_style(styles_, format.style);
+      const std::vector<TabStop> from_style =
+          styled ? clamp_tabs(styled->tabs) : std::vector<TabStop>{};
+      if (clamp_tabs(format.tabs) == from_style) {
+        format.direct &= ~static_cast<unsigned>(kDirectTabs);
+        format.tabs = from_style;
+      }
       paragraph.indents = format.indents;
       paragraph.align = format.align;
       paragraph.list = format.list;
@@ -4695,6 +5021,7 @@ void MainWindow::apply_para_edit(const std::function<void(ParaFormat&)>& edit)
       paragraph.basis = format.basis;
       paragraph.borders = format.borders;
       paragraph.shading = format.shading;
+      paragraph.tabs = format.tabs;
       paragraph.direct = format.direct;
     }
   });
@@ -4792,6 +5119,7 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     paragraph.spacing = format.spacing;
     paragraph.borders = format.borders;
     paragraph.shading = format.shading;
+    paragraph.tabs = format.tabs;
     // No runs here. The line's size comes from the buffer, or a 20 pt
     // paragraph would be drawn as 11 pt after OK.
     paragraph.basis = basis_half_at(at);
@@ -4828,6 +5156,7 @@ void MainWindow::tag_paragraph(int start, const ParaFormat& format)
     pending_para_.spacing = clamp_spacing(format.spacing);
     pending_para_.borders = clamp_borders(format.borders);
     pending_para_.shading = clamp_shading(format.shading);
+    pending_para_.tabs = clamp_tabs(format.tabs);
     pending_para_.cell.borders = clamp_borders(format.cell.borders);
     pending_para_.cell.shading = clamp_shading(format.cell.shading);
     if (pending_para_.basis < 2)
@@ -5589,10 +5918,23 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::retab_paragraph(
     const int label_end =
         margin_left() + indent_px(indents.left + indents.first) + known->second + 1;
     if (label_end > margin_left() + indent_px(text_twips)) {
-      // The first half-inch stop from the left margin that clears it.
-      int stop = text_twips - ((text_twips % kDefaultTab) + kDefaultTab) % kDefaultTab;
-      while (margin_left() + indent_px(stop) < label_end && stop < 2 * kMaxIndent)
-        stop += kDefaultTab;
+      // No stops of its own: the same half-inch grid, at the document's
+      // interval. Stops of its own replace that grid up to the last one.
+      const int interval = clamp_default_tab(default_tab_);
+      int stop = 0;
+      if (line.format.tabs.empty()) {
+        stop = text_twips - ((text_twips % interval) + interval) % interval;
+        while (margin_left() + indent_px(stop) < label_end && stop < 2 * kMaxIndent)
+          stop += interval;
+      } else {
+        stop = tab_at(line.format.tabs, interval, text_twips);
+        while (margin_left() + indent_px(stop) < label_end && stop < kMaxIndent) {
+          const int next = tab_at(line.format.tabs, interval, stop + 1);
+          if (next <= stop)
+            break;
+          stop = next;
+        }
+      }
       // Relative to the paragraph tag's left margin, as its indent is.
       want = list_tab_tag(margin_left() + indent_px(stop) -
                           std::max(0, margin_left() + indent_px(indents.left)));
@@ -5665,6 +6007,27 @@ const std::vector<MainWindow::ListLine>& MainWindow::list_lines()
         format = list_lines_[i - 1].format;
       else
         format = ParaFormat{};
+    } else if (starts[i] < total) {
+      // para_format() takes the basis from the first run or the paragraph
+      // mark. A tag with default spacing does not store that size, so the
+      // name still says 11 pt.
+      auto text = buffer_->get_iter_at_offset(starts[i]);
+      if (text.get_char() == '\n') {
+        if (has_fmt(text)) {
+          const int half = half_points_of(format_of(text).size);
+          if (half >= 2)
+            format.basis = half;
+        }
+      } else {
+        for (; !text.is_end() && text.get_char() != '\n'; ++text) {
+          if (text.get_char() == kPageBreakPad)
+            continue;
+          const int half = half_points_of(format_of(text).size);
+          if (half >= 2)
+            format.basis = half;
+          break;
+        }
+      }
     }
     list_lines_[i].format = format;
     list_lines_[i].line = lines[i];
@@ -6547,6 +6910,7 @@ void MainWindow::update_page_seams()
   sync_draft_gaps();
   if (text_.get_allocated_width() <= 1)
     return;
+  ++page_walks_;
   // Measure the notes at the width they will wrap, not the width they had
   // at the previous zoom.
   fit_note_views();
@@ -6942,17 +7306,14 @@ void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
         cr->stroke();
       }
     }
-    bool more = false;
-    while (!iter.is_end()) {
-      if (iter.get_char() == '\n') {
-        iter.forward_char();
-        more = !iter.is_end();
-        break;
-      }
-      iter.forward_char();
-    }
-    if (!more)
+    // The next paragraph. A seam sits on the paragraph's first character, so
+    // the characters in between are not visited.
+    Gtk::TextIter match_start;
+    Gtk::TextIter match_end;
+    if (!iter.forward_search("\n", Gtk::TEXT_SEARCH_TEXT_ONLY, match_start, match_end) ||
+        match_end.is_end())
       break;
+    iter = match_end;
   }
 }
 
@@ -6967,7 +7328,8 @@ void MainWindow::draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr)
     if (any)
       return;
     const std::string name = tag_name(tag);
-    if (name.size() >= 5 && name.compare(0, 5, "parab") == 0)
+    if ((name.size() >= 5 && name.compare(0, 5, "parab") == 0) ||
+        (name.size() >= 6 && name.compare(0, 6, "paratb") == 0))
       any = true;
   });
   if (!any)
@@ -7062,7 +7424,8 @@ void MainWindow::draw_cell_paragraph_borders(Gtk::TextView& view,
     if (any)
       return;
     const std::string name = tag_name(tag);
-    if (name.size() >= 6 && name.compare(0, 6, "cparab") == 0)
+    if ((name.size() >= 6 && name.compare(0, 6, "cparab") == 0) ||
+        (name.size() >= 7 && name.compare(0, 7, "cparatb") == 0))
       any = true;
   });
   if (!any)
@@ -7079,13 +7442,16 @@ void MainWindow::draw_cell_paragraph_borders(Gtk::TextView& view,
     int heading = 0;
     Borders borders;
     Shading shading;
+    std::vector<TabStop> cell_tabs;
     bool found = false;
     for (const auto& tag : iter.get_tags()) {
-      if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading)) {
+      if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading,
+                      cell_tabs)) {
         found = true;
         break;
       }
     }
+    (void)cell_tabs;
     int end = offset;
     auto cursor = buffer->get_iter_at_offset(std::min(offset, count));
     while (!cursor.is_end()) {
@@ -7125,6 +7491,355 @@ void MainWindow::draw_cell_paragraph_borders(Gtk::TextView& view,
   }
 }
 
+namespace {
+
+void paint_leader(const Cairo::RefPtr<Cairo::Context>& cr, TabLeader leader, double x0, double x1,
+                  double baseline)
+{
+  if (x1 <= x0 + 1)
+    return;
+  if (leader == TabLeader::Underline) {
+    cr->set_line_width(1);
+    cr->move_to(x0, baseline + 0.5);
+    cr->line_to(x1, baseline + 0.5);
+    cr->stroke();
+    return;
+  }
+  const double step = leader == TabLeader::Hyphen ? 6 : 4;
+  const double mark = leader == TabLeader::Hyphen ? 3 : 1;
+  for (double x = x0 + 1; x + mark <= x1; x += step) {
+    cr->rectangle(x, baseline - 0.5, mark, 1);
+    cr->fill();
+  }
+}
+
+}  // namespace
+
+void MainWindow::paint_story_tabs(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                                  const Paragraph& paragraph, int offset, int len)
+{
+  const std::vector<TabStop> stops = clamp_tabs(paragraph.tabs);
+  if (stops.empty() || len <= 0)
+    return;
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int count = buffer->get_char_count();
+  if (offset < 0 || offset >= count)
+    return;
+  const int end = std::min(count, offset + len);
+  const Indents indents = clamp_indents(paragraph.indents);
+  const bool list = paragraph.list.kind != ListKind::None;
+  const int origin =
+      list ? std::max(0, indents.left) : std::max(0, indents.left + std::min(0, indents.first));
+  const int layout_left = view.get_left_margin() + indent_px(origin);
+  auto stop_x = [&](int position) { return layout_left + indent_px(position) - indent_px(origin); };
+  auto first = buffer->get_iter_at_offset(offset);
+  auto last = buffer->get_iter_at_offset(end > offset ? end - 1 : offset);
+  int y = 0;
+  int height = 0;
+  int last_y = 0;
+  int last_height = 0;
+  view.get_line_yrange(first, y, height);
+  view.get_line_yrange(last, last_y, last_height);
+  const Gdk::RGBA color = view.get_style_context()->get_color(view.get_state_flags());
+  cr->save();
+  cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(), color.get_alpha());
+  for (const TabStop& stop : stops) {
+    if (stop.align != TabAlign::Bar)
+      continue;
+    int wx = 0;
+    int top = 0;
+    int bottom = 0;
+    view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, stop_x(stop.position), y, wx, top);
+    view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, last_y + last_height, wx, bottom);
+    cr->set_line_width(1);
+    cr->move_to(wx + 0.5, top);
+    cr->line_to(wx + 0.5, bottom);
+    cr->stroke();
+  }
+  for (auto iter = buffer->get_iter_at_offset(offset); !iter.is_end() && iter.get_offset() < end;
+       ++iter) {
+    if (iter.get_char() != '\t')
+      continue;
+    Gdk::Rectangle rect;
+    view.get_iter_location(iter, rect);
+    const int right = rect.get_x() + rect.get_width();
+    const TabStop* match = nullptr;
+    for (const TabStop& stop : stops) {
+      if (stop.align == TabAlign::Bar || stop.leader == TabLeader::None)
+        continue;
+      if (std::abs(stop_x(stop.position) - right) <= 3)
+        match = &stop;
+    }
+    if (!match)
+      continue;
+    int x0 = 0;
+    int y0 = 0;
+    int x1 = 0;
+    int y1 = 0;
+    view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(),
+                                 rect.get_y() + rect.get_height() - 2, x0, y0);
+    view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, right, 0, x1, y1);
+    paint_leader(cr, match->leader, x0, x1, y0);
+  }
+  cr->restore();
+}
+
+void MainWindow::paint_story_border(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                                    const Paragraph& paragraph, int offset, int len)
+{
+  if (borders_plain(paragraph.borders) || len <= 0)
+    return;
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int width = view.get_allocated_width();
+  if (width <= 0)
+    return;
+  const int count = buffer->get_char_count();
+  if (offset < 0 || offset >= count)
+    return;
+  const int end = std::min(count, offset + len);
+  auto first = buffer->get_iter_at_offset(offset);
+  auto last = buffer->get_iter_at_offset(end > offset ? end - 1 : offset);
+  int y = 0;
+  int height = 0;
+  int last_y = 0;
+  int last_height = 0;
+  view.get_line_yrange(first, y, height);
+  view.get_line_yrange(last, last_y, last_height);
+  auto gap_of = [](const Gtk::TextIter& at, bool above) {
+    int gap = 0;
+    for (const auto& tag : at.get_tags()) {
+      if (above && tag->property_pixels_above_lines_set())
+        gap = std::max(gap, static_cast<int>(tag->property_pixels_above_lines()));
+      else if (!above && tag->property_pixels_below_lines_set())
+        gap = std::max(gap, static_cast<int>(tag->property_pixels_below_lines()));
+    }
+    return gap;
+  };
+  const Borders borders = clamp_borders(paragraph.borders);
+  const int text_top = y + gap_of(first, true);
+  const int text_bottom = last_y + last_height - gap_of(last, false);
+  const double left =
+      view.get_left_margin() + indent_px(paragraph.indents.left) - indent_px(borders.left.space);
+  const double right = static_cast<double>(width) - view.get_right_margin() -
+                       indent_px(paragraph.indents.right) + indent_px(borders.right.space);
+  int window_x = 0;
+  int window_top = 0;
+  int window_bottom = 0;
+  view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, text_top - indent_px(borders.top.space),
+                               window_x, window_top);
+  view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0,
+                               text_bottom + indent_px(borders.bottom.space), window_x,
+                               window_bottom);
+  if (right > left && window_bottom > window_top)
+    paint_borders(cr, left, window_top, right, window_bottom, borders, zoom_factor());
+}
+
+void MainWindow::draw_story_borders(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
+                                    const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int count = buffer->get_char_count();
+  int offset = 0;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const Paragraph& paragraph = paragraphs[i];
+    const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
+    if (offset < count) {
+      paint_story_border(view, cr, paragraph, offset, std::min(len, count - offset));
+      paint_story_tabs(view, cr, paragraph, offset, std::min(len, count - offset));
+    }
+    offset += len;
+    if (i + 1 < paragraphs.size())
+      offset += 1;
+  }
+}
+
+void MainWindow::draw_note_borders(Gtk::TextView& view,
+                                   const std::vector<std::vector<Paragraph>>& notes,
+                                   const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  const int count = buffer->get_char_count();
+  int offset = 0;
+  for (size_t n = 0; n < notes.size(); ++n) {
+    if (n)
+      offset += 2;
+    const std::vector<Paragraph>& paragraphs = notes[n];
+    for (size_t i = 0; i < paragraphs.size(); ++i) {
+      const Paragraph& paragraph = paragraphs[i];
+      const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
+      if (offset < count) {
+        paint_story_border(view, cr, paragraph, offset, std::min(len, count - offset));
+        paint_story_tabs(view, cr, paragraph, offset, std::min(len, count - offset));
+      }
+      offset += len;
+      if (i + 1 < paragraphs.size())
+        offset += 1;
+    }
+  }
+}
+
+void MainWindow::draw_tab_marks(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr,
+                                bool cell)
+{
+  auto buffer = view.get_buffer();
+  if (!buffer)
+    return;
+  bool any = false;
+  const char* prefix = cell ? "cparat" : "parat";
+  const size_t nprefix = cell ? 6 : 5;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (any)
+      return;
+    const std::string name = tag_name(tag);
+    if (name.size() >= nprefix && name.compare(0, nprefix, prefix) == 0)
+      any = true;
+  });
+  if (!any)
+    return;
+  Gdk::Rectangle visible;
+  view.get_visible_rect(visible);
+  double clip_x1 = 0;
+  double clip_y1 = 0;
+  double clip_x2 = 0;
+  double clip_y2 = 0;
+  cr->get_clip_extents(clip_x1, clip_y1, clip_x2, clip_y2);
+  int ignored = 0;
+  int clip_top = 0;
+  int clip_bottom = 0;
+  view.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::floor(clip_y1)),
+                               ignored, clip_top);
+  view.window_to_buffer_coords(Gtk::TEXT_WINDOW_WIDGET, 0, static_cast<int>(std::ceil(clip_y2)),
+                               ignored, clip_bottom);
+  const int view_top = std::max(visible.get_y(), clip_top);
+  const int view_bottom = std::min(visible.get_y() + visible.get_height(), clip_bottom);
+  if (view_bottom < view_top)
+    return;
+  const int count = buffer->get_char_count();
+  int offset = 0;
+  if (!cell && count > 0) {
+    Gtk::TextIter top;
+    int top_y = 0;
+    view.get_line_at_y(top, std::max(0, view_top), top_y);
+    offset = paragraph_start(top.get_offset());
+  }
+  const Gdk::RGBA color = view.get_style_context()->get_color(view.get_state_flags());
+  cr->save();
+  cr->set_source_rgba(color.get_red(), color.get_green(), color.get_blue(), color.get_alpha());
+  for (; offset < count;) {
+    int end = offset;
+    auto cursor = buffer->get_iter_at_offset(std::min(offset, count));
+    while (!cursor.is_end()) {
+      const bool newline = cursor.get_char() == '\n';
+      cursor.forward_char();
+      end = cursor.get_offset();
+      if (newline)
+        break;
+    }
+    if (end <= offset)
+      break;
+    std::vector<TabStop> stops;
+    Indents indents;
+    bool list = false;
+    bool found = false;
+    auto at = buffer->get_iter_at_offset(offset);
+    if (cell) {
+      Align align = Align::Left;
+      Spacing spacing;
+      int basis = 22;
+      int heading = 0;
+      Borders borders;
+      Shading shading;
+      for (const auto& tag : at.get_tags()) {
+        if (parse_cpara(tag_name(tag), indents, align, spacing, basis, heading, borders, shading,
+                        stops)) {
+          found = true;
+          break;
+        }
+      }
+    } else {
+      ParaFormat format;
+      if (auto tag = para_tag_at(at)) {
+        if (parse_para(tag_name(tag), format)) {
+          stops = format.tabs;
+          indents = format.indents;
+          list = format.list.kind != ListKind::None;
+          found = true;
+        }
+      }
+    }
+    int y = 0;
+    int height = 0;
+    view.get_line_yrange(at, y, height);
+    if (y > view_bottom)
+      break;
+    if (found && !stops.empty() && y + height >= view_top) {
+      auto last = buffer->get_iter_at_offset(end > offset ? end - 1 : offset);
+      int last_y = 0;
+      int last_height = 0;
+      view.get_line_yrange(last, last_y, last_height);
+      const int origin = !cell && list ? std::max(0, indents.left)
+                                       : std::max(0, indents.left + std::min(0, indents.first));
+      int layout_left = margin_left();
+      if (cell)
+        layout_left =
+            indents == Indents{} ? view.get_left_margin() : std::max(0, indent_px(origin));
+      else if (list || !(indents == Indents{}))
+        layout_left = margin_left() + indent_px(origin);
+      auto stop_x = [&](int position) {
+        return layout_left + indent_px(position) - indent_px(origin);
+      };
+      for (const TabStop& stop : stops) {
+        if (stop.align != TabAlign::Bar)
+          continue;
+        int wx = 0;
+        int top = 0;
+        int bottom = 0;
+        view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, stop_x(stop.position), y, wx, top);
+        view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, last_y + last_height, wx, bottom);
+        cr->set_line_width(1);
+        cr->move_to(wx + 0.5, top);
+        cr->line_to(wx + 0.5, bottom);
+        cr->stroke();
+      }
+      for (auto iter = buffer->get_iter_at_offset(offset);
+           !iter.is_end() && iter.get_offset() < end; ++iter) {
+        if (iter.get_char() != '\t')
+          continue;
+        Gdk::Rectangle rect;
+        view.get_iter_location(iter, rect);
+        const int right = rect.get_x() + rect.get_width();
+        const TabStop* match = nullptr;
+        for (const TabStop& stop : stops) {
+          if (stop.align == TabAlign::Bar || stop.leader == TabLeader::None)
+            continue;
+          if (std::abs(stop_x(stop.position) - right) <= 3)
+            match = &stop;
+        }
+        if (!match)
+          continue;
+        int x0 = 0;
+        int y0 = 0;
+        int x1 = 0;
+        int ignored_y = 0;
+        view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, rect.get_x(),
+                                     rect.get_y() + std::max(0, rect.get_height() - 2), x0, y0);
+        view.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, right, 0, x1, ignored_y);
+        paint_leader(cr, match->leader, x0, x1, y0);
+      }
+    }
+    offset = end;
+  }
+  cr->restore();
+}
+
 bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   // List labels are drawn, not typed. They are not in the buffer, so find,
@@ -7137,6 +7852,7 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   draw_page_seams(cr);
   // A border-only document still draws. Lists are painted after this.
   draw_paragraph_borders(cr);
+  draw_tab_marks(text_, cr, false);
   if (!any_list())
     return false;
   const std::vector<ListLine>& lines = list_lines();
@@ -7236,6 +7952,367 @@ void MainWindow::sync_list_controls()
   if (numbering_toggle_ && numbering_toggle_->get_active() != (kind == ListKind::Number))
     numbering_toggle_->set_active(kind == ListKind::Number);
   suppress_format_ = was;
+}
+
+void MainWindow::apply_focused_tabs(std::vector<TabStop> tabs)
+{
+  tabs = clamp_tabs(std::move(tabs));
+  if (tabs == focused_para().tabs)
+    return;
+  apply_para_edit([&tabs](ParaFormat& format) { format.tabs = tabs; });
+  ruler_.queue_draw();
+}
+
+void MainWindow::on_tabs()
+{
+  // Word 97's Format > Tabs. The list is the paragraph's own stops. The
+  // default interval is the document's, stored as \deftab when it is not
+  // half an inch. Set is what changes a stop; OK applies the list.
+  const Units units = settings_.units;
+  const int opened_default = clamp_default_tab(default_tab_);
+  std::vector<TabStop> stops = clamp_tabs(focused_para().tabs);
+  const double step = units_step(units);
+  const double max_value = max_measure(units);
+
+  Gtk::Dialog dialog("Tabs", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+  dialog.get_content_area()->set_margin_top(12);
+  dialog.get_content_area()->set_margin_bottom(12);
+  dialog.get_content_area()->set_margin_start(12);
+  dialog.get_content_area()->set_margin_end(12);
+  dialog.get_content_area()->set_spacing(12);
+
+  auto spin = [units, step, max_value](int twips) {
+    auto* button =
+        Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(0, 0, max_value, step, step * 5),
+                                        step, static_cast<guint>(units_digits(units))));
+    button->set_numeric(false);
+    button->set_update_policy(Gtk::UPDATE_IF_VALID);
+    button->set_width_chars(8);
+    struct Typed {
+      bool bad = false;
+      double kept = 0;
+    };
+    auto typed = std::make_shared<Typed>();
+    button->signal_output().connect(
+        [button, units, typed] {
+          if (typed->bad && button->get_value() == typed->kept)
+            return true;
+          typed->bad = false;
+          button->set_text(format_measure(button->get_value(), units));
+          return true;
+        },
+        false);
+    button->signal_input().connect(
+        [button, units, typed](double* value) {
+          double parsed = 0;
+          if (check_measure(button->get_text().raw(), units, parsed) == MeasureCheck::Ok) {
+            typed->bad = false;
+            *value = parsed;
+            return 1;
+          }
+          typed->bad = true;
+          typed->kept = button->get_value();
+          *value = typed->kept;
+          return 1;
+        },
+        true);
+    button->signal_focus_out_event().connect(
+        [button, units, typed](GdkEventFocus*) {
+          button->update();
+          if (!typed->bad)
+            button->set_text(format_measure(button->get_value(), units));
+          return false;
+        },
+        false);
+    button->set_value(units_round(twips_to_units(twips, units), units));
+    return button;
+  };
+  auto label = [](const char* text, Gtk::Widget& target) {
+    auto* item = Gtk::manage(new Gtk::Label(text, true));
+    item->set_halign(Gtk::ALIGN_START);
+    item->set_mnemonic_widget(target);
+    return item;
+  };
+
+  auto* position = spin(stops.empty() ? 0 : stops.front().position);
+  position->set_activates_default(false);
+  auto* list_label = Gtk::manage(new Gtk::Label("Tab stops:"));
+  list_label->set_halign(Gtk::ALIGN_START);
+
+  struct StopColumns : public Gtk::TreeModelColumnRecord {
+    StopColumns()
+    {
+      add(position);
+      add(text);
+    }
+    Gtk::TreeModelColumn<int> position;
+    Gtk::TreeModelColumn<Glib::ustring> text;
+  };
+  static StopColumns columns;
+  auto store = Gtk::ListStore::create(columns);
+  auto* list = Gtk::manage(new Gtk::TreeView(store));
+  list->append_column("Position", columns.text);
+  list->set_headers_visible(false);
+  list->set_enable_search(false);
+  auto* scroll = Gtk::manage(new Gtk::ScrolledWindow());
+  scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+  scroll->set_shadow_type(Gtk::SHADOW_IN);
+  scroll->set_size_request(160, 140);
+  scroll->add(*list);
+
+  auto* set_button = Gtk::manage(new Gtk::Button("_Set", true));
+  auto* clear_button = Gtk::manage(new Gtk::Button("_Clear", true));
+  auto* clear_all = Gtk::manage(new Gtk::Button("Clear _All", true));
+  auto* buttons = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 6));
+  buttons->set_valign(Gtk::ALIGN_START);
+  buttons->pack_start(*set_button, Gtk::PACK_SHRINK);
+  buttons->pack_start(*clear_button, Gtk::PACK_SHRINK);
+  buttons->pack_start(*clear_all, Gtk::PACK_SHRINK);
+
+  auto* top = Gtk::manage(new Gtk::Grid());
+  top->set_column_spacing(12);
+  top->set_row_spacing(6);
+  top->attach(*label("_Tab stop position:", *position), 0, 0, 1, 1);
+  top->attach(*position, 1, 0, 1, 1);
+  top->attach(*list_label, 0, 1, 2, 1);
+  top->attach(*scroll, 0, 2, 2, 1);
+  top->attach(*buttons, 2, 2, 1, 1);
+
+  auto* left_align = Gtk::manage(new Gtk::RadioButton("_Left", true));
+  auto align_group = left_align->get_group();
+  auto* center_align = Gtk::manage(new Gtk::RadioButton(align_group, "C_enter", true));
+  auto* right_align = Gtk::manage(new Gtk::RadioButton(align_group, "_Right", true));
+  auto* decimal_align = Gtk::manage(new Gtk::RadioButton(align_group, "Deci_mal", true));
+  auto* bar_align = Gtk::manage(new Gtk::RadioButton(align_group, "_Bar", true));
+  std::array<Gtk::RadioButton*, 5> aligns = {left_align, center_align, right_align, decimal_align,
+                                             bar_align};
+  auto* align_box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 2));
+  for (Gtk::RadioButton* radio : aligns)
+    align_box->pack_start(*radio, Gtk::PACK_SHRINK);
+  auto* align_frame = Gtk::manage(new Gtk::Frame("Alignment"));
+  align_frame->add(*align_box);
+  align_box->set_margin_top(4);
+  align_box->set_margin_bottom(6);
+  align_box->set_margin_start(8);
+  align_box->set_margin_end(8);
+
+  auto* none_leader = Gtk::manage(new Gtk::RadioButton("_None", true));
+  auto leader_group = none_leader->get_group();
+  auto* dot_leader = Gtk::manage(new Gtk::RadioButton(leader_group, "D_ots", true));
+  auto* dash_leader = Gtk::manage(new Gtk::RadioButton(leader_group, "Das_hes", true));
+  auto* under_leader = Gtk::manage(new Gtk::RadioButton(leader_group, "_Underline", true));
+  std::array<Gtk::RadioButton*, 4> leaders = {none_leader, dot_leader, dash_leader, under_leader};
+  auto* leader_box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 2));
+  for (Gtk::RadioButton* radio : leaders)
+    leader_box->pack_start(*radio, Gtk::PACK_SHRINK);
+  auto* leader_frame = Gtk::manage(new Gtk::Frame("Leader"));
+  leader_frame->add(*leader_box);
+  leader_box->set_margin_top(4);
+  leader_box->set_margin_bottom(6);
+  leader_box->set_margin_start(8);
+  leader_box->set_margin_end(8);
+
+  auto* choices = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 12));
+  choices->pack_start(*align_frame, Gtk::PACK_SHRINK);
+  choices->pack_start(*leader_frame, Gtk::PACK_SHRINK);
+
+  auto* def_spin = spin(opened_default);
+  def_spin->set_activates_default(true);
+  auto* def_row = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 12));
+  def_row->pack_start(*label("_Default tab stops:", *def_spin), Gtk::PACK_SHRINK);
+  def_row->pack_start(*def_spin, Gtk::PACK_SHRINK);
+
+  auto* notice = Gtk::manage(new Gtk::Label());
+  notice->set_line_wrap(true);
+  notice->set_max_width_chars(48);
+  notice->set_halign(Gtk::ALIGN_START);
+  notice->set_no_show_all(true);
+  notice->set_visible(false);
+
+  dialog.get_content_area()->pack_start(*top, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*choices, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*def_row, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*notice, Gtk::PACK_SHRINK);
+
+  auto sync_leaders = [bar_align, leaders] {
+    const bool bar = bar_align->get_active();
+    for (Gtk::RadioButton* radio : leaders)
+      radio->set_sensitive(!bar);
+  };
+  bar_align->signal_toggled().connect(sync_leaders);
+
+  auto chosen_align = [aligns] {
+    if (aligns[1]->get_active())
+      return TabAlign::Center;
+    if (aligns[2]->get_active())
+      return TabAlign::Right;
+    if (aligns[3]->get_active())
+      return TabAlign::Decimal;
+    if (aligns[4]->get_active())
+      return TabAlign::Bar;
+    return TabAlign::Left;
+  };
+  auto chosen_leader = [leaders] {
+    if (leaders[1]->get_active())
+      return TabLeader::Dot;
+    if (leaders[2]->get_active())
+      return TabLeader::Hyphen;
+    if (leaders[3]->get_active())
+      return TabLeader::Underline;
+    return TabLeader::None;
+  };
+  auto show_stop = [&](const TabStop& stop) {
+    position->set_value(units_round(twips_to_units(stop.position, units), units));
+    int align_at = 0;
+    if (stop.align == TabAlign::Center)
+      align_at = 1;
+    else if (stop.align == TabAlign::Right)
+      align_at = 2;
+    else if (stop.align == TabAlign::Decimal)
+      align_at = 3;
+    else if (stop.align == TabAlign::Bar)
+      align_at = 4;
+    aligns[static_cast<size_t>(align_at)]->set_active(true);
+    int leader_at = 0;
+    if (stop.leader == TabLeader::Dot)
+      leader_at = 1;
+    else if (stop.leader == TabLeader::Hyphen)
+      leader_at = 2;
+    else if (stop.leader == TabLeader::Underline)
+      leader_at = 3;
+    leaders[static_cast<size_t>(leader_at)]->set_active(true);
+    sync_leaders();
+  };
+
+  bool filling = false;
+  auto refill = [&](bool select, int select_position) {
+    filling = true;
+    store->clear();
+    int row = 0;
+    int chosen = -1;
+    for (const TabStop& stop : stops) {
+      auto iter = store->append();
+      (*iter)[columns.position] = stop.position;
+      (*iter)[columns.text] = format_measure(twips_to_units(stop.position, units), units);
+      if (select && stop.position == select_position)
+        chosen = row;
+      ++row;
+    }
+    filling = false;
+    if (chosen >= 0) {
+      Gtk::TreePath path;
+      path.push_back(chosen);
+      list->get_selection()->select(path);
+      if (list->get_realized())
+        list->scroll_to_row(path);
+    }
+  };
+  list->get_selection()->signal_changed().connect([&] {
+    if (filling)
+      return;
+    auto iter = list->get_selection()->get_selected();
+    if (!iter)
+      return;
+    const int at = (*iter)[columns.position];
+    for (const TabStop& stop : stops) {
+      if (stop.position == at) {
+        show_stop(stop);
+        return;
+      }
+    }
+  });
+
+  auto set_stop = [&] {
+    double parsed = 0;
+    const MeasureCheck check = check_measure(position->get_text().raw(), units, parsed);
+    if (check != MeasureCheck::Ok) {
+      notice->set_text(measure_message(check, units));
+      notice->set_visible(true);
+      return;
+    }
+    int twips = units_to_twips(parsed, units);
+    if (auto iter = list->get_selection()->get_selected()) {
+      const int selected = (*iter)[columns.position];
+      const double shown = units_round(twips_to_units(selected, units), units);
+      twips = keep_twips(selected, shown, parsed, units);
+    }
+    twips = std::max(0, std::min(kMaxIndent, twips));
+    bool exists = false;
+    for (const TabStop& stop : stops) {
+      if (stop.position == twips)
+        exists = true;
+    }
+    if (!exists && static_cast<int>(stops.size()) >= kMaxTabStops) {
+      notice->set_text("A paragraph holds at most 50 tab stops.");
+      notice->set_visible(true);
+      return;
+    }
+    TabStop stop;
+    stop.position = twips;
+    stop.align = chosen_align();
+    stop.leader = stop.align == TabAlign::Bar ? TabLeader::None : chosen_leader();
+    stops.push_back(stop);
+    stops = clamp_tabs(std::move(stops));
+    notice->set_visible(false);
+    refill(true, twips);
+  };
+  auto clear_one = [&] {
+    auto iter = list->get_selection()->get_selected();
+    if (!iter)
+      return;
+    const int selected = (*iter)[columns.position];
+    stops.erase(
+        std::remove_if(stops.begin(), stops.end(),
+                       [selected](const TabStop& stop) { return stop.position == selected; }),
+        stops.end());
+    notice->set_visible(false);
+    refill(false, 0);
+  };
+  auto clear_every = [&] {
+    stops.clear();
+    notice->set_visible(false);
+    refill(false, 0);
+  };
+  set_button->signal_clicked().connect(set_stop);
+  clear_button->signal_clicked().connect(clear_one);
+  clear_all->signal_clicked().connect(clear_every);
+  position->signal_activate().connect(set_stop);
+
+  dialog.show_all_children();
+  refill(!stops.empty(), stops.empty() ? 0 : stops.front().position);
+  for (;;) {
+    if (dialog.run() != Gtk::RESPONSE_OK) {
+      restore_edit_focus();
+      return;
+    }
+    double parsed = 0;
+    const MeasureCheck check = check_measure(def_spin->get_text().raw(), units, parsed);
+    if (check != MeasureCheck::Ok) {
+      notice->set_text(measure_message(check, units));
+      notice->set_visible(true);
+      continue;
+    }
+    const double shown = units_round(twips_to_units(opened_default, units), units);
+    const int interval = clamp_default_tab(keep_twips(opened_default, shown, parsed, units));
+    const bool tabs_changed = stops != focused_para().tabs;
+    const bool interval_changed = interval != clamp_default_tab(default_tab_);
+    if (tabs_changed)
+      apply_focused_tabs(stops);
+    if (interval_changed) {
+      const Document before = capture();
+      Document after = before;
+      after.default_tab = interval;
+      if (!(before == after))
+        commit_document(before, after);
+    }
+    restore_edit_focus();
+    ruler_.queue_draw();
+    return;
+  }
 }
 
 void MainWindow::on_paragraph()

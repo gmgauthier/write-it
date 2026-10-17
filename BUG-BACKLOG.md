@@ -1,20 +1,12 @@
 # Bug backlog
 
-Reviewed 2026-10-15 against the 2.1.0 sources. The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Later 2.0 work (borders, tabs, row and column selection, row and column colour, format painter) and later majors (sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX) are not listed here.
+Reviewed 2026-10-16 against the 2.2.0 sources. The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Later 2.0 work (tabs, row and column selection, row and column colour, format painter) and later majors (sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX) are not listed here.
 
-Measured on Plato, release build, with `tests/bench_key.cpp`. On 2.1.0, `plain1000` was 55.6 ms and `list1000` was 65.8 ms. On 2.1.1, 2026-10-16, `plain1000` was 58.7 ms and `list1000` was 68.8 ms. Both gate lines are under 100 ms. The 50 ms specification is still not met. The standing item in Open owns the periodic rerun. The other product items from this review were fixed in 2.1.1. Closed records the defects shipped through 2.1.1.
+The 2026-10-15 review against 2.1.0 is in Closed. Its product items were fixed in 2.1.1. The product items from this 2.2.0 review were fixed in 2.2.1. The 50 ms typing gate was met in 2.2.2. Measured on Plato, release build, with `tests/bench_key.cpp`. On 2.2.2, 2026-10-17, `plain1000` was 19.2 ms and `list1000` was 18.2 ms. On 2.3.0, 2026-10-17, `plain1000` was 21.8 ms and `list1000` was 22.6 ms. On 2.1.0, `plain1000` was 55.6 ms and `list1000` was 65.8 ms. On 2.1.1, 2026-10-16, `plain1000` was 58.7 ms and `list1000` was 68.8 ms. The standing item in Open owns the periodic rerun. Closed records the defects shipped through 2.2.2.
 
-Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file. Columns do not snake the text. The ruler draws a tick in each gap, and RTF round-trips `\cols`. Per-section columns are 3.0. Print draws the page widget. Exactly, and a multiple below one line, stay stored and round-trip, and the screen keeps the font’s line. That limit is specified. A cell paragraph tag draws indents, alignment, and spacing, and no list. Header, footer, and note pictures stay in the file until that area is typed in. Editing replaces the story with plain paragraphs. Highlight is the toolbar control. The Options size list is whole points. Half points belong to the format size box. `paragraph_style()` uses the first style when the name and Normal are both missing, and `style_sheet()` substitutes the built-in sheet when the document’s styles are empty. Spelling does walk the header, the footer, and the notes. The draft page-break gap is 18 px at every zoom, and the page count subtracts it. Cell line spacing is measured as Sans on the body context. `editor.cpp` is long, and `MainWindow` owns the document, the view, the dialogs, and pagination. Past 100% zoom, pictures and footnote type stay at their 100% size.
+Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file. Columns do not snake the text. The ruler draws a tick in each gap, and RTF round-trips `\cols`. Per-section columns are 3.0. Print draws the page widget. Exactly, and a multiple below one line, stay stored and round-trip, and the screen keeps the font’s line. That limit is specified. A cell paragraph tag draws indents, alignment, and spacing, and no list. Header, footer, and note pictures stay in the file until that area is typed in. Editing replaces the story with plain paragraphs. Highlight is the toolbar control. The Options size list is whole points. Half points belong to the format size box. `paragraph_style()` uses the first style when the name and Normal are both missing, and `style_sheet()` substitutes the built-in sheet when the document’s styles are empty. Spelling does walk the header, the footer, and the notes. The draft page-break gap is 18 px at every zoom, and the page count subtracts it. Cell line spacing is measured as Sans on the body context. `editor.cpp` is long, and `MainWindow` owns the document, the view, the dialogs, and pagination. Past 100% zoom, pictures and footnote type stay at their 100% size. This review also left these out. The Borders and Shading dialog’s settings, widths, colours, 3-D, and Apply to match the specification, and OK on a cell that has never had a border stores the 1/2 pt box the dialog shows. Enter, paste, undo, a style, and Paragraph… keep a border. A new table writes no cell borders. A cell’s borders round-trip, and a paragraph border inside a cell round-trips with them. A style’s borders round-trip. A box at the start of a page stays on that sheet. Insert Row still inserts below the caret’s row.
 
 ## Open
-
-### Typing in a long document misses the 50 ms gate
-
-- Severity: incorrect
-- Confidence: medium
-- Where: `src/editor.cpp` `MainWindow::on_user_end`; `DEVELOPMENT.md` M2 typing-speed gate
-- Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
-- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`. A 1.0.8 release build met 50 ms; those numbers are in `tests/README.md`. A 1.0.16 release build on 2026-10-13 did not: `plain1000` 128.7 ms and `list1000` 145.1 ms. A 1.0.22 release build on 2026-10-14 did not: `plain1000` 154.6 ms and `list1000` 178.4 ms. A 1.0.23 release build on 2026-10-15 did not: `plain1000` 51.4 ms and `list1000` 60.5 ms. A 2.0.0 release build the same day did not: `plain1000` 55.7 ms and `list1000` 66.6 ms. A 2.1.0 release build the same day did not: `plain1000` 55.6 ms and `list1000` 65.8 ms. A 2.1.1 release build on 2026-10-16 did not: `plain1000` 58.7 ms and `list1000` 68.8 ms. The standing item below owns the periodic rerun.
 
 ### Rerun the typing-speed bench, and optimize above 100 ms
 
@@ -22,7 +14,7 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Confidence: high
 - Where: `tests/bench_key.cpp` (`write-it-bench-key`). How to build and run it is `tests/README.md`.
 - Trigger: Periodically, on a release build, run `xvfb-run -a ./build-release/write-it-bench-key`. Read the `plain1000` and `list1000` gate lines. Each line is the median of three runs of 50 keys at the end of paragraph 500, process CPU, refresh included. This item stays open. A run at or under 100 ms is recorded here and does not close it.
-- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-16, release build of 2.1.1 on Plato: `plain1000` 58.7 ms, `list1000` 68.8 ms. The handlers were 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
+- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-17, release build of 2.2.2 on Plato: `plain1000` 19.2 ms, `list1000` 18.2 ms. The handlers were about 14.1 ms and 13.4 ms. Both gate lines are under 50 ms. The 2.2.1 pair on 2026-10-16 was `plain1000` 69.2 ms and `list1000` 80.4 ms, handlers 36.5 ms and 40.2 ms. The 2.1.1 pair that day was `plain1000` 58.7 ms and `list1000` 68.8 ms, handlers 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
 
 ## Test defects
 
@@ -45,6 +37,42 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Typing in a long document misses the 50 ms gate
+
+- Fixed in 2.2.2.
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/editor.cpp` `MainWindow::on_user_end`; `src/main_window.cpp` `MainWindow::apply_page_size`; `DEVELOPMENT.md` M2 typing-speed gate
+- Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
+- Outcome: A letter that does not move its line skips a note-free capture, reuses the page height, and does not renumber a list whose tag is already on the paragraph. Enter still paginates, and removing a tag still renumbers. A 2026-10-17 Plato release build met the gate: `plain1000` 19.2 ms and `list1000` 18.2 ms, handlers about 14.1 ms and 13.4 ms. Earlier release builds did not. A 1.0.16 build on 2026-10-13 was `plain1000` 128.7 ms and `list1000` 145.1 ms. A 1.0.22 build on 2026-10-14 was `plain1000` 154.6 ms and `list1000` 178.4 ms. A 1.0.23 build on 2026-10-15 was `plain1000` 51.4 ms and `list1000` 60.5 ms. A 2.0.0 build the same day was `plain1000` 55.7 ms and `list1000` 66.6 ms. A 2.1.0 build the same day was `plain1000` 55.6 ms and `list1000` 65.8 ms. A 2.1.1 build on 2026-10-16 was `plain1000` 58.7 ms and `list1000` 68.8 ms. A 2.2.1 build the same day was `plain1000` 69.2 ms and `list1000` 80.4 ms. The standing item in Open owns the periodic rerun. The 1.0.8 numbers are in `tests/README.md`. `DEVELOPMENT.md` had recorded about 1.4 s per keystroke on commit `de03251`.
+
+### Insert Row and Insert Column copy one cell’s borders and shading onto every new cell
+
+- Fixed in 2.2.1.
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/page.cpp` `insert_table_row`, `insert_table_column`, `chrome_from`.
+- Trigger: Give two cells in one row different borders or shading. Table → Insert Row, or Insert Column, with the caret in one of those cells.
+- Outcome: A new row gives each cell the borders and shading of the cell above it in that column. A new column gives each cell the borders and shading of the cell beside it in that row. A cell with no stored border stays that way. Insert Row still inserts below the caret’s row.
+
+### A header, a footer, or a footnote does not draw its border or its shading
+
+- Fixed in 2.2.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/page_ui.cpp` `MainWindow::tag_story_spacing`, `MainWindow::tag_note_spacing`; `src/editor.cpp` `MainWindow::paint_story_border`; `src/main_window.cpp` story draw handlers; `src/page_ui.cpp` `MainWindow::wire_note_band`.
+- Trigger: Put the caret in the header, the footer, or a footnote. Format → Borders and Shading…, set a box or a fill, and press OK. The words stay as they were.
+- Outcome: The box is drawn around that paragraph’s text, and the shading fills it. The story stays stored and written. Space before and space after stay outside the box.
+
+### A body paragraph’s borders and shading are left out of the file
+
+- Fixed in 2.2.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `src/rtf.cpp` `rtf_export`, the body paragraph after `write_spacing`. Header, footer, note, and cell paragraphs already call `write_borders` and `write_shading`.
+- Trigger: Format → Borders and Shading… on a body paragraph, OK, save, and reopen.
+- Outcome: The box and the shading are in the file and come back. A side that turns the style’s border off is written `\brdrnone`. A plain paragraph still omits both. The borders suite returns its failure count, so a miss fails `meson test`.
 
 ### Paragraph commands and the ruler follow the body caret while a cell or a story is edited
 

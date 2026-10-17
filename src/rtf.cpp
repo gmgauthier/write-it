@@ -414,6 +414,12 @@ struct State {
   Spacing spacing;
   Borders borders;
   Shading shading;
+  // Custom stops. Empty is the style's, until the first \tx of this paragraph
+  // replaces them. Prefixes apply to the next \tx, then go back to left/none.
+  std::vector<TabStop> tabs;
+  TabAlign tab_align = TabAlign::Left;
+  TabLeader tab_leader = TabLeader::None;
+  bool tabs_own = false;
   // The \sl and \slmult in force, so a later word of the pair recomputes the
   // rule. Single leaves both at 0. Exactly 0 is \sl-0: an int cannot tell
   // that from \sl0, so line_sl_negative records the minus. line_sl_set and
@@ -511,6 +517,11 @@ struct StyleEntry {
   bool sl_before_mult = false;
   Borders borders;
   Shading shading;
+  std::vector<TabStop> tabs;
+  TabAlign tab_align = TabAlign::Left;
+  TabLeader tab_leader = TabLeader::None;
+  // \pard or a \tx: the entry's stops replace the base, including none.
+  bool tabs_seen = false;
   // Which edges and shading words this entry named. \pard names them all, so
   // the style does not inherit those from its base.
   bool side_seen[4] = {};
@@ -536,6 +547,7 @@ struct ReadStyle {
   Spacing spacing;
   Borders borders;
   Shading shading;
+  std::vector<TabStop> tabs;
   int heading = 0;
 };
 
@@ -577,6 +589,7 @@ class Reader {
           final_spacing_ = state_.spacing;
           final_borders_ = state_.borders;
           final_shading_ = state_.shading;
+          final_tabs_ = state_.tabs;
           final_marks_ = state_.marks;
           final_style_ = state_.style;
           closed_ = true;
@@ -889,6 +902,10 @@ class Reader {
       state_.spacing = normal.spacing;
       state_.borders = normal.borders;
       state_.shading = normal.shading;
+      state_.tabs = normal.tabs;
+      state_.tab_align = TabAlign::Left;
+      state_.tab_leader = TabLeader::None;
+      state_.tabs_own = false;
       border_aim_ = BorderAim::None;
       sync_line_raw();
       state_.marks = ListMarks{};
@@ -1064,6 +1081,55 @@ class Reader {
     if (word == "nosupersub") {
       char_seen_ = true;
       state_.script = Script::None;
+      return;
+    }
+    if (word == "deftab" && has_param) {
+      // Document-wide. A group must not put the outer interval back.
+      deftab_ = param;
+      return;
+    }
+    if (word == "tqc") {
+      state_.tab_align = TabAlign::Center;
+      return;
+    }
+    if (word == "tqr") {
+      state_.tab_align = TabAlign::Right;
+      return;
+    }
+    if (word == "tqdec") {
+      state_.tab_align = TabAlign::Decimal;
+      return;
+    }
+    if (word == "tb") {
+      state_.tab_align = TabAlign::Bar;
+      return;
+    }
+    if (word == "tldot") {
+      state_.tab_leader = TabLeader::Dot;
+      return;
+    }
+    if (word == "tlhyph") {
+      state_.tab_leader = TabLeader::Hyphen;
+      return;
+    }
+    if (word == "tlul" || word == "tlth") {
+      state_.tab_leader = TabLeader::Underline;
+      return;
+    }
+    if (word == "tx" && has_param) {
+      if (!state_.tabs_own) {
+        state_.tabs.clear();
+        state_.tabs_own = true;
+      }
+      if (state_.tabs.size() < static_cast<size_t>(kMaxTabStops)) {
+        TabStop stop;
+        stop.position = param;
+        stop.align = state_.tab_align;
+        stop.leader = state_.tab_align == TabAlign::Bar ? TabLeader::None : state_.tab_leader;
+        state_.tabs.push_back(stop);
+      }
+      state_.tab_align = TabAlign::Left;
+      state_.tab_leader = TabLeader::None;
       return;
     }
     if (word == "paperw" && has_param) {
@@ -1601,6 +1667,34 @@ class Reader {
       e.highlight = Ink::Auto;
       e.strike = false;
       e.script = Script::None;
+    } else if (word == "tqc") {
+      e.tab_align = TabAlign::Center;
+    } else if (word == "tqr") {
+      e.tab_align = TabAlign::Right;
+    } else if (word == "tqdec") {
+      e.tab_align = TabAlign::Decimal;
+    } else if (word == "tb") {
+      e.tab_align = TabAlign::Bar;
+    } else if (word == "tldot") {
+      e.tab_leader = TabLeader::Dot;
+    } else if (word == "tlhyph") {
+      e.tab_leader = TabLeader::Hyphen;
+    } else if (word == "tlul" || word == "tlth") {
+      e.tab_leader = TabLeader::Underline;
+    } else if (word == "tx" && has_param) {
+      if (!e.tabs_seen) {
+        e.tabs.clear();
+        e.tabs_seen = true;
+      }
+      if (e.tabs.size() < static_cast<size_t>(kMaxTabStops)) {
+        TabStop stop;
+        stop.position = param;
+        stop.align = e.tab_align;
+        stop.leader = e.tab_align == TabAlign::Bar ? TabLeader::None : e.tab_leader;
+        e.tabs.push_back(stop);
+      }
+      e.tab_align = TabAlign::Left;
+      e.tab_leader = TabLeader::None;
     } else if (word == "pard") {
       e.left = 0;
       e.right = 0;
@@ -1616,6 +1710,10 @@ class Reader {
       e.sl_before_mult = false;
       e.borders = Borders{};
       e.shading = Shading{};
+      e.tabs.clear();
+      e.tab_align = TabAlign::Left;
+      e.tab_leader = TabLeader::None;
+      e.tabs_seen = true;
       e.side_seen[0] = e.side_seen[1] = e.side_seen[2] = e.side_seen[3] = true;
       e.shade_pat = e.shade_bg = e.shade_fg = true;
       e.border_edge = -1;
@@ -1778,6 +1876,9 @@ class Reader {
         shading.foreground = e.shading.foreground;
       r.shading = clamp_shading(shading);
     }
+    if (e.tabs_seen)
+      r.tabs = e.tabs;
+    r.tabs = clamp_tabs(r.tabs);
     // A level from the file, else from a "heading N" name (LibreOffice
     // writes none in its sheet), else the base's.
     if (e.heading)
@@ -1841,6 +1942,7 @@ class Reader {
       style.spacing = r.spacing;
       style.borders = r.borders;
       style.shading = r.shading;
+      style.tabs = r.tabs;
       style.heading = r.heading;
       sheet.push_back(style);
     }
@@ -2027,6 +2129,8 @@ class Reader {
       state_.borders = to.borders;
     if (state_.shading == from.shading)
       state_.shading = to.shading;
+    if (!state_.tabs_own && state_.tabs == from.tabs)
+      state_.tabs = to.tabs;
     sync_line_raw();
     if (state_.heading == from.heading) {
       state_.heading = to.heading;
@@ -2136,6 +2240,7 @@ class Reader {
     paragraph_.spacing = clamp_spacing(state_.spacing);
     paragraph_.borders = clamp_borders(state_.borders);
     paragraph_.shading = clamp_shading(state_.shading);
+    paragraph_.tabs = clamp_tabs(state_.tabs);
     paragraph_.style = style_name(state_.style);
     paragraph_.heading = state_.heading;
     dest->push_back(paragraph_);
@@ -2324,6 +2429,7 @@ class Reader {
     paragraph_.spacing = clamp_spacing(live ? state_.spacing : final_spacing_);
     paragraph_.borders = clamp_borders(live ? state_.borders : final_borders_);
     paragraph_.shading = clamp_shading(live ? state_.shading : final_shading_);
+    paragraph_.tabs = clamp_tabs(live ? state_.tabs : final_tabs_);
     paragraph_.style = style_name(live ? state_.style : final_style_);
     paragraphs_.push_back(paragraph_);
     marks_.push_back(live ? state_.marks : final_marks_);
@@ -2367,6 +2473,7 @@ class Reader {
       merged.spacing = paragraph.spacing;
       merged.borders = paragraph.borders;
       merged.shading = paragraph.shading;
+      merged.tabs = paragraph.tabs;
       merged.page_break = paragraph.page_break;
       merged.cell = paragraph.cell;
       merged.list = resolve(marks_[i]);
@@ -2411,6 +2518,7 @@ class Reader {
         merged.spacing = source[n].spacing;
         merged.borders = source[n].borders;
         merged.shading = source[n].shading;
+        merged.tabs = source[n].tabs;
         merged.page_break = source[n].page_break;
         merged.list = n < marks.size() ? resolve(marks[n]) : ListFormat{};
         for (Run& run : source[n].runs) {
@@ -2437,6 +2545,7 @@ class Reader {
     if (page_.landscape && page_.paper_width < page_.paper_height)
       std::swap(page_.paper_width, page_.paper_height);
     doc.page = clamp_page(page_);
+    doc.default_tab = clamp_default_tab(deftab_);
     // Indents from the file have to leave a quarter inch of this page's
     // text area. The dialog already refuses a pair that does not.
     const int text = page_text_twips(doc.page);
@@ -2445,6 +2554,7 @@ class Reader {
       paragraph.spacing = clamp_spacing(paragraph.spacing);
       paragraph.borders = clamp_borders(paragraph.borders);
       paragraph.shading = clamp_shading(paragraph.shading);
+      paragraph.tabs = clamp_tabs(paragraph.tabs);
       paragraph.cell.borders = clamp_borders(paragraph.cell.borders);
       paragraph.cell.shading = clamp_shading(paragraph.cell.shading);
       if (paragraph.list.has_own)
@@ -2464,6 +2574,7 @@ class Reader {
       style.spacing = clamp_spacing(style.spacing);
       style.borders = clamp_borders(style.borders);
       style.shading = clamp_shading(style.shading);
+      style.tabs = clamp_tabs(style.tabs);
     }
   }
 
@@ -2558,6 +2669,8 @@ class Reader {
   std::vector<CellEdge> cell_edges_;
   Borders final_borders_;
   Shading final_shading_;
+  std::vector<TabStop> final_tabs_;
+  int deftab_ = kDefaultTab;
   // A character control word since the last paragraph ended: an empty
   // paragraph with one has a format of its own (Paragraph::mark).
   bool char_seen_ = false;
@@ -2839,6 +2952,37 @@ void write_cell_borders(std::ostringstream& out, const Borders& borders)
   write_one_side(out, "\\clbrdrl", mine.left, nullptr, true);
   write_one_side(out, "\\clbrdrb", mine.bottom, nullptr, true);
   write_one_side(out, "\\clbrdrr", mine.right, nullptr, true);
+}
+
+void write_tabs(std::ostringstream& out, const std::vector<TabStop>& tabs,
+                const std::vector<TabStop>* base)
+{
+  const std::vector<TabStop> mine = clamp_tabs(tabs);
+  if (base && mine == clamp_tabs(*base))
+    return;
+  if (!base && mine.empty())
+    return;
+  // The whole list. An empty list cannot cancel a base that has stops:
+  // RTF has no word for that, so the base's stops stay.
+  for (const TabStop& stop : mine) {
+    if (stop.align == TabAlign::Center)
+      out << "\\tqc";
+    else if (stop.align == TabAlign::Right)
+      out << "\\tqr";
+    else if (stop.align == TabAlign::Decimal)
+      out << "\\tqdec";
+    else if (stop.align == TabAlign::Bar)
+      out << "\\tb";
+    if (stop.align != TabAlign::Bar) {
+      if (stop.leader == TabLeader::Dot)
+        out << "\\tldot";
+      else if (stop.leader == TabLeader::Hyphen)
+        out << "\\tlhyph";
+      else if (stop.leader == TabLeader::Underline)
+        out << "\\tlul";
+    }
+    out << "\\tx" << stop.position;
+  }
 }
 
 void write_shading(std::ostringstream& out, const Shading& shading, const Shading* base)
@@ -3158,6 +3302,7 @@ std::string rtf_export(const Document& doc)
       write_spacing(out, style.spacing, up ? &up->spacing : nullptr);
       write_borders(out, style.borders, up ? &up->borders : nullptr);
       write_shading(out, style.shading, up ? &up->shading : nullptr);
+      write_tabs(out, style.tabs, up ? &up->tabs : nullptr);
       if (style.heading >= 1 && style.heading <= 6)
         out << "\\outlinelevel" << (style.heading - 1);
       else if ((up && up->heading != 0) || builtin_heading(style.name) != 0)
@@ -3197,6 +3342,9 @@ std::string rtf_export(const Document& doc)
       out << "\\landscape";
     out << "\n";
   }
+  const int deftab = clamp_default_tab(doc.default_tab);
+  if (deftab != kDefaultTab)
+    out << "\\deftab" << deftab << "\n";
   if (page.columns != 1)
     out << "\\cols" << page.columns << "\\colsx" << page.column_gap << "\n";
 
@@ -3289,6 +3437,7 @@ std::string rtf_export(const Document& doc)
     write_spacing(out, paragraph.spacing, plain_style ? &plain_style->spacing : nullptr);
     write_borders(out, paragraph.borders, plain_style ? &plain_style->borders : nullptr);
     write_shading(out, paragraph.shading, plain_style ? &plain_style->shading : nullptr);
+    write_tabs(out, paragraph.tabs, plain_style ? &plain_style->tabs : nullptr);
     if (ls > 0)
       out << "\\ls" << ls << "\\ilvl" << clamp_list(paragraph.list).level;
     write_outline(paragraph, plain_style);
@@ -3382,6 +3531,7 @@ std::string rtf_export(const Document& doc)
       write_spacing(out, paragraph.spacing, cell_style_fmt ? &cell_style_fmt->spacing : nullptr);
       write_borders(out, paragraph.borders, cell_style_fmt ? &cell_style_fmt->borders : nullptr);
       write_shading(out, paragraph.shading, cell_style_fmt ? &cell_style_fmt->shading : nullptr);
+      write_tabs(out, paragraph.tabs, cell_style_fmt ? &cell_style_fmt->tabs : nullptr);
       if (list.kind != ListKind::None)
         out << "\\ls" << overrides[index] << "\\ilvl" << list.level;
       write_outline(paragraph, cell_style_fmt);
@@ -3458,6 +3608,9 @@ std::string rtf_export(const Document& doc)
     else if (given_style && given_style->align != Align::Left)
       out << "\\ql";
     write_spacing(out, paragraph.spacing, given_style ? &given_style->spacing : nullptr);
+    write_borders(out, paragraph.borders, given_style ? &given_style->borders : nullptr);
+    write_shading(out, paragraph.shading, given_style ? &given_style->shading : nullptr);
+    write_tabs(out, paragraph.tabs, given_style ? &given_style->tabs : nullptr);
     if (list.kind != ListKind::None) {
       // No {\*\pn ...} beside it: LibreOffice lets Word 6's \pn win over
       // \ls, and loses the levels and the restarts.
