@@ -1,3 +1,9 @@
+write-it (2.2.2-1) unstable; urgency=medium
+
+  * A keystroke in a long document stays under the 50 ms gate.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sat, 17 Oct 2026 07:45:41 +0100
+
 write-it (2.2.1-1) unstable; urgency=medium
 
   * A body paragraph's borders and shading round-trip.
