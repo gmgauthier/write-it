@@ -1,3 +1,14 @@
+write-it (2.3.1-1) unstable; urgency=medium
+
+  * Story tab stops follow the story type, which stops growing past 100%.
+  * A later footnote column takes a new default tab interval.
+  * Center, right, and decimal tab leaders are drawn.
+  * Set replaces the stop the list already shows.
+  * A selection in a header, a footer, or a note sets every selected paragraph.
+  * In a cell, the ruler and Tabs follow the caret.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Sat, 17 Oct 2026 12:34:04 +0100
+
 write-it (2.3.0-1) unstable; urgency=medium
 
   * Format → Tabs… and the ruler set a paragraph's tab stops.

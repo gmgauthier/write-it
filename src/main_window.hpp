@@ -383,6 +383,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // and the header and footer use it. Run tags scale on their own.
   Pango::FontDescription story_font() const;
   void apply_story_zoom();
+  // Header, footer, and note stops use story_zoom(), not the body's. Rebuilding
+  // them here would run from a size allocation, so the retag waits for an idle.
+  void queue_story_tabs();
   void use_story_css(Gtk::Widget& widget);
   void apply_margins();
   ViewGeometry geometry() const;
@@ -391,6 +394,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   int margin_right() const;
   int indent_px(int twips) const;
   double zoom_factor() const;
+  // Notes, the header, and the footer stop at 100%. Their tab pixels use this.
+  double story_zoom() const;
   // What apply_page_size() sizes the page's height to now, and whether the
   // page's size request differs from it.
   int page_height() const;
@@ -463,7 +468,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Pango stops for this paragraph: its own, then the default grid after the
   // last one. Positions are pixels from the layout's left edge.
   void apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag, const std::vector<TabStop>& tabs,
-                       const Indents& indents, bool cell, bool list) const;
+                       const Indents& indents, bool cell, bool list, double zoom) const;
   // Space before, space after, and the extra a line-spacing rule adds. A page
   // break's 18 stays. A heading's own gap is included when this tag is raised
   // over the heading, because an unset property is what lets the heading show.
@@ -1094,6 +1099,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection list_shifts_idle_;
   // The list-tab idle, likewise; tabbing_ while it retags.
   sigc::connection list_tabs_idle_;
+  // Story tab pixels baked at this zoom. -1 until the first bake. An idle
+  // retags when story_zoom() moves; the idle is disconnected in the destructor.
+  sigc::connection story_tabs_idle_;
+  double story_tabs_zoom_ = -1;
   bool tabbing_ = false;
   // Paragraphs update_list_tabs() has looked at, for the tests.
   long list_tabs_evaluated_ = 0;

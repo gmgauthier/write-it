@@ -41,6 +41,11 @@ bool parse_measure(const std::string& text, Units units, double& value);
 // twips exactly, because the value on screen is rounded.
 int keep_twips(int original, double shown, double now, Units units);
 
+// The twips Set stores for a typed tab position. A stop whose on-screen
+// measure is that number is that stop: 180 twips is an eighth of an inch and
+// shows as 0.13", and Set replaces it instead of adding 187 beside it.
+int shown_stop_twips(double typed, const std::vector<int>& positions, Units units);
+
 // The twips a Hanging By of `now` stores, given `twips` as worked out for it
 // (keep_twips). A
 // By equal to Left on screen takes Left's twips, so a rounded Left can hang
