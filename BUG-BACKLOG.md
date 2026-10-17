@@ -2,9 +2,9 @@
 
 Reviewed 2026-10-16 against the 2.2.0 sources. The specification is `DEVELOPMENT.md`. A claim there that the program breaks is a bug. Later 2.0 work (tabs, row and column selection, row and column colour, format painter) and later majors (sections, page numbers, grammar, mail merge, and `.doc` / `.docx` / `.odt` / `.abw` / HTML / LaTeX) are not listed here.
 
-The 2026-10-15 review against 2.1.0 is in Closed. Its product items were fixed in 2.1.1. The product items from this 2.2.0 review were fixed in 2.2.1. The 50 ms typing gate was met in 2.2.2. Measured on Plato, release build, with `tests/bench_key.cpp`. On 2.2.2, 2026-10-17, `plain1000` was 19.2 ms and `list1000` was 18.2 ms. On 2.3.0, 2026-10-17, `plain1000` was 21.8 ms and `list1000` was 22.6 ms. On 2.1.0, `plain1000` was 55.6 ms and `list1000` was 65.8 ms. On 2.1.1, 2026-10-16, `plain1000` was 58.7 ms and `list1000` was 68.8 ms. The standing item in Open owns the periodic rerun. Closed records the defects shipped through 2.2.2.
+The 2026-10-15 review against 2.1.0 is in Closed. Its product items were fixed in 2.1.1. The product items from this 2.2.0 review were fixed in 2.2.1. The 50 ms typing gate was met in 2.2.2. Measured on Plato, release build, with `tests/bench_key.cpp`. On 2.2.2, 2026-10-17, `plain1000` was 19.2 ms and `list1000` was 18.2 ms. On 2.3.0, 2026-10-17, `plain1000` was 21.8 ms and `list1000` was 22.6 ms. On 2.1.0, `plain1000` was 55.6 ms and `list1000` was 65.8 ms. On 2.1.1, 2026-10-16, `plain1000` was 58.7 ms and `list1000` was 68.8 ms. The standing item in Open owns the periodic rerun. Closed records the defects shipped through 2.3.1.
 
-Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file. Columns do not snake the text. The ruler draws a tick in each gap, and RTF round-trips `\cols`. Per-section columns are 3.0. Print draws the page widget. Exactly, and a multiple below one line, stay stored and round-trip, and the screen keeps the font’s line. That limit is specified. A cell paragraph tag draws indents, alignment, and spacing, and no list. Header, footer, and note pictures stay in the file until that area is typed in. Editing replaces the story with plain paragraphs. Highlight is the toolbar control. The Options size list is whole points. Half points belong to the format size box. `paragraph_style()` uses the first style when the name and Normal are both missing, and `style_sheet()` substitutes the built-in sheet when the document’s styles are empty. Spelling does walk the header, the footer, and the notes. The draft page-break gap is 18 px at every zoom, and the page count subtracts it. Cell line spacing is measured as Sans on the body context. `editor.cpp` is long, and `MainWindow` owns the document, the view, the dialogs, and pagination. Past 100% zoom, pictures and footnote type stay at their 100% size. This review also left these out. The Borders and Shading dialog’s settings, widths, colours, 3-D, and Apply to match the specification, and OK on a cell that has never had a border stores the 1/2 pt box the dialog shows. Enter, paste, undo, a style, and Paragraph… keep a border. A new table writes no cell borders. A cell’s borders round-trip, and a paragraph border inside a cell round-trips with them. A style’s borders round-trip. A box at the start of a page stays on that sheet. Insert Row still inserts below the caret’s row.
+Checked and left out of Open: a short page stays still on Enter (`MainWindow::scroll_to_caret`). Style boxes ellipsize at 32 characters (`narrow_name_box` in `src/styles.cpp`), so the status note that Format → Style… widens for a long name is stale. Save of an imported `.txt` or `.md` goes through Save As and leaves the original alone. Open’s missing-file and unreadable-file sentences name the file. Columns do not snake the text. The ruler draws a tick in each gap, and RTF round-trips `\cols`. Per-section columns are 3.0. Print draws the page widget. Exactly, and a multiple below one line, stay stored and round-trip, and the screen keeps the font’s line. That limit is specified. A cell paragraph tag draws indents, alignment, and spacing, and no list. Header, footer, and note pictures stay in the file until that area is typed in. Editing replaces the story with plain paragraphs. Highlight is the toolbar control. The Options size list is whole points. Half points belong to the format size box. `paragraph_style()` uses the first style when the name and Normal are both missing, and `style_sheet()` substitutes the built-in sheet when the document’s styles are empty. Spelling does walk the header, the footer, and the notes. The draft page-break gap is 18 px at every zoom, and the page count subtracts it. Cell line spacing is measured as Sans on the body context. `editor.cpp` is long, and `MainWindow` owns the document, the view, the dialogs, and pagination. Past 100% zoom, pictures and footnote type stay at their 100% size. This review also left these out. The Borders and Shading dialog’s settings, widths, colours, 3-D, and Apply to match the specification, and OK on a cell that has never had a border stores the 1/2 pt box the dialog shows. Enter, paste, undo, a style, and Paragraph… keep a border. A new table writes no cell borders. A cell’s borders round-trip, and a paragraph border inside a cell round-trips with them. A style’s borders round-trip. A box at the start of a page stays on that sheet. Insert Row still inserts below the caret’s row. Checked on 2.3.0 and left out of Open: a stop that scrolls under the ruler’s left 18 pixels is covered by the tab well, which is drawn on top of that strip. A bar at the last twip of the indent cap was not confirmed to catch a Tab on screen.
 
 ## Open
 
@@ -14,7 +14,7 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 - Confidence: high
 - Where: `tests/bench_key.cpp` (`write-it-bench-key`). How to build and run it is `tests/README.md`.
 - Trigger: Periodically, on a release build, run `xvfb-run -a ./build-release/write-it-bench-key`. Read the `plain1000` and `list1000` gate lines. Each line is the median of three runs of 50 keys at the end of paragraph 500, process CPU, refresh included. This item stays open. A run at or under 100 ms is recorded here and does not close it.
-- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-17, release build of 2.2.2 on Plato: `plain1000` 19.2 ms, `list1000` 18.2 ms. The handlers were about 14.1 ms and 13.4 ms. Both gate lines are under 50 ms. The 2.2.1 pair on 2026-10-16 was `plain1000` 69.2 ms and `list1000` 80.4 ms, handlers 36.5 ms and 40.2 ms. The 2.1.1 pair that day was `plain1000` 58.7 ms and `list1000` 68.8 ms, handlers 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
+- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-17, release build of 2.3.0 on Plato: `plain1000` 21.8 ms, `list1000` 22.6 ms. The handlers were about 14.5 ms and 15.1 ms. Both gate lines are under 50 ms. The 2.2.2 pair the same day was `plain1000` 19.2 ms and `list1000` 18.2 ms, handlers about 14.1 ms and 13.4 ms. The 2.2.1 pair on 2026-10-16 was `plain1000` 69.2 ms and `list1000` 80.4 ms, handlers 36.5 ms and 40.2 ms. The 2.1.1 pair that day was `plain1000` 58.7 ms and `list1000` 68.8 ms, handlers 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
 
 ## Test defects
 
@@ -37,6 +37,60 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Header, footer, and note tab stops stay at the body's zoom
+
+- Fixed in 2.3.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::apply_story_tabs` in `src/page_ui.cpp`; `MainWindow::apply_story_zoom` and `MainWindow::paint_story_tabs` in `src/editor.cpp`.
+- Trigger: Zoom while a header, footer, or footnote has a tab stop, a bar, or no stops of its own. Story type stops growing past 100%. Body and cell stops follow the zoom.
+- Outcome: Stops were baked with the body's zoom and were not rebuilt when the zoom changed. Above 100% they sat further apart than the type. Below 100% the type shrank and the stops stayed. Bars and leaders were painted at the new zoom, so they left the tab. The stops, bars, and leaders now use the same zoom as the story type, and they are rebuilt when that zoom changes.
+
+### A later footnote column keeps the old default tab interval
+
+- Fixed in 2.3.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::commit_document` in `src/styles.cpp`.
+- Trigger: Footnotes already split across sheets, then Format → Tabs… changes the default interval and OK.
+- Outcome: The first column took the new interval. A later column kept the old one. Every column is retagged with the interval just stored.
+
+### Center, right, and decimal leaders are not drawn
+
+- Fixed in 2.3.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::draw_tab_marks` and `MainWindow::paint_story_tabs` in `src/editor.cpp`.
+- Trigger: A center, right, or decimal stop with a dot, dash, or underline leader, and a tab character with text after it.
+- Outcome: The leader was drawn only when the tab glyph's right edge sat on the stop, which is a left tab. Pango shortens a center, right, or decimal tab, so the leader was skipped. The leader now fills that glyph. A left leader is unchanged.
+
+### Set adds a second stop at the position the list already shows
+
+- Fixed in 2.3.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::on_tabs` in `src/editor.cpp`.
+- Trigger: The ruler stores a stop at 180 twips, one eighth of an inch. In inches the list shows `0.13"`. Type `0.13"` and click Set without that row selected. The same gap is at 540, 900, and 1260 twips, and in the centimetre list.
+- Outcome: Set stored 187 twips and left the 180 twip stop, so the list showed two rows at `0.13"`. Set now replaces the stop whose on-screen measure is the number typed.
+
+### A header, footer, or note selection changes only the caret's stops
+
+- Fixed in 2.3.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::apply_paragraphs` in `src/editor.cpp`.
+- Trigger: Select more than one paragraph in the header, footer, or a note, and set stops from the ruler or Format → Tabs….
+- Outcome: Only the caret's paragraph changed. The specification says every paragraph in the selection takes that list. The body and a cell already did. The header, the footer, and notes do too.
+
+### In a cell, the ruler and Tabs show the start of the selection
+
+- Fixed in 2.3.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::focused_para` in `src/editor.cpp`.
+- Trigger: A cell has two paragraphs with different stops. Select from the second back into the first, so the caret is in the second.
+- Outcome: The ruler and Format → Tabs… showed the first paragraph's stops, then OK wrote that list onto the selection. They now show the paragraph that has the caret.
 
 ### Typing in a long document misses the 50 ms gate
 

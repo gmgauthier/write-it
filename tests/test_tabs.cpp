@@ -2,11 +2,15 @@
 
 #include "check.hpp"
 #include "document.hpp"
+#include "units.hpp"
+#include "view.hpp"
 
 #include <cctype>
+#include <cstdlib>
 #include <string>
+#include <vector>
 
-constexpr int kChecks = 113;
+constexpr int kChecks = 138;
 
 namespace {
 
@@ -312,6 +316,44 @@ int main()
     CHECK(clamp_default_tab(360) == 360);
     CHECK(clamp_default_tab(kDefaultTab) == kDefaultTab);
     CHECK(clamp_default_tab(kMaxIndent) == kMaxIndent);
+  }
+
+  {
+    // 180 twips is 0.13" and 0.32 cm. Set must replace that stop.
+    CHECK(shown_stop_twips(0.13, {180}, Units::Inches) == 180);
+    CHECK(shown_stop_twips(0.13, {}, Units::Inches) == 187);
+    CHECK(shown_stop_twips(0.5, {720}, Units::Inches) == 720);
+    CHECK(shown_stop_twips(1.0, {180}, Units::Inches) == 1440);
+    CHECK(shown_stop_twips(0.32, {180}, Units::Centimetres) == 180);
+  }
+
+  {
+    const std::vector<int> two = {2, 2};
+    const std::vector<int> story = {0, 1};
+    const std::vector<int> notes = {0, 2};
+    CHECK(story_selection(two, story, 0, 0) == std::vector<size_t>{0});
+    CHECK(story_selection(two, story, 0, 3) == std::vector<size_t>{0});
+    CHECK(story_selection(two, story, 2, 4) == (std::vector<size_t>{0, 1}));
+    CHECK(story_selection(two, story, 0, 5) == (std::vector<size_t>{0, 1}));
+    CHECK(story_selection(two, story, 5, 0) == (std::vector<size_t>{0, 1}));
+    CHECK(story_selection(two, story, 3, 3) == std::vector<size_t>{1});
+    CHECK(story_selection(two, story, 5, 5) == std::vector<size_t>{1});
+    CHECK(story_selection(two, notes, 3, 3) == std::vector<size_t>{1});
+    CHECK(story_selection(two, notes, 0, 3) == std::vector<size_t>{0});
+  }
+
+  {
+    CHECK(tab_align_x(TabAlign::Left, 100, 100, 180, 180) == 100);
+    CHECK(tab_align_x(TabAlign::Right, 160, 160, 200, 200) == 200);
+    CHECK(tab_align_x(TabAlign::Center, 160, 160, 200, 200) == 180);
+    CHECK(tab_align_x(TabAlign::Decimal, 160, 160, 210, 190) == 190);
+    CHECK(tab_align_x(TabAlign::Decimal, 160, 160, 200, 200) == 200);
+    CHECK(tab_align_x(TabAlign::Left, 100, 100, 100, 100) == 100);
+    CHECK(tab_align_x(TabAlign::Right, 100, 100, 100, 100) == 100);
+    CHECK(tab_align_x(TabAlign::Center, 100, 100, 100, 100) == 100);
+    CHECK(tab_align_x(TabAlign::Decimal, 100, 100, 100, 100) == 100);
+    CHECK(std::abs(tab_align_x(TabAlign::Right, 160, 160, 200, 200) - 160) > 3);
+    CHECK(std::abs(tab_align_x(TabAlign::Left, 160, 160, 200, 200) - 200) > 3);
   }
 
   return suite_test::done("tabs", kChecks);

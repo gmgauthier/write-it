@@ -224,6 +224,13 @@ write_it_tabs_tests = executable(
 )
 test('tabs', write_it_tabs_tests)
 
+write_it_story_tabs_tests = executable(
+  'write-it-story-tabs-tests',
+  'tests/test_story_tabs.cpp',
+  dependencies: [writeit_dep],
+)
+test('story-tabs', with_display, args: [write_it_story_tabs_tests.full_path()], depends: write_it_story_tabs_tests, timeout: 90, suite: 'ui')
+
 # Enter twice after a page break must not start another sheet.
 write_it_double_return_tests = executable(
   'write-it-double-return-tests',

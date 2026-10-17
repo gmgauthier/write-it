@@ -283,6 +283,7 @@ MainWindow::~MainWindow()
   frame_fit_idle_.disconnect();
   list_shifts_idle_.disconnect();
   list_tabs_idle_.disconnect();
+  story_tabs_idle_.disconnect();
   clipboard_owner_.disconnect();
   mark_set_.disconnect();
   set_focus_.disconnect();

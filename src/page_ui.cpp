@@ -2621,19 +2621,23 @@ void MainWindow::apply_story_tabs(Gtk::TextView& view, int offset, int len,
   }
   // The story view's own margin is the content edge. A tag margin replaces
   // it, so the inset is added here, the way a body tag adds the page margin.
+  // The story type stops at 100%, and these pixels use that same zoom.
+  const double zoom = story_zoom();
   const int base_left = view.get_left_margin();
   const int base_right = view.get_right_margin();
+  auto px = [zoom](int twips) { return twips_to_px(twips, zoom); };
   if (list) {
-    tag->property_left_margin() = std::max(0, base_left + indent_px(indents.left));
-    tag->property_right_margin() = base_right + indent_px(indents.right);
-    tag->property_indent() = indent_px(list_text_start(indents)) - indent_px(indents.left);
+    tag->property_left_margin() = std::max(0, base_left + px(indents.left));
+    tag->property_right_margin() = base_right + px(indents.right);
+    tag->property_indent() = px(list_text_start(indents)) - px(indents.left);
   } else if (!(indents == Indents{})) {
     const int hang = std::min(0, indents.first);
-    tag->property_left_margin() = std::max(0, base_left + indent_px(indents.left + hang));
-    tag->property_right_margin() = base_right + indent_px(indents.right);
-    tag->property_indent() = indent_px(indents.first);
+    tag->property_left_margin() = std::max(0, base_left + px(indents.left + hang));
+    tag->property_right_margin() = base_right + px(indents.right);
+    tag->property_indent() = px(indents.first);
   }
-  apply_tab_stops(tag, paragraph.tabs, indents, false, list);
+  apply_tab_stops(tag, paragraph.tabs, indents, false, list, zoom);
+  story_tabs_zoom_ = zoom;
   buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
                     buffer->get_iter_at_offset(offset + len));
 }
@@ -2901,6 +2905,7 @@ void MainWindow::refresh_stories()
   place_notes();
   if (!loading_)
     apply_page_size();
+  story_tabs_zoom_ = story_zoom();
 }
 
 int MainWindow::note_block_px() const

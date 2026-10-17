@@ -122,6 +122,22 @@ PageWidths page_widths(ViewMode mode, double zoom);
 // Twips to screen pixels at a zoom, on the screen page's scale.
 int twips_to_px(int twips, double zoom);
 
+// Paragraphs a selection touches. `lengths` are each paragraph's characters.
+// `before[i]` is the gap that precedes paragraph i: 0 for the first, 1 for the
+// newline that ends the previous paragraph, 2 for the blank line between
+// notes. Those gap characters belong to the paragraph they precede, and so
+// does a caret on the paragraph's last character or one past it. `from == to`
+// is a caret. The offsets are swapped when the selection runs backward.
+std::vector<size_t> story_selection(const std::vector<int>& lengths, const std::vector<int>& before,
+                                    int from, int to);
+
+// Where a tab stop lines the following text up. `tab_right` is the tab
+// glyph's right edge. `text_left` and `text_right` bound the text after it,
+// up to the next tab. `decimal_x` is the decimal point, or `text_right` when
+// that text has none. A left stop uses the glyph's right edge. Center, right,
+// and decimal use the text: Pango shortens the glyph by that text.
+int tab_align_x(TabAlign align, int tab_right, int text_left, int text_right, int decimal_x);
+
 // A picture wider than this, at 100%, is drawn at this width. Zooming out
 // scales that size. Zooming in leaves it: the full factor drew the picture
 // larger than the text around it.
