@@ -924,19 +924,24 @@ void MainWindow::build_page()
     // caret on the last lines was out of reach. Size the page again after
     // this layout whenever the text wants more height than it was given.
     // (Less is normal: an empty page, or Draft's white area, is taller.)
-    int min_h = 0;
-    int nat_h = 0;
-    text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
-    if (nat_h > allocation.get_height()) {
-      grow_page_ = true;
-      queue_page_size();
-    } else if (page_height_stale()) {
-      // The text came out shorter than the height the page was last sized
-      // to. apply_page_size() measures the text before a zoom has rewrapped
-      // it, so the request it sets from Fit width to 50% is the old, taller
-      // layout's; left there, the sheet only ever grew and its height
-      // depended on the zooms before. Size it again to the text as it is.
-      queue_page_size();
+    // A letter whose line has not been shown to move skips both measures:
+    // each one walks every paragraph, and the status idle paginates if the
+    // line's box changed.
+    if (!page_edit_keeps_height()) {
+      int min_h = 0;
+      int nat_h = 0;
+      text_.get_preferred_height_for_width(allocation.get_width(), min_h, nat_h);
+      if (nat_h > allocation.get_height()) {
+        grow_page_ = true;
+        queue_page_size();
+      } else if (page_height_stale()) {
+        // The text came out shorter than the height the page was last sized
+        // to. apply_page_size() measures the text before a zoom has rewrapped
+        // it, so the request it sets from Fit width to 50% is the old, taller
+        // layout's; left there, the sheet only ever grew and its height
+        // depended on the zooms before. Size it again to the text as it is.
+        queue_page_size();
+      }
     }
     if (restore_scroll_)
       restore_held_view(false);
@@ -1277,7 +1282,17 @@ void MainWindow::apply_page_size()
     styled_view_ = view_;
     restyle_tags();
   }
-  int height = page_height();
+  // A letter inside a line whose box has not been shown to change keeps the
+  // height already on the page. The status idle measures that line after
+  // GTK has laid it out and paginates if the box moved.
+  int cached_h = 0;
+  int cached_w = 0;
+  page_.get_size_request(cached_w, cached_h);
+  (void)cached_w;
+  const bool reuse = page_edit_keeps_height();
+  int height = cached_h;
+  if (!reuse)
+    height = page_height();
   int current_w = 0;
   int current_h = 0;
   page_.get_size_request(current_w, current_h);
@@ -1377,6 +1392,26 @@ void MainWindow::update_page_status()
 {
   if (!buffer_)
     return;
+  // The handler kept the page height for this letter. Judge the line the
+  // caret is on now, even if a paragraph-tag signal cleared the other flag.
+  if (page_letter_) {
+    page_edit_maybe_ = true;
+    page_edit_line_ = buffer_->get_iter_at_mark(buffer_->get_insert()).get_line();
+  }
+  // The caret is still on the line we paginated, and that line's pixels did
+  // not move, so the seams and "Page n of m" are already right.
+  if (page_box_unchanged()) {
+    page_edit_maybe_ = false;
+    page_letter_ = false;
+    return;
+  }
+  page_letter_ = false;
+  // The handler kept the old page height. The line's box moved, so measure
+  // before rebuilding the seams.
+  const bool remeasure = page_edit_maybe_;
+  page_edit_maybe_ = false;
+  if (remeasure)
+    apply_page_size();
   update_page_seams();
   int end_y = 0;
   int end_h = 0;
@@ -1390,6 +1425,7 @@ void MainWindow::update_page_status()
   const Glib::ustring label = page_label(page_count(content_end, content_caret, per));
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
+  remember_page_cache();
 }
 
 void MainWindow::set_zoom(int zoom)
@@ -1518,6 +1554,7 @@ int MainWindow::print_page_count() const
 {
   // The same count as the status bar. The widget is taller than that by the
   // gray gaps between sheets, and those gaps are not pages.
+  ++page_walks_;
   if (!buffer_)
     return 1;
   int end_y = 0;

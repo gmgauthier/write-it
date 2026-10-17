@@ -8,21 +8,13 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 ## Open
 
-### Typing in a long document misses the 50 ms gate
-
-- Severity: incorrect
-- Confidence: medium
-- Where: `src/editor.cpp` `MainWindow::on_user_end`; `DEVELOPMENT.md` M2 typing-speed gate
-- Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
-- Outcome: Each keystroke still normalises the touched paragraphs, updates the title and the actions, applies the page size, syncs the format controls, and queues list layout. `DEVELOPMENT.md` says the gate is not met, and it records about 1.4 s per keystroke on commit `de03251`. The measurement is `tests/bench_key.cpp`, described in `tests/README.md`. A 1.0.8 release build met 50 ms; those numbers are in `tests/README.md`. A 1.0.16 release build on 2026-10-13 did not: `plain1000` 128.7 ms and `list1000` 145.1 ms. A 1.0.22 release build on 2026-10-14 did not: `plain1000` 154.6 ms and `list1000` 178.4 ms. A 1.0.23 release build on 2026-10-15 did not: `plain1000` 51.4 ms and `list1000` 60.5 ms. A 2.0.0 release build the same day did not: `plain1000` 55.7 ms and `list1000` 66.6 ms. A 2.1.0 release build the same day did not: `plain1000` 55.6 ms and `list1000` 65.8 ms. A 2.1.1 release build on 2026-10-16 did not: `plain1000` 58.7 ms and `list1000` 68.8 ms. The standing item below owns the periodic rerun.
-
 ### Rerun the typing-speed bench, and optimize above 100 ms
 
 - Severity: incorrect
 - Confidence: high
 - Where: `tests/bench_key.cpp` (`write-it-bench-key`). How to build and run it is `tests/README.md`.
 - Trigger: Periodically, on a release build, run `xvfb-run -a ./build-release/write-it-bench-key`. Read the `plain1000` and `list1000` gate lines. Each line is the median of three runs of 50 keys at the end of paragraph 500, process CPU, refresh included. This item stays open. A run at or under 100 ms is recorded here and does not close it.
-- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-16, release build of 2.1.1 on Plato: `plain1000` 58.7 ms, `list1000` 68.8 ms. The handlers were 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
+- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-17, release build of 2.2.2 on Plato: `plain1000` 19.2 ms, `list1000` 18.2 ms. The handlers were about 14.1 ms and 13.4 ms. Both gate lines are under 50 ms. The 2.2.1 pair on 2026-10-16 was `plain1000` 69.2 ms and `list1000` 80.4 ms, handlers 36.5 ms and 40.2 ms. The 2.1.1 pair that day was `plain1000` 58.7 ms and `list1000` 68.8 ms, handlers 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
 
 ## Test defects
 
@@ -45,6 +37,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Typing in a long document misses the 50 ms gate
+
+- Fixed in 2.2.2.
+- Severity: incorrect
+- Confidence: medium
+- Where: `src/editor.cpp` `MainWindow::on_user_end`; `src/main_window.cpp` `MainWindow::apply_page_size`; `DEVELOPMENT.md` M2 typing-speed gate
+- Trigger: Type in paragraph 500 of a 1000-paragraph document. The gate is under 50 ms of CPU per keystroke, median of three, on a release build, for `plain1000.rtf` and `list1000.rtf`.
+- Outcome: A letter that does not move its line skips a note-free capture, reuses the page height, and does not renumber a list whose tag is already on the paragraph. Enter still paginates, and removing a tag still renumbers. A 2026-10-17 Plato release build met the gate: `plain1000` 19.2 ms and `list1000` 18.2 ms, handlers about 14.1 ms and 13.4 ms. Earlier release builds did not. A 1.0.16 build on 2026-10-13 was `plain1000` 128.7 ms and `list1000` 145.1 ms. A 1.0.22 build on 2026-10-14 was `plain1000` 154.6 ms and `list1000` 178.4 ms. A 1.0.23 build on 2026-10-15 was `plain1000` 51.4 ms and `list1000` 60.5 ms. A 2.0.0 build the same day was `plain1000` 55.7 ms and `list1000` 66.6 ms. A 2.1.0 build the same day was `plain1000` 55.6 ms and `list1000` 65.8 ms. A 2.1.1 build on 2026-10-16 was `plain1000` 58.7 ms and `list1000` 68.8 ms. A 2.2.1 build the same day was `plain1000` 69.2 ms and `list1000` 80.4 ms. The standing item in Open owns the periodic rerun. The 1.0.8 numbers are in `tests/README.md`. `DEVELOPMENT.md` had recorded about 1.4 s per keystroke on commit `de03251`.
 
 ### Insert Row and Insert Column copy one cell’s borders and shading onto every new cell
 

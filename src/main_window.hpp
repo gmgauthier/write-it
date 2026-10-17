@@ -214,6 +214,22 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool page_caret(int count, bool extend);
   void sync_zoom_checks();
   void queue_page_status();
+  // A character typed inside one line. Cleared when the edit can change
+  // pagination: a newline, a new paragraph format, or a line whose pixels
+  // moved. apply_page_size() then keeps the page height it already has.
+  void note_page_edit(int line, bool structure);
+  // True when the caret line's pixel box is the one remember_page_cache()
+  // stored, so the seams and the page count are still right.
+  bool page_box_unchanged() const;
+  // True when a letter is still on the paginated line, at the same zoom,
+  // view, and width, and the page already has a height. The status idle
+  // measures that line and paginates if its box moved.
+  bool page_edit_keeps_height() const;
+  void remember_page_cache();
+  // True when a character before `start`, still in the paragraph, already
+  // carries `tag`. An apply that begins at the paragraph start does not.
+  bool paragraph_keeps_tag(const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                           const Gtk::TextIter& end) const;
   // Gray pasteboard between the sheets of a long page. Screen-only: Draft
   // drops it, and the file never stores it.
   void update_page_seams();
@@ -294,6 +310,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   Document capture() const;
   // Calls of capture(), for the tests: a keystroke makes at most undo's two.
   mutable long captures_ = 0;
+  // Full pagination walks (page height and seam rebuild). A letter whose
+  // line box did not change does not add one. Tests read this.
+  mutable long page_walks_ = 0;
   // For the tests: label geometry read through get_iter_location() (which
   // lays its line out again), and label layouts built, in list drawing and
   // list measuring. A keystroke costs a few of each, however many items show.
@@ -1023,6 +1042,22 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection restore_idle_;
   // The status bar's page count idle, likewise.
   sigc::connection page_status_idle_;
+  // The last pagination, and the single-line edit that may reuse it.
+  bool page_cache_valid_ = false;
+  bool page_edit_maybe_ = false;
+  // Set for the whole user action and cleared by the status idle. A paragraph
+  // tag re-applied to a new character does not clear it; a newline or a new
+  // format does. apply_page_size() keeps the page height while it is set.
+  bool page_letter_ = false;
+  int page_cache_line_ = -1;
+  int page_edit_line_ = -1;
+  int page_cache_y_ = 0;
+  int page_cache_h_ = 0;
+  int page_cache_lines_ = 0;
+  int page_cache_width_ = 0;
+  int page_cache_notes_ = 0;
+  double page_cache_zoom_ = 0;
+  ViewMode page_cache_view_ = kDefaultView;
   // sync_table_lines() after a table has its real height. One at a time.
   sigc::connection table_sync_;
   // update_page_seams() is applying its tags. Their signals are not edits.

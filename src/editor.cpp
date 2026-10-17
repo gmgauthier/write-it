@@ -880,7 +880,7 @@ void MainWindow::build_editor()
   // marks its range for update_list_tabs(); a paragraph format can renumber
   // the items below, a character format changes only its own label's font.
   auto lists_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
-                             const Gtk::TextIter& end) {
+                             const Gtk::TextIter& end, bool applied) {
     if (seaming_ || shifting_ || tabbing_)
       return;
     const std::string name = tag_name(tag);
@@ -888,34 +888,47 @@ void MainWindow::build_editor()
         is_spacing_gap(name))
       return;
     ParaFormat ignored;
-    if (parse_para(name, ignored))
+    // Re-applying the tag the paragraph already has does not renumber. Taking
+    // one off does. A load still renumbers: the cache may not have seen this
+    // paragraph yet, and the same tag object is shared by that format.
+    if (parse_para(name, ignored) &&
+        (loading_ || restoring_ || !applied || !paragraph_keeps_tag(tag, start, end)))
       tabs_renumber_ = true;
     note_list_tabs(start, end);
     queue_list_shifts();
     queue_list_tabs();
   };
-  buffer_->signal_apply_tag().connect(lists_on_tag);
+  buffer_->signal_apply_tag().connect(
+      [lists_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                     const Gtk::TextIter& end) { lists_on_tag(tag, start, end, true); });
   buffer_->signal_apply_tag().connect(sigc::mem_fun(*this, &MainWindow::on_tag_applied));
-  buffer_->signal_remove_tag().connect(lists_on_tag);
+  buffer_->signal_remove_tag().connect(
+      [lists_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                     const Gtk::TextIter& end) { lists_on_tag(tag, start, end, false); });
   // Text edits mark their range too; a new or removed paragraph renumbers.
   buffer_->signal_insert().connect(
       [this](const Gtk::TextIter& end, const Glib::ustring& text, int) {
         auto start = end;
         start.backward_chars(static_cast<int>(text.length()));
-        if (text.find('\n') != Glib::ustring::npos) {
+        const bool structure = text.find('\n') != Glib::ustring::npos;
+        if (structure) {
           tabs_renumber_ = true;
           // The first newline of this keystroke. A page break stays on the
           // paragraph that had it; the line Enter adds does not take another.
           if (in_user_ && inserted_newline_at_ < 0)
             inserted_newline_at_ = start.get_offset();
         }
+        note_page_edit(start.get_line(), structure);
         note_list_tabs(start, end);
       },
       true);
   buffer_->signal_erase().connect(
       [this](const Gtk::TextIter& start, const Gtk::TextIter& end) {
-        if (buffer_->get_slice(start, end, true).find('\n') != Glib::ustring::npos)
+        const bool structure =
+            buffer_->get_slice(start, end, true).find('\n') != Glib::ustring::npos;
+        if (structure)
           tabs_renumber_ = true;
+        note_page_edit(start.get_line(), structure);
       },
       false);
   buffer_->signal_erase().connect(
@@ -942,14 +955,26 @@ void MainWindow::build_editor()
           list_lines_valid_ = false;
       },
       false);
-  auto changes_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter&,
-                               const Gtk::TextIter&) {
+  auto changes_on_tag = [this](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                               const Gtk::TextIter& end, bool applied) {
     ParaFormat ignored;
-    if (parse_para(tag_name(tag), ignored))
-      list_lines_valid_ = false;
+    if (!parse_para(tag_name(tag), ignored))
+      return;
+    // The apply-tag signal runs before the tag is added. A paragraph that
+    // already carries it is being tagged again, so the list and the line box
+    // stay as they are. Removing it does change them. A load always
+    // invalidates.
+    if (applied && !loading_ && !restoring_ && paragraph_keeps_tag(tag, start, end))
+      return;
+    list_lines_valid_ = false;
+    note_page_edit(start.get_line(), true);
   };
-  buffer_->signal_apply_tag().connect(changes_on_tag);
-  buffer_->signal_remove_tag().connect(changes_on_tag);
+  buffer_->signal_apply_tag().connect(
+      [changes_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                       const Gtk::TextIter& end) { changes_on_tag(tag, start, end, true); });
+  buffer_->signal_remove_tag().connect(
+      [changes_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
+                       const Gtk::TextIter& end) { changes_on_tag(tag, start, end, false); });
   text_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_page_status(); });
   // The style list and the Table menu focus the body while the caret is still
   // in the cell. A click or a key here is the caret actually moving.
@@ -1675,6 +1700,9 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   note_editing_ = false;
   release_note_scroll(false);
   loading_ = true;
+  page_letter_ = false;
+  page_edit_maybe_ = false;
+  page_cache_valid_ = false;
   cell_edit_ = CellEdit{};
   cell_typing_on_ = false;
   styles_ = doc.styles;
@@ -2046,6 +2074,9 @@ void MainWindow::on_user_begin()
   if (loading_ || restoring_ || dropping_pad_)
     return;
   inserted_newline_at_ = -1;
+  // A letter keeps the page height. A newline or a new paragraph format
+  // clears this before the height is chosen.
+  page_letter_ = true;
   in_user_ = true;
   touched_ = false;
   open_step();
@@ -2699,9 +2730,113 @@ std::vector<int> inverse_note_remap(const std::vector<int>& remap)
 
 }  // namespace
 
+void MainWindow::note_page_edit(int line, bool structure)
+{
+  if (seaming_ || dropping_pad_ || loading_ || restoring_)
+    return;
+  if (structure) {
+    page_edit_maybe_ = false;
+    page_letter_ = false;
+    return;
+  }
+  if (!page_edit_maybe_) {
+    page_edit_maybe_ = true;
+    page_edit_line_ = line;
+    return;
+  }
+  if (line != page_edit_line_) {
+    page_edit_maybe_ = false;
+    page_letter_ = false;
+  }
+}
+
+bool MainWindow::page_edit_keeps_height() const
+{
+  if (!page_letter_ || !page_cache_valid_)
+    return false;
+  if (view_ != page_cache_view_ || zoom_factor() != page_cache_zoom_)
+    return false;
+  if (text_.get_allocated_width() != page_cache_width_ || page_cache_width_ <= 1)
+    return false;
+  int width = 0;
+  int height = 0;
+  page_.get_size_request(width, height);
+  return height > 0;
+}
+
+bool MainWindow::page_box_unchanged() const
+{
+  if (!page_edit_maybe_ || !page_cache_valid_ || !buffer_)
+    return false;
+  if (page_edit_line_ != page_cache_line_ || page_edit_line_ < 0)
+    return false;
+  if (page_edit_line_ >= buffer_->get_line_count())
+    return false;
+  if (view_ != page_cache_view_ || zoom_factor() != page_cache_zoom_)
+    return false;
+  if (text_.get_allocated_width() != page_cache_width_ || page_cache_width_ <= 1)
+    return false;
+  if (buffer_->get_line_count() != page_cache_lines_)
+    return false;
+  if (note_block_px() != page_cache_notes_)
+    return false;
+  int y = 0;
+  int height = 0;
+  text_.get_line_yrange(buffer_->get_iter_at_line(page_edit_line_), y, height);
+  return y == page_cache_y_ && height == page_cache_h_ && height > 0;
+}
+
+void MainWindow::remember_page_cache()
+{
+  if (!buffer_ || text_.get_allocated_width() <= 1)
+    return;
+  const auto caret = buffer_->get_iter_at_mark(buffer_->get_insert());
+  int y = 0;
+  int height = 0;
+  text_.get_line_yrange(caret, y, height);
+  if (height <= 0)
+    return;
+  page_cache_line_ = caret.get_line();
+  page_cache_y_ = y;
+  page_cache_h_ = height;
+  page_cache_lines_ = buffer_->get_line_count();
+  page_cache_width_ = text_.get_allocated_width();
+  page_cache_notes_ = note_block_px();
+  page_cache_zoom_ = zoom_factor();
+  page_cache_view_ = view_;
+  page_cache_valid_ = true;
+}
+
+bool MainWindow::paragraph_keeps_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
+                                     const Gtk::TextIter& start, const Gtk::TextIter& /*end*/) const
+{
+  // Called from apply-tag, which runs before the tag is added. The paragraph
+  // already has it when its first character does, including a re-apply that
+  // starts there. An apply that starts later keeps the list cache when some
+  // earlier character already has it: that is the character the cache read.
+  if (!buffer_ || !tag)
+    return false;
+  const int from = paragraph_start(start.get_offset());
+  if (buffer_->get_iter_at_offset(from).has_tag(tag))
+    return true;
+  if (start.get_offset() <= from)
+    return false;
+  for (auto iter = buffer_->get_iter_at_offset(from); iter.get_offset() < start.get_offset();
+       ++iter) {
+    if (iter.has_tag(tag))
+      return true;
+  }
+  return false;
+}
+
 void MainWindow::compact_body_notes()
 {
   if (restoring_ || !undo_.is_open())
+    return;
+  // Nothing to drop, and capture() would copy every paragraph. A marker
+  // with no note is left as it is: drop_unmarked_notes is a no-op on an
+  // empty list.
+  if (notes_.empty())
     return;
   const Document doc = capture();
   const NoteDrop drop = drop_unmarked_notes(doc);
@@ -5665,6 +5800,27 @@ const std::vector<MainWindow::ListLine>& MainWindow::list_lines()
         format = list_lines_[i - 1].format;
       else
         format = ParaFormat{};
+    } else if (starts[i] < total) {
+      // para_format() takes the basis from the first run or the paragraph
+      // mark. A tag with default spacing does not store that size, so the
+      // name still says 11 pt.
+      auto text = buffer_->get_iter_at_offset(starts[i]);
+      if (text.get_char() == '\n') {
+        if (has_fmt(text)) {
+          const int half = half_points_of(format_of(text).size);
+          if (half >= 2)
+            format.basis = half;
+        }
+      } else {
+        for (; !text.is_end() && text.get_char() != '\n'; ++text) {
+          if (text.get_char() == kPageBreakPad)
+            continue;
+          const int half = half_points_of(format_of(text).size);
+          if (half >= 2)
+            format.basis = half;
+          break;
+        }
+      }
     }
     list_lines_[i].format = format;
     list_lines_[i].line = lines[i];
@@ -6547,6 +6703,7 @@ void MainWindow::update_page_seams()
   sync_draft_gaps();
   if (text_.get_allocated_width() <= 1)
     return;
+  ++page_walks_;
   // Measure the notes at the width they will wrap, not the width they had
   // at the previous zoom.
   fit_note_views();
@@ -6942,17 +7099,14 @@ void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
         cr->stroke();
       }
     }
-    bool more = false;
-    while (!iter.is_end()) {
-      if (iter.get_char() == '\n') {
-        iter.forward_char();
-        more = !iter.is_end();
-        break;
-      }
-      iter.forward_char();
-    }
-    if (!more)
+    // The next paragraph. A seam sits on the paragraph's first character, so
+    // the characters in between are not visited.
+    Gtk::TextIter match_start;
+    Gtk::TextIter match_end;
+    if (!iter.forward_search("\n", Gtk::TEXT_SEARCH_TEXT_ONLY, match_start, match_end) ||
+        match_end.is_end())
       break;
+    iter = match_end;
   }
 }
 
