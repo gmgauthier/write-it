@@ -217,6 +217,13 @@ write_it_borders_tests = executable(
 )
 test('borders', write_it_borders_tests)
 
+write_it_tabs_tests = executable(
+  'write-it-tabs-tests',
+  'tests/test_tabs.cpp',
+  dependencies: [writeit_dep],
+)
+test('tabs', write_it_tabs_tests)
+
 # Enter twice after a page break must not start another sheet.
 write_it_double_return_tests = executable(
   'write-it-double-return-tests',

@@ -413,6 +413,9 @@ void restyle_paragraph(Paragraph& paragraph, const Style& from, const Style& to)
   if (!own(paragraph.direct, kDirectShading, paragraph.shading != from.shading))
     paragraph.shading = to.shading;
   paragraph.shading = clamp_shading(paragraph.shading);
+  if (!own(paragraph.direct, kDirectTabs, paragraph.tabs != from.tabs))
+    paragraph.tabs = to.tabs;
+  paragraph.tabs = clamp_tabs(paragraph.tabs);
   if (paragraph.heading == from.heading)
     paragraph.heading = to.heading;
   paragraph.style = to.name;
@@ -437,6 +440,9 @@ Style restyle_style(Style style, const Style& from, const Style& to)
   if (style.shading == from.shading)
     style.shading = to.shading;
   style.shading = clamp_shading(style.shading);
+  if (style.tabs == from.tabs)
+    style.tabs = to.tabs;
+  style.tabs = clamp_tabs(style.tabs);
   if (style.align == from.align)
     style.align = to.align;
   return style;
@@ -909,7 +915,7 @@ bool operator==(const Paragraph& a, const Paragraph& b)
 {
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
          a.align == b.align && a.spacing == b.spacing && a.borders == b.borders &&
-         a.shading == b.shading && a.list == b.list && a.cell == b.cell &&
+         a.shading == b.shading && a.tabs == b.tabs && a.list == b.list && a.cell == b.cell &&
          a.page_break == b.page_break && same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
@@ -951,6 +957,70 @@ ListFormat clamp_list(ListFormat list)
   list.start = list.kind == ListKind::Number ? std::max(0, std::min(kMaxListStart, list.start)) : 1;
   list.own = list.has_own ? clamp_indents(list.own) : Indents{};
   return list;
+}
+
+std::vector<TabStop> clamp_tabs(std::vector<TabStop> tabs)
+{
+  for (TabStop& stop : tabs) {
+    stop.position = std::max(0, std::min(kMaxIndent, stop.position));
+    if (stop.align != TabAlign::Left && stop.align != TabAlign::Center &&
+        stop.align != TabAlign::Right && stop.align != TabAlign::Decimal &&
+        stop.align != TabAlign::Bar)
+      stop.align = TabAlign::Left;
+    if (stop.leader != TabLeader::None && stop.leader != TabLeader::Dot &&
+        stop.leader != TabLeader::Hyphen && stop.leader != TabLeader::Underline)
+      stop.leader = TabLeader::None;
+    // A bar is a line, not a stop the text lands on, so it has no leader.
+    if (stop.align == TabAlign::Bar)
+      stop.leader = TabLeader::None;
+  }
+  std::stable_sort(tabs.begin(), tabs.end(),
+                   [](const TabStop& a, const TabStop& b) { return a.position < b.position; });
+  std::vector<TabStop> out;
+  out.reserve(std::min(tabs.size(), static_cast<size_t>(kMaxTabStops)));
+  for (const TabStop& stop : tabs) {
+    if (!out.empty() && out.back().position == stop.position)
+      out.back() = stop;
+    else if (out.size() < static_cast<size_t>(kMaxTabStops))
+      out.push_back(stop);
+  }
+  return out;
+}
+
+int clamp_default_tab(int tab)
+{
+  if (tab < 1 || tab > kMaxIndent)
+    return kDefaultTab;
+  return tab;
+}
+
+int tab_at(const std::vector<TabStop>& stops, int interval, int from)
+{
+  interval = std::max(1, std::min(kMaxIndent, interval));
+  const int origin = std::max(0, from);
+  const std::vector<TabStop> mine = clamp_tabs(stops);
+  int last = -1;
+  for (const TabStop& stop : mine) {
+    last = stop.position;
+    if (stop.align == TabAlign::Bar)
+      continue;
+    if (stop.position >= origin)
+      return stop.position;
+  }
+  int pos = 0;
+  if (mine.empty()) {
+    const int mod = origin % interval;
+    pos = mod == 0 ? origin : origin + (interval - mod);
+    if (pos == 0)
+      pos = interval;
+  } else {
+    pos = (last / interval + 1) * interval;
+    if (pos <= last)
+      pos += interval;
+    while (pos < origin && pos < kMaxIndent)
+      pos += interval;
+  }
+  return std::min(pos, kMaxIndent);
 }
 
 Indents list_indents(int level)
@@ -1265,9 +1335,9 @@ bool operator==(const Document& a, const Document& b)
     const Paragraph& y = b.paragraphs[i];
     if (x.heading != y.heading || x.style != y.style || x.indents != y.indents ||
         x.align != y.align || x.spacing != y.spacing || x.borders != y.borders ||
-        x.shading != y.shading || x.list.kind != y.list.kind || x.list.level != y.list.level ||
-        x.cell != y.cell || x.page_break != y.page_break || !same_runs(x.runs, y.runs) ||
-        !same_mark(x, y))
+        x.shading != y.shading || x.tabs != y.tabs || x.list.kind != y.list.kind ||
+        x.list.level != y.list.level || x.cell != y.cell || x.page_break != y.page_break ||
+        !same_runs(x.runs, y.runs) || !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -1275,7 +1345,8 @@ bool operator==(const Document& a, const Document& b)
   if (numbered && (list_ids(a.paragraphs) != list_ids(b.paragraphs) ||
                    list_numbers(a.paragraphs) != list_numbers(b.paragraphs)))
     return false;
-  if (!(a.page == b.page) || a.header != b.header || a.footer != b.footer || a.notes != b.notes)
+  if (!(a.page == b.page) || a.default_tab != b.default_tab || a.header != b.header ||
+      a.footer != b.footer || a.notes != b.notes)
     return false;
   return style_sheet(a) == style_sheet(b);
 }
@@ -1296,7 +1367,7 @@ bool operator==(const Style& a, const Style& b)
   return a.name == b.name && a.based_on == b.based_on && a.next == b.next &&
          same_format(a.format, b.format) && a.indents == b.indents && a.align == b.align &&
          a.spacing == b.spacing && a.borders == b.borders && a.shading == b.shading &&
-         a.heading == b.heading;
+         a.tabs == b.tabs && a.heading == b.heading;
 }
 
 bool operator!=(const Style& a, const Style& b)
@@ -1558,6 +1629,9 @@ void take_paragraph_style(Paragraph& paragraph, const Style& to)
   if ((paragraph.direct & kDirectShading) == 0)
     paragraph.shading = to.shading;
   paragraph.shading = clamp_shading(paragraph.shading);
+  if ((paragraph.direct & kDirectTabs) == 0)
+    paragraph.tabs = to.tabs;
+  paragraph.tabs = clamp_tabs(paragraph.tabs);
   paragraph.heading = to.heading;
   paragraph.style = to.name;
 }
