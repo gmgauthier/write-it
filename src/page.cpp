@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <utility>
 
 namespace writeit {
@@ -103,6 +104,83 @@ Cell chrome_from(const std::vector<Paragraph>& paragraphs, int id, int row, int 
   plain.borders = Borders{};
   plain.shading = Shading{};
   return plain;
+}
+
+int column_width_at(const Cell& cell, int column)
+{
+  if (column >= 0 && column < static_cast<int>(cell.widths.size())) {
+    const int width = cell.widths[static_cast<size_t>(column)];
+    if (width > 0)
+      return width;
+  }
+  return kMinCellTwips;
+}
+
+// Selected cells, renumbered so the band starts at row 0, column 0. A missing
+// cell is one empty paragraph, so a paste still has a place for it.
+bool copy_band(const std::vector<Paragraph>& paragraphs, size_t index, int row0, int row1,
+               int column0, int column1, TableBand band, TableSlice& out)
+{
+  if (!in_table(paragraphs, index))
+    return false;
+  if (row0 > row1)
+    std::swap(row0, row1);
+  if (column0 > column1)
+    std::swap(column0, column1);
+  const Cell cell = paragraphs[index].cell;
+  if (cell.rows < 1 || cell.columns < 1)
+    return false;
+  if (row0 < 0 || column0 < 0 || row1 >= cell.rows || column1 >= cell.columns)
+    return false;
+  TableSlice slice;
+  slice.band = band;
+  slice.rows = row1 - row0 + 1;
+  slice.columns = column1 - column0 + 1;
+  slice.widths.reserve(static_cast<size_t>(slice.columns));
+  for (int column = column0; column <= column1; ++column)
+    slice.widths.push_back(column_width_at(cell, column));
+  for (int row = row0; row <= row1; ++row) {
+    for (int column = column0; column <= column1; ++column) {
+      bool any = false;
+      for (const Paragraph& paragraph : paragraphs) {
+        if (paragraph.cell.table != cell.table || paragraph.cell.row != row ||
+            paragraph.cell.column != column)
+          continue;
+        Paragraph copy = paragraph;
+        copy.cell.table = 0;
+        copy.cell.row = row - row0;
+        copy.cell.column = column - column0;
+        copy.cell.rows = slice.rows;
+        copy.cell.columns = slice.columns;
+        copy.cell.widths = slice.widths;
+        slice.paragraphs.push_back(std::move(copy));
+        any = true;
+      }
+      if (!any) {
+        Paragraph blank;
+        blank.cell.row = row - row0;
+        blank.cell.column = column - column0;
+        blank.cell.rows = slice.rows;
+        blank.cell.columns = slice.columns;
+        blank.cell.widths = slice.widths;
+        slice.paragraphs.push_back(std::move(blank));
+      }
+    }
+  }
+  out = std::move(slice);
+  return true;
+}
+
+Paragraph placed_cell(Paragraph paragraph, int table, int row, int column, int rows, int columns,
+                      const std::vector<int>& widths)
+{
+  paragraph.cell.table = table;
+  paragraph.cell.row = row;
+  paragraph.cell.column = column;
+  paragraph.cell.rows = rows;
+  paragraph.cell.columns = columns;
+  paragraph.cell.widths = widths;
+  return paragraph;
 }
 
 }  // namespace
@@ -385,6 +463,149 @@ bool delete_table_column(std::vector<Paragraph>& paragraphs, size_t index)
   if (paragraphs.empty())
     paragraphs.emplace_back();
   return true;
+}
+
+bool copy_table_rows(const std::vector<Paragraph>& paragraphs, size_t index, int first, int last,
+                     TableSlice& out)
+{
+  if (!in_table(paragraphs, index))
+    return false;
+  const Cell cell = paragraphs[index].cell;
+  return copy_band(paragraphs, index, first, last, 0, cell.columns - 1, TableBand::Rows, out);
+}
+
+bool copy_table_columns(const std::vector<Paragraph>& paragraphs, size_t index, int first, int last,
+                        TableSlice& out)
+{
+  if (!in_table(paragraphs, index))
+    return false;
+  const Cell cell = paragraphs[index].cell;
+  return copy_band(paragraphs, index, 0, cell.rows - 1, first, last, TableBand::Columns, out);
+}
+
+TablePaste paste_table_rows(std::vector<Paragraph>& paragraphs, size_t index,
+                            const TableSlice& slice)
+{
+  if (!in_table(paragraphs, index))
+    return TablePaste::NotTable;
+  if (slice.band != TableBand::Rows || slice.rows < 1 || slice.columns < 1)
+    return TablePaste::Misfit;
+  const Cell cell = paragraphs[index].cell;
+  if (slice.columns != cell.columns)
+    return TablePaste::Misfit;
+  if (cell.rows + slice.rows > kMaxTableRows)
+    return TablePaste::TooBig;
+  const int id = cell.table;
+  const int at_row = cell.row;
+  for (Paragraph& paragraph : paragraphs) {
+    if (paragraph.cell.table == id && paragraph.cell.row > at_row)
+      paragraph.cell.row += slice.rows;
+  }
+  size_t insert_at = paragraphs.size();
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const Cell& other = paragraphs[i].cell;
+    if (other.table == id && other.row == at_row)
+      insert_at = i + 1;
+  }
+  const int rows = cell.rows + slice.rows;
+  std::vector<Paragraph> block;
+  block.reserve(slice.paragraphs.size());
+  for (const Paragraph& paragraph : slice.paragraphs) {
+    block.push_back(placed_cell(paragraph, id, at_row + 1 + paragraph.cell.row,
+                                paragraph.cell.column, rows, cell.columns, cell.widths));
+  }
+  paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(insert_at), block.begin(),
+                    block.end());
+  stamp_table(paragraphs, id);
+  return TablePaste::Placed;
+}
+
+TablePaste paste_table_columns(std::vector<Paragraph>& paragraphs, size_t index,
+                               const TableSlice& slice, int width_limit)
+{
+  if (!in_table(paragraphs, index))
+    return TablePaste::NotTable;
+  if (slice.band != TableBand::Columns || slice.rows < 1 || slice.columns < 1)
+    return TablePaste::Misfit;
+  const Cell cell = paragraphs[index].cell;
+  if (slice.rows != cell.rows)
+    return TablePaste::Misfit;
+  if (cell.columns + slice.columns > kMaxTableColumns)
+    return TablePaste::TooBig;
+  std::vector<int> widths = cell.widths;
+  if (static_cast<int>(widths.size()) > cell.columns)
+    widths.resize(static_cast<size_t>(cell.columns));
+  while (static_cast<int>(widths.size()) < cell.columns)
+    widths.push_back(kMinCellTwips);
+  std::vector<int> extra = slice.widths;
+  if (static_cast<int>(extra.size()) > slice.columns)
+    extra.resize(static_cast<size_t>(slice.columns));
+  while (static_cast<int>(extra.size()) < slice.columns)
+    extra.push_back(kMinCellTwips);
+  const int at = cell.column + 1;
+  widths.insert(widths.begin() + at, extra.begin(), extra.end());
+  long long sum = 0;
+  for (int width : widths) {
+    sum += std::max(0, width);
+    if (sum > static_cast<long long>(std::numeric_limits<int>::max()))
+      sum = std::numeric_limits<int>::max();
+  }
+  const int columns = cell.columns + slice.columns;
+  const int floor_sum = kMinCellTwips * columns;
+  int limit = std::max(width_limit, floor_sum);
+  if (sum > limit && !fit_table_widths(widths, static_cast<int>(sum), limit))
+    return TablePaste::Misfit;
+  const int id = cell.table;
+  const int at_column = cell.column;
+  for (Paragraph& paragraph : paragraphs) {
+    if (paragraph.cell.table == id && paragraph.cell.column > at_column)
+      paragraph.cell.column += slice.columns;
+  }
+  const int rows = cell.rows;
+  for (int row = rows - 1; row >= 0; --row) {
+    size_t insert_at = last_in_cell(paragraphs, id, row, at_column);
+    if (insert_at == paragraphs.size())
+      continue;
+    std::vector<Paragraph> block;
+    for (const Paragraph& paragraph : slice.paragraphs) {
+      if (paragraph.cell.row != row)
+        continue;
+      block.push_back(placed_cell(paragraph, id, row, at_column + 1 + paragraph.cell.column, rows,
+                                  columns, widths));
+    }
+    paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(insert_at) + 1,
+                      block.begin(), block.end());
+  }
+  for (Paragraph& paragraph : paragraphs) {
+    if (paragraph.cell.table == id)
+      paragraph.cell.widths = widths;
+  }
+  stamp_table(paragraphs, id);
+  return TablePaste::Placed;
+}
+
+std::vector<Paragraph> table_slice_paragraphs(const TableSlice& slice)
+{
+  std::vector<Paragraph> out;
+  if (slice.rows < 1 || slice.columns < 1)
+    return out;
+  for (int row = 0; row < slice.rows; ++row) {
+    for (int column = 0; column < slice.columns; ++column) {
+      bool any = false;
+      for (const Paragraph& paragraph : slice.paragraphs) {
+        if (paragraph.cell.row != row || paragraph.cell.column != column)
+          continue;
+        Paragraph body = paragraph;
+        body.cell = Cell{};
+        body.page_break = false;
+        out.push_back(std::move(body));
+        any = true;
+      }
+      if (!any)
+        out.emplace_back();
+    }
+  }
+  return out;
 }
 
 bool fit_table_widths(std::vector<int>& widths, int total, int limit)
