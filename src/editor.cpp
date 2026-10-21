@@ -1094,8 +1094,14 @@ void MainWindow::build_editor()
   // The clipboard outlives the window: ~MainWindow disconnects this. It is
   // asked again on every change, and when the window comes back to the
   // front, in case a change was missed while it was away.
-  clipboard_owner_ = Gtk::Clipboard::get()->signal_owner_change().connect(
-      [this](GdkEventOwnerChange*) { refresh_clipboard(); });
+  clipboard_owner_ =
+      Gtk::Clipboard::get()->signal_owner_change().connect([this](GdkEventOwnerChange*) {
+        auto clipboard = Gtk::Clipboard::get();
+        GObject* owner = clipboard ? gtk_clipboard_get_owner(clipboard->gobj()) : nullptr;
+        if (table_copy_on_ && owner != table_copy_owner_)
+          table_copy_on_ = false;
+        refresh_clipboard();
+      });
   signal_focus_in_event().connect(
       [this](GdkEventFocus*) {
         refresh_clipboard();
@@ -1134,20 +1140,36 @@ void MainWindow::build_editor()
   clicked(cut_tool_, [this] {
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.cut_clipboard(Gtk::Clipboard::get()); });
   });
-  activate(copy_item_, [this] {
+  auto copy_edit = [this] {
+    if (copy_table_selection())
+      return;
+    table_copy_on_ = false;
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.copy_clipboard(Gtk::Clipboard::get()); });
-  });
-  activate(context_copy_, [this] { buffer_->copy_clipboard(Gtk::Clipboard::get()); });
-  clicked(copy_tool_, [this] {
-    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.copy_clipboard(Gtk::Clipboard::get()); });
-  });
-  activate(paste_item_, [this] {
+  };
+  auto paste_edit = [this] {
+    if (paste_table_selection())
+      return;
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.paste_clipboard(Gtk::Clipboard::get()); });
+  };
+  activate(copy_item_, copy_edit);
+  activate(context_copy_, [this] {
+    if (copy_table_selection())
+      return;
+    table_copy_on_ = false;
+    if (buffer_)
+      buffer_->copy_clipboard(Gtk::Clipboard::get());
   });
-  activate(context_paste_, [this] { buffer_->paste_clipboard(Gtk::Clipboard::get()); });
-  clicked(paste_tool_, [this] {
-    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.paste_clipboard(Gtk::Clipboard::get()); });
+  clicked(copy_tool_, copy_edit);
+  activate(paste_item_, paste_edit);
+  // The body's context menu. A click there has left the cell, so a band paste
+  // lands as paragraphs and any other paste lands in the body.
+  activate(context_paste_, [this] {
+    if (paste_table_selection())
+      return;
+    if (buffer_)
+      buffer_->paste_clipboard(Gtk::Clipboard::get());
   });
+  clicked(paste_tool_, paste_edit);
   activate(delete_item_, [this] {
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.erase_selection(true, true); });
   });
@@ -2007,13 +2029,14 @@ void MainWindow::update_actions()
   sens(redo_item_, can_redo);
   sens(undo_tool_, can_undo);
   sens(redo_tool_, can_redo);
+  const bool band = table_band_on();
   sens(cut_item_, selection);
-  sens(copy_item_, selection);
+  sens(copy_item_, selection || band);
   sens(delete_item_, selection);
   sens(cut_tool_, selection);
-  sens(copy_tool_, selection);
+  sens(copy_tool_, selection || band);
   sens(context_cut_, body_selection);
-  sens(context_copy_, body_selection);
+  sens(context_copy_, body_selection || band);
   sens(paste_item_, can_paste);
   sens(paste_tool_, can_paste);
   sens(context_paste_, can_paste);
@@ -3177,7 +3200,7 @@ void MainWindow::style_cell_para(const Glib::RefPtr<Gtk::TextTag>& tag, const In
     tag->property_indent() = indent_px(indents.first);
   }
   apply_spacing_pixels(tag, spacing, basis, font, heading, false);
-  apply_tab_stops(tag, tabs, indents, true, false);
+  apply_tab_stops(tag, tabs, indents, true, false, zoom_factor());
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::cell_para_tag(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
@@ -3504,6 +3527,25 @@ double MainWindow::zoom_factor() const
     return static_cast<double>(width) / static_cast<double>(page);
   }
   return static_cast<double>(settings_.zoom) / 100.0;
+}
+
+double MainWindow::story_zoom() const
+{
+  return std::min(zoom_factor(), 1.0);
+}
+
+void MainWindow::queue_story_tabs()
+{
+  if (closing_ || story_tabs_idle_.connected() || story_tabs_zoom_ == story_zoom())
+    return;
+  story_tabs_idle_ = Glib::signal_idle().connect([this] {
+    story_tabs_idle_.disconnect();
+    if (closing_ || story_tabs_zoom_ == story_zoom())
+      return false;
+    story_tabs_zoom_ = story_zoom();
+    refresh_stories();
+    return false;
+  });
 }
 
 Run MainWindow::format_of(const Gtk::TextIter& iter) const
@@ -4030,6 +4072,9 @@ void MainWindow::apply_story_zoom()
   }
   // The gutter just changed with the mark margin. Rewrap to the new column.
   fit_note_views();
+  // Tab pixels follow the capped zoom. Retagging here runs from a size
+  // allocation, so the story tags wait for an idle.
+  queue_story_tabs();
 }
 
 void MainWindow::update_caret_font()
@@ -4315,7 +4360,7 @@ void MainWindow::on_size_entered()
 
 void MainWindow::apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag,
                                  const std::vector<TabStop>& tabs, const Indents& indents,
-                                 bool cell, bool list) const
+                                 bool cell, bool list, double zoom) const
 {
   if (!tag)
     return;
@@ -4333,7 +4378,7 @@ void MainWindow::apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag,
   std::vector<Placed> placed;
   int last = -1;
   auto place = [&](int position, PangoTabAlign align) {
-    const int px = indent_px(position) - indent_px(origin);
+    const int px = twips_to_px(position, zoom) - twips_to_px(origin, zoom);
     if (px <= 0)
       return;
     if (!placed.empty() && px <= placed.back().px)
@@ -4456,7 +4501,8 @@ void MainWindow::style_para_tag(const Glib::RefPtr<Gtk::TextTag>& tag,
   // gap. The sheet break belongs to ordinary text.
   const bool page_break = format.page_break && format.cell.table == 0;
   apply_spacing_pixels(tag, format.spacing, format.basis, font, heading, page_break);
-  apply_tab_stops(tag, format.tabs, format.indents, false, format.list.kind != ListKind::None);
+  apply_tab_stops(tag, format.tabs, format.indents, false, format.list.kind != ListKind::None,
+                  zoom_factor());
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::para_tag_at(Gtk::TextIter iter) const
@@ -4944,7 +4990,7 @@ ParaFormat MainWindow::focused_para() const
       int caret = 0;
       int bound = 0;
       if (cell_place(*sheet, row, column, caret, bound)) {
-        if (const Paragraph* form = cell_paragraph_at(row, column, std::min(caret, bound)))
+        if (const Paragraph* form = cell_paragraph_at(row, column, caret))
           return para_format(*form);
       }
     }
@@ -5040,28 +5086,40 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     Gtk::TextView& view = story_target_ == 1 ? header_view_ : footer_view_;
     if (!view.get_buffer() || story.empty())
       return;
-    const int caret = view.get_buffer()->get_insert()->get_iter().get_offset();
-    int offset = 0;
-    size_t index = 0;
-    for (; index < story.size(); ++index) {
-      const int len = static_cast<int>(Glib::ustring(paragraph_plain(story[index])).length());
-      if (caret <= offset + len)
-        break;
-      offset += len + 1;
+    auto buffer = view.get_buffer();
+    int from = buffer->get_insert()->get_iter().get_offset();
+    int to = from;
+    Gtk::TextBuffer::iterator bound_a;
+    Gtk::TextBuffer::iterator bound_b;
+    if (buffer->get_selection_bounds(bound_a, bound_b)) {
+      from = bound_a.get_offset();
+      to = bound_b.get_offset();
     }
-    if (index >= story.size())
-      index = story.size() - 1;
-    const Document before = capture();
-    Document after = before;
+    std::vector<int> lengths;
+    lengths.reserve(story.size());
+    for (const Paragraph& paragraph : story)
+      lengths.push_back(static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length()));
+    std::vector<int> leading(lengths.size(), 1);
+    if (!leading.empty())
+      leading[0] = 0;
+    const std::vector<size_t> indexes = story_selection(lengths, leading, from, to);
+    if (indexes.empty())
+      return;
+    const Document before_doc = capture();
+    Document after = before_doc;
     std::vector<Paragraph>& target = story_target_ == 1 ? after.header : after.footer;
-    if (index >= target.size())
-      return;
-    std::vector<Paragraph> edited = {target[index]};
+    std::vector<Paragraph> edited;
+    for (size_t index : indexes) {
+      if (index >= target.size())
+        return;
+      edited.push_back(target[index]);
+    }
     edit(edited);
-    target[index] = edited[0];
-    if (before == after)
+    for (size_t i = 0; i < indexes.size(); ++i)
+      target[indexes[i]] = edited[i];
+    if (before_doc == after)
       return;
-    commit_document(before, after);
+    commit_document(before_doc, after);
     view.grab_focus();
     return;
   }
@@ -5069,21 +5127,73 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     Gtk::TextView* view = focused_story_view();
     if (!view || !view->get_buffer())
       return;
-    int note_index = -1;
-    size_t para_index = 0;
-    const int caret = view->get_buffer()->get_insert()->get_iter().get_offset();
-    if (!note_at_view(*view, caret, note_index, para_index))
+    auto buffer = view->get_buffer();
+    int from = buffer->get_insert()->get_iter().get_offset();
+    int to = from;
+    Gtk::TextBuffer::iterator bound_a;
+    Gtk::TextBuffer::iterator bound_b;
+    if (buffer->get_selection_bounds(bound_a, bound_b)) {
+      from = bound_a.get_offset();
+      to = bound_b.get_offset();
+    }
+    std::vector<int> note_indexes;
+    if (note_groups_.size() <= 1) {
+      note_indexes.resize(notes_.size());
+      for (size_t i = 0; i < notes_.size(); ++i)
+        note_indexes[i] = static_cast<int>(i);
+    } else if (view == &notes_view_) {
+      note_indexes = note_groups_.front().indexes;
+    } else {
+      for (size_t i = 1; i < note_groups_.size() && i - 1 < note_bands_.size(); ++i) {
+        if (note_bands_[i - 1] && &note_bands_[i - 1]->view == view) {
+          note_indexes = note_groups_[i].indexes;
+          break;
+        }
+      }
+    }
+    struct Place {
+      int note = -1;
+      size_t para = 0;
+    };
+    std::vector<int> lengths;
+    std::vector<int> leading;
+    std::vector<Place> places;
+    for (size_t n = 0; n < note_indexes.size(); ++n) {
+      const int note = note_indexes[n];
+      if (note < 0 || note >= static_cast<int>(notes_.size()))
+        continue;
+      const std::vector<Paragraph>& paras = notes_[static_cast<size_t>(note)];
+      for (size_t p = 0; p < paras.size(); ++p) {
+        int gap = 1;
+        if (lengths.empty())
+          gap = 0;
+        else if (p == 0)
+          gap = 2;
+        lengths.push_back(static_cast<int>(Glib::ustring(paragraph_plain(paras[p])).length()));
+        leading.push_back(gap);
+        places.push_back(Place{note, p});
+      }
+    }
+    const std::vector<size_t> picked = story_selection(lengths, leading, from, to);
+    if (picked.empty())
       return;
-    const Document before = capture();
-    Document after = before;
-    if (note_index < 0 || static_cast<size_t>(note_index) >= after.notes.size() ||
-        para_index >= after.notes[static_cast<size_t>(note_index)].size())
-      return;
-    std::vector<Paragraph> edited = {after.notes[static_cast<size_t>(note_index)][para_index]};
+    const Document before_doc = capture();
+    Document after = before_doc;
+    std::vector<Paragraph> edited;
+    for (size_t index : picked) {
+      const Place& place = places[index];
+      if (place.note < 0 || static_cast<size_t>(place.note) >= after.notes.size() ||
+          place.para >= after.notes[static_cast<size_t>(place.note)].size())
+        return;
+      edited.push_back(after.notes[static_cast<size_t>(place.note)][place.para]);
+    }
     edit(edited);
-    after.notes[static_cast<size_t>(note_index)][para_index] = edited[0];
-    if (!(before == after)) {
-      commit_document(before, after);
+    for (size_t i = 0; i < picked.size(); ++i) {
+      const Place& place = places[picked[i]];
+      after.notes[static_cast<size_t>(place.note)][place.para] = edited[i];
+    }
+    if (!(before_doc == after)) {
+      commit_document(before_doc, after);
       view->grab_focus();
     }
     return;
@@ -7493,6 +7603,76 @@ void MainWindow::draw_cell_paragraph_borders(Gtk::TextView& view,
 
 namespace {
 
+struct TabFollow {
+  int left = 0;
+  int right = 0;
+  int decimal_x = 0;
+};
+
+// The text after a tab character, on the same line, up to the next tab.
+TabFollow tab_follow(Gtk::TextView& view, Gtk::TextIter iter, int tab_right)
+{
+  TabFollow out;
+  out.left = tab_right;
+  out.right = tab_right;
+  out.decimal_x = tab_right;
+  if (iter.is_end() || !iter.forward_char())
+    return out;
+  bool any = false;
+  bool decimal = false;
+  int line_y = -1;
+  while (!iter.is_end()) {
+    const gunichar ch = iter.get_char();
+    if (ch == '\t' || ch == '\n' || ch == 0)
+      break;
+    Gdk::Rectangle rect;
+    view.get_iter_location(iter, rect);
+    if (line_y < 0)
+      line_y = rect.get_y();
+    else if (rect.get_y() != line_y)
+      break;
+    if (!any)
+      out.left = rect.get_x();
+    any = true;
+    out.right = rect.get_x() + rect.get_width();
+    if (!decimal && ch == '.') {
+      decimal = true;
+      out.decimal_x = rect.get_x();
+    }
+    if (!iter.forward_char())
+      break;
+  }
+  if (!any) {
+    out.left = tab_right;
+    out.right = tab_right;
+    out.decimal_x = tab_right;
+  } else if (!decimal) {
+    out.decimal_x = out.right;
+  }
+  return out;
+}
+
+template <typename StopX>
+const TabStop* leader_for(const std::vector<TabStop>& stops, int tab_right, const TabFollow& follow,
+                          StopX stop_x)
+{
+  const TabStop* match = nullptr;
+  int best = 0;
+  bool found = false;
+  for (const TabStop& stop : stops) {
+    if (stop.align == TabAlign::Bar || stop.leader == TabLeader::None)
+      continue;
+    const int at = tab_align_x(stop.align, tab_right, follow.left, follow.right, follow.decimal_x);
+    const int gap = std::abs(stop_x(stop.position) - at);
+    if (gap <= 3 && (!found || gap <= best)) {
+      best = gap;
+      match = &stop;
+      found = true;
+    }
+  }
+  return match;
+}
+
 void paint_leader(const Cairo::RefPtr<Cairo::Context>& cr, TabLeader leader, double x0, double x1,
                   double baseline)
 {
@@ -7532,8 +7712,10 @@ void MainWindow::paint_story_tabs(Gtk::TextView& view, const Cairo::RefPtr<Cairo
   const bool list = paragraph.list.kind != ListKind::None;
   const int origin =
       list ? std::max(0, indents.left) : std::max(0, indents.left + std::min(0, indents.first));
-  const int layout_left = view.get_left_margin() + indent_px(origin);
-  auto stop_x = [&](int position) { return layout_left + indent_px(position) - indent_px(origin); };
+  const double zoom = story_zoom();
+  auto px = [zoom](int twips) { return twips_to_px(twips, zoom); };
+  const int layout_left = view.get_left_margin() + px(origin);
+  auto stop_x = [&](int position) { return layout_left + px(position) - px(origin); };
   auto first = buffer->get_iter_at_offset(offset);
   auto last = buffer->get_iter_at_offset(end > offset ? end - 1 : offset);
   int y = 0;
@@ -7565,13 +7747,8 @@ void MainWindow::paint_story_tabs(Gtk::TextView& view, const Cairo::RefPtr<Cairo
     Gdk::Rectangle rect;
     view.get_iter_location(iter, rect);
     const int right = rect.get_x() + rect.get_width();
-    const TabStop* match = nullptr;
-    for (const TabStop& stop : stops) {
-      if (stop.align == TabAlign::Bar || stop.leader == TabLeader::None)
-        continue;
-      if (std::abs(stop_x(stop.position) - right) <= 3)
-        match = &stop;
-    }
+    const TabFollow follow = tab_follow(view, iter, right);
+    const TabStop* match = leader_for(stops, right, follow, stop_x);
     if (!match)
       continue;
     int x0 = 0;
@@ -7816,13 +7993,8 @@ void MainWindow::draw_tab_marks(Gtk::TextView& view, const Cairo::RefPtr<Cairo::
         Gdk::Rectangle rect;
         view.get_iter_location(iter, rect);
         const int right = rect.get_x() + rect.get_width();
-        const TabStop* match = nullptr;
-        for (const TabStop& stop : stops) {
-          if (stop.align == TabAlign::Bar || stop.leader == TabLeader::None)
-            continue;
-          if (std::abs(stop_x(stop.position) - right) <= 3)
-            match = &stop;
-        }
+        const TabFollow follow = tab_follow(view, iter, right);
+        const TabStop* match = leader_for(stops, right, follow, stop_x);
         if (!match)
           continue;
         int x0 = 0;
@@ -8234,12 +8406,11 @@ void MainWindow::on_tabs()
       notice->set_visible(true);
       return;
     }
-    int twips = units_to_twips(parsed, units);
-    if (auto iter = list->get_selection()->get_selected()) {
-      const int selected = (*iter)[columns.position];
-      const double shown = units_round(twips_to_units(selected, units), units);
-      twips = keep_twips(selected, shown, parsed, units);
-    }
+    std::vector<int> positions;
+    positions.reserve(stops.size());
+    for (const TabStop& stop : stops)
+      positions.push_back(stop.position);
+    int twips = shown_stop_twips(parsed, positions, units);
     twips = std::max(0, std::min(kMaxIndent, twips));
     bool exists = false;
     for (const TabStop& stop : stops) {

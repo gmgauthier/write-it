@@ -58,6 +58,14 @@ textview.table-cell-text.cell-shade,
 textview.table-cell-text.cell-shade text {
   background-color: transparent;
 }
+textview.table-cell-text.cell-band,
+textview.table-cell-text.cell-band text {
+  background-color: #c5d4ee;
+}
+textview.table-cell-text.cell-shade.cell-band,
+textview.table-cell-text.cell-shade.cell-band text {
+  background-color: transparent;
+}
 
 .ruler {
   background-color: #f4f3f2;

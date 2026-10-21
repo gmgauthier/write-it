@@ -508,25 +508,52 @@ class CellFrame : public Gtk::Frame {
     queue_draw();
   }
 
+  void set_band(bool on)
+  {
+    if (band_ == on)
+      return;
+    band_ = on;
+    auto mark = [](Gtk::Widget& widget, bool selected) {
+      auto context = widget.get_style_context();
+      if (selected)
+        context->add_class("cell-band");
+      else
+        context->remove_class("cell-band");
+    };
+    mark(*this, on);
+    if (Gtk::Widget* child = get_child())
+      mark(*child, on);
+    queue_draw();
+  }
+
  protected:
   bool on_draw(const Cairo::RefPtr<Cairo::Context>& cr) override
   {
     Rgb rgb;
     const bool shade = shading_color(shading_, rgb);
-    if (!borders_set_ && !shade)
-      return Gtk::Frame::on_draw(cr);
     const int width = std::max(0, get_allocated_width());
     const int height = std::max(0, get_allocated_height());
-    if (shade)
-      cr->set_source_rgb(rgb.red / 255.0, rgb.green / 255.0, rgb.blue / 255.0);
-    else
-      cr->set_source_rgb(1, 1, 1);
-    cr->rectangle(0, 0, width, height);
-    cr->fill();
-    if (!borders_set_)
-      return Gtk::Frame::on_draw(cr);
-    const bool drawn = Gtk::Frame::on_draw(cr);
-    paint_borders(cr, 0, 0, width, height, borders_, zoom_);
+    bool drawn = false;
+    if (!borders_set_ && !shade) {
+      drawn = Gtk::Frame::on_draw(cr);
+    } else {
+      if (shade)
+        cr->set_source_rgb(rgb.red / 255.0, rgb.green / 255.0, rgb.blue / 255.0);
+      else
+        cr->set_source_rgb(1, 1, 1);
+      cr->rectangle(0, 0, width, height);
+      cr->fill();
+      drawn = Gtk::Frame::on_draw(cr);
+      if (borders_set_)
+        paint_borders(cr, 0, 0, width, height, borders_, zoom_);
+    }
+    // A shaded cell is transparent, so the wash has to be on the frame.
+    // An unshaded cell paints the same wash from the text view's class.
+    if (band_ && shade) {
+      cr->set_source_rgba(0.45, 0.62, 0.86, 0.45);
+      cr->rectangle(0, 0, width, height);
+      cr->fill();
+    }
     return drawn;
   }
 
@@ -543,10 +570,15 @@ class CellFrame : public Gtk::Frame {
  private:
   int width_ = 1;
   bool borders_set_ = false;
+  bool band_ = false;
   Borders borders_;
   Shading shading_;
   double zoom_ = 1;
 };
+
+// The strip of a row's left edge, and of a column's top edge, that selects
+// that row or column. The width drag stays the right 3 pixels.
+constexpr double kSelectEdge = 6;
 
 int px_to_twips(int px, double zoom)
 {
@@ -702,19 +734,26 @@ class TableSheet : public Gtk::Grid {
         frame->add_events(watch);
         // A press on the edge only arms a drag. The caret is placed as before,
         // and a release without movement does not resize.
-        view->signal_button_press_event().connect([this, at_column, frame](GdkEventButton* event) {
-          return on_cell_press(event, at_column, frame);
-        });
+        view->signal_button_press_event().connect(
+            [this, at_row, at_column, frame, view](GdkEventButton* event) {
+              return on_cell_press(event, at_row, at_column, frame, view);
+            });
         view->signal_button_press_event().connect([](GdkEventButton*) { return true; }, true);
+        // Right-click is claimed by the text view before this signal runs.
+        // Its menu is the one that opens. Copy there follows a row or column.
+        view->signal_populate_popup().connect([this](Gtk::Menu* menu) { offer_band_copy(menu); });
         view->signal_button_release_event().connect(
             [this](GdkEventButton* event) { return on_cell_release(event); });
         view->signal_button_release_event().connect([](GdkEventButton*) { return true; }, true);
         view->signal_motion_notify_event().connect(
-            [this, at_column](GdkEventMotion* event) { return on_cell_motion(event, at_column); });
+            [this, at_row, at_column](GdkEventMotion* event) {
+              return on_cell_motion(event, at_row, at_column);
+            });
         view->signal_motion_notify_event().connect([](GdkEventMotion*) { return true; }, true);
-        frame->signal_button_press_event().connect([this, at_column, frame](GdkEventButton* event) {
-          return on_cell_press(event, at_column, frame);
-        });
+        frame->signal_button_press_event().connect(
+            [this, at_row, at_column, frame, view](GdkEventButton* event) {
+              return on_cell_press(event, at_row, at_column, frame, view);
+            });
         frame->signal_button_press_event().connect([view](GdkEventButton* event) {
           if (!event || event->type != GDK_BUTTON_PRESS)
             return false;
@@ -725,7 +764,9 @@ class TableSheet : public Gtk::Grid {
           return true;
         });
         frame->signal_motion_notify_event().connect(
-            [this, at_column](GdkEventMotion* event) { return on_cell_motion(event, at_column); });
+            [this, at_row, at_column](GdkEventMotion* event) {
+              return on_cell_motion(event, at_row, at_column);
+            });
         frame->signal_button_release_event().connect(
             [this](GdkEventButton* event) { return on_cell_release(event); });
         // The text view's own drag claims the press and then swallows motion,
@@ -856,6 +897,21 @@ class TableSheet : public Gtk::Grid {
   void caret_of(int row, int column, int& caret, int& bound) const;
   bool focused_place(int& row, int& column, int& caret, int& bound) const;
   void collapse_selections(const Gtk::TextView* keep) const;
+  bool has_band() const
+  {
+    return band_on_;
+  }
+  TableBand band_kind() const
+  {
+    return band_;
+  }
+  void band_span(int& from, int& to) const
+  {
+    from = from_;
+    to = to_;
+  }
+  void clear_band();
+  void select_edge(TableBand kind, int index, bool extend);
 
  private:
   bool focused_at(int& row, int& column) const
@@ -935,8 +991,11 @@ class TableSheet : public Gtk::Grid {
     return false;
   }
 
-  bool on_cell_press(GdkEventButton* event, int column, CellFrame* frame);
-  bool on_cell_motion(GdkEventMotion* event, int column);
+  bool on_cell_press(GdkEventButton* event, int row, int column, CellFrame* frame,
+                     Gtk::TextView* view);
+  void offer_band_copy(Gtk::Menu* menu);
+  bool on_cell_motion(GdkEventMotion* event, int row, int column);
+  void show_band();
   bool on_cell_release(GdkEventButton* event);
   void watch_edge(Gtk::Widget& widget, int column, CellFrame* frame);
   void arm_edge(int edge, int root_x, CellFrame* frame);
@@ -947,6 +1006,11 @@ class TableSheet : public Gtk::Grid {
   MainWindow& window_;
   int rows_ = 0;
   int cols_ = 0;
+  bool band_on_ = false;
+  TableBand band_ = TableBand::Rows;
+  int anchor_ = 0;
+  int from_ = 0;
+  int to_ = 0;
   std::vector<int> widths_;
   bool drag_armed_ = false;
   bool drag_on_ = false;
@@ -1059,19 +1123,100 @@ void TableSheet::collapse_selections(const Gtk::TextView* keep) const
   }
 }
 
-bool TableSheet::on_cell_press(GdkEventButton* event, int column, CellFrame* frame)
+void TableSheet::clear_band()
+{
+  band_on_ = false;
+  show_band();
+}
+
+void TableSheet::select_edge(TableBand kind, int index, bool extend)
+{
+  const int limit = kind == TableBand::Rows ? rows_ : cols_;
+  if (index < 0 || index >= limit)
+    return;
+  if (!extend || !band_on_ || band_ != kind)
+    anchor_ = index;
+  band_on_ = true;
+  band_ = kind;
+  from_ = std::min(anchor_, index);
+  to_ = std::max(anchor_, index);
+  show_band();
+}
+
+void TableSheet::show_band()
+{
+  for (int row = 0; row < rows_; ++row) {
+    for (int column = 0; column < cols_; ++column) {
+      const bool on = band_on_ && (band_ == TableBand::Rows ? row >= from_ && row <= to_
+                                                            : column >= from_ && column <= to_);
+      frames_[static_cast<size_t>(row)][static_cast<size_t>(column)]->set_band(on);
+    }
+  }
+}
+
+bool TableSheet::on_cell_press(GdkEventButton* event, int row, int column, CellFrame* frame,
+                               Gtk::TextView* view)
 {
   if (!event || event->type != GDK_BUTTON_PRESS || event->button != 1)
     return false;
   const int edge =
       column_edge(column, cols_, event->x, event_width(reinterpret_cast<GdkEvent*>(event)));
-  if (edge < 0)
+  if (edge >= 0) {
+    arm_edge(edge, static_cast<int>(std::lround(event->x_root)), frame);
     return false;
-  arm_edge(edge, static_cast<int>(std::lround(event->x_root)), frame);
+  }
+  // The corner is the column. The left edge below that is the row. The width
+  // drag, handled above, is not a selection.
+  const bool top = row == 0 && event->y >= 0 && event->y < kSelectEdge;
+  const bool left = column == 0 && event->x >= 0 && event->x < kSelectEdge && !top;
+  if (top || left) {
+    const bool shift = (event->state & GDK_SHIFT_MASK) != 0;
+    select_edge(top ? TableBand::Columns : TableBand::Rows, top ? column : row, shift);
+    window_.sole_table_band(*this);
+    if (view)
+      view->grab_focus();
+    // The text view places the caret where the click landed. Returning true
+    // would swallow that, including a click four pixels in from the top.
+    // A click on the frame falls through to the frame handler, which puts
+    // the caret at the start of the cell.
+    return false;
+  }
+  window_.clear_table_bands();
   return false;
 }
 
-bool TableSheet::on_cell_motion(GdkEventMotion* event, int column)
+void TableSheet::offer_band_copy(Gtk::Menu* menu)
+{
+  // GTK grays this Copy unless the cell itself has a selection, and the
+  // handler copies that cell. A row or column band is the selection.
+  if (!menu || !band_on_)
+    return;
+  const GQuark quark = g_quark_try_string("gtk-signal");
+  for (Gtk::Widget* child : menu->get_children()) {
+    auto* item = dynamic_cast<Gtk::MenuItem*>(child);
+    if (!item)
+      continue;
+    bool copy = false;
+    if (quark) {
+      const char* signal =
+          static_cast<const char*>(g_object_get_qdata(G_OBJECT(item->gobj()), quark));
+      copy = signal && std::strcmp(signal, "copy-clipboard") == 0;
+    }
+    if (!copy && item->get_label() == "_Copy")
+      copy = true;
+    if (!copy)
+      continue;
+    const guint id = g_signal_lookup("activate", GTK_TYPE_MENU_ITEM);
+    g_signal_handlers_disconnect_matched(item->gobj(), G_SIGNAL_MATCH_ID, id, 0, nullptr, nullptr,
+                                         nullptr);
+    item->set_sensitive(true);
+    MainWindow* window = &window_;
+    item->signal_activate().connect([window] { window->copy_table_selection(); });
+    return;
+  }
+}
+
+bool TableSheet::on_cell_motion(GdkEventMotion* event, int row, int column)
 {
   if (!event)
     return false;
@@ -1089,11 +1234,22 @@ bool TableSheet::on_cell_motion(GdkEventMotion* event, int column)
   const int edge =
       column_edge(column, cols_, event->x, event_width(reinterpret_cast<GdkEvent*>(event)));
   auto window = event->window ? Glib::wrap(event->window, true) : Glib::RefPtr<Gdk::Window>();
-  if (edge >= 0 && window) {
-    window->set_cursor(Gdk::Cursor::create(window->get_display(), Gdk::SB_H_DOUBLE_ARROW));
+  if (!window || drag_armed_)
+    return edge >= 0;
+  auto cursor = [&window](Gdk::CursorType kind) {
+    window->set_cursor(Gdk::Cursor::create(window->get_display(), kind));
+  };
+  if (edge >= 0) {
+    cursor(Gdk::SB_H_DOUBLE_ARROW);
     return true;
   }
-  if (window && !drag_armed_)
+  const bool top = row == 0 && event->y >= 0 && event->y < kSelectEdge;
+  const bool left = column == 0 && event->x >= 0 && event->x < kSelectEdge && !top;
+  if (top)
+    cursor(Gdk::SB_DOWN_ARROW);
+  else if (left)
+    cursor(Gdk::SB_RIGHT_ARROW);
+  else
     window->set_cursor({});
   return false;
 }
@@ -2621,19 +2777,23 @@ void MainWindow::apply_story_tabs(Gtk::TextView& view, int offset, int len,
   }
   // The story view's own margin is the content edge. A tag margin replaces
   // it, so the inset is added here, the way a body tag adds the page margin.
+  // The story type stops at 100%, and these pixels use that same zoom.
+  const double zoom = story_zoom();
   const int base_left = view.get_left_margin();
   const int base_right = view.get_right_margin();
+  auto px = [zoom](int twips) { return twips_to_px(twips, zoom); };
   if (list) {
-    tag->property_left_margin() = std::max(0, base_left + indent_px(indents.left));
-    tag->property_right_margin() = base_right + indent_px(indents.right);
-    tag->property_indent() = indent_px(list_text_start(indents)) - indent_px(indents.left);
+    tag->property_left_margin() = std::max(0, base_left + px(indents.left));
+    tag->property_right_margin() = base_right + px(indents.right);
+    tag->property_indent() = px(list_text_start(indents)) - px(indents.left);
   } else if (!(indents == Indents{})) {
     const int hang = std::min(0, indents.first);
-    tag->property_left_margin() = std::max(0, base_left + indent_px(indents.left + hang));
-    tag->property_right_margin() = base_right + indent_px(indents.right);
-    tag->property_indent() = indent_px(indents.first);
+    tag->property_left_margin() = std::max(0, base_left + px(indents.left + hang));
+    tag->property_right_margin() = base_right + px(indents.right);
+    tag->property_indent() = px(indents.first);
   }
-  apply_tab_stops(tag, paragraph.tabs, indents, false, list);
+  apply_tab_stops(tag, paragraph.tabs, indents, false, list, zoom);
+  story_tabs_zoom_ = zoom;
   buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
                     buffer->get_iter_at_offset(offset + len));
 }
@@ -2901,6 +3061,7 @@ void MainWindow::refresh_stories()
   place_notes();
   if (!loading_)
     apply_page_size();
+  story_tabs_zoom_ = story_zoom();
 }
 
 int MainWindow::note_block_px() const
@@ -4117,6 +4278,170 @@ void MainWindow::commit_table_widths(int table_id, const std::vector<int>& width
   if (restore_cell)
     restore_cell_edit(saved);
   release_view();
+}
+
+void MainWindow::sole_table_band(TableSheet& keep)
+{
+  if (buffer_) {
+    for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+      TableSheet* sheet = sheet_from(iter.get_child_anchor());
+      if (sheet && sheet != &keep && sheet->has_band())
+        sheet->clear_band();
+    }
+  }
+  update_actions();
+}
+
+void MainWindow::clear_table_bands()
+{
+  if (!buffer_)
+    return;
+  bool any = false;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (!sheet || !sheet->has_band())
+      continue;
+    sheet->clear_band();
+    any = true;
+  }
+  if (any)
+    update_actions();
+}
+
+bool MainWindow::table_band_on() const
+{
+  if (!buffer_)
+    return false;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (sheet && sheet->has_band())
+      return true;
+  }
+  return false;
+}
+
+bool MainWindow::copy_table_selection()
+{
+  if (!buffer_)
+    return false;
+  TableSheet* band = nullptr;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (sheet && sheet->has_band()) {
+      band = sheet;
+      break;
+    }
+  }
+  if (!band)
+    return false;
+  const Document doc = capture();
+  size_t index = doc.paragraphs.size();
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    if (doc.paragraphs[i].cell.table == band->table_id()) {
+      index = i;
+      break;
+    }
+  }
+  if (!in_table(doc.paragraphs, index))
+    return false;
+  int from = 0;
+  int to = 0;
+  band->band_span(from, to);
+  TableSlice slice;
+  const bool copied = band->band_kind() == TableBand::Rows
+                          ? copy_table_rows(doc.paragraphs, index, from, to, slice)
+                          : copy_table_columns(doc.paragraphs, index, from, to, slice);
+  if (!copied)
+    return false;
+  table_copy_ = std::move(slice);
+  std::string plain;
+  for (const Paragraph& paragraph : table_slice_paragraphs(table_copy_)) {
+    for (const Run& run : paragraph.runs)
+      plain += run.text;
+    plain.push_back('\n');
+  }
+  // Set the owner after set_text. An owner-change during set_text still sees
+  // the copy as off, so it does not drop the slice.
+  if (auto clipboard = Gtk::Clipboard::get()) {
+    clipboard->set_text(plain);
+    table_copy_owner_ = gtk_clipboard_get_owner(clipboard->gobj());
+  }
+  table_copy_on_ = true;
+  clipboard_text_ = true;
+  apply_paste();
+  refresh_clipboard();
+  return true;
+}
+
+bool MainWindow::paste_table_selection()
+{
+  if (!table_copy_on_ || !buffer_)
+    return false;
+  const bool in_cell = cell_edit_.on;
+  const CellEdit saved = cell_edit_;
+  const Document before = capture();
+  Document after = before;
+  auto refuse = [this](const char* sentence) {
+    message_.set_text(sentence);
+    return true;
+  };
+  if (!in_cell) {
+    std::vector<Paragraph> block = table_slice_paragraphs(table_copy_);
+    if (block.empty())
+      return true;
+    size_t at = caret_paragraph();
+    if (at > after.paragraphs.size())
+      at = after.paragraphs.size();
+    const bool only_empty = after.paragraphs.size() == 1 && after.paragraphs[0].cell.table == 0 &&
+                            after.paragraphs[0].runs.empty() && !after.paragraphs[0].page_break;
+    if (only_empty)
+      after.paragraphs = std::move(block);
+    else
+      after.paragraphs.insert(after.paragraphs.begin() + static_cast<std::ptrdiff_t>(at),
+                              block.begin(), block.end());
+  } else {
+    size_t index = after.paragraphs.size();
+    for (size_t i = 0; i < after.paragraphs.size(); ++i) {
+      const Cell& cell = after.paragraphs[i].cell;
+      if (cell.table == saved.table && cell.row == saved.row && cell.column == saved.column) {
+        index = i;
+        break;
+      }
+    }
+    if (!in_table(after.paragraphs, index))
+      return refuse(kTablePasteMisfit);
+    const TablePaste result = table_copy_.band == TableBand::Rows
+                                  ? paste_table_rows(after.paragraphs, index, table_copy_)
+                                  : paste_table_columns(after.paragraphs, index, table_copy_,
+                                                        table_width_limit(after.page));
+    if (result == TablePaste::TooBig)
+      return refuse(kTablePasteLimit);
+    if (result != TablePaste::Placed)
+      return refuse(kTablePasteMisfit);
+  }
+  if (after.paragraphs == before.paragraphs)
+    return true;
+  if (message_.get_text() == kTablePasteLimit || message_.get_text() == kTablePasteMisfit)
+    message_.set_text("");
+  hold_view();
+  int anchor = -1;
+  if (in_cell) {
+    size_t cell_index = before.paragraphs.size();
+    for (size_t i = 0; i < before.paragraphs.size(); ++i) {
+      if (before.paragraphs[i].cell.table == saved.table) {
+        cell_index = i;
+        break;
+      }
+    }
+    const int count = buffer_->get_char_count();
+    anchor = std::max(0, std::min(chars_before(before.paragraphs, cell_index), count));
+    buffer_->place_cursor(buffer_->get_iter_at_offset(anchor));
+  }
+  commit_document(before, after, anchor);
+  if (in_cell)
+    restore_cell_edit(saved);
+  release_view();
+  return true;
 }
 
 void MainWindow::on_table_width()

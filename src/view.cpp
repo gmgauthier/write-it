@@ -157,6 +157,51 @@ int twips_to_px(int twips, double zoom)
   return static_cast<int>(std::lround(px));
 }
 
+std::vector<size_t> story_selection(const std::vector<int>& lengths, const std::vector<int>& before,
+                                    int from, int to)
+{
+  std::vector<size_t> out;
+  if (lengths.empty())
+    return out;
+  if (from < 0)
+    from = 0;
+  if (to < 0)
+    to = 0;
+  if (to < from)
+    std::swap(to, from);
+  const int last = to > from ? to - 1 : to;
+  int next = 0;
+  int offset = 0;
+  for (size_t i = 0; i < lengths.size(); ++i) {
+    const int gap = i < before.size() ? before[i] : 0;
+    offset += gap;
+    const int owns_last = offset + std::max(0, lengths[i]);
+    if (last >= next && from <= owns_last)
+      out.push_back(i);
+    next = owns_last + 1;
+    offset = owns_last;
+  }
+  if (out.empty())
+    out.push_back(lengths.size() - 1);
+  return out;
+}
+
+int tab_align_x(TabAlign align, int tab_right, int text_left, int text_right, int decimal_x)
+{
+  switch (align) {
+    case TabAlign::Right:
+      return text_right;
+    case TabAlign::Center:
+      return text_left + (text_right - text_left) / 2;
+    case TabAlign::Decimal:
+      return decimal_x;
+    case TabAlign::Left:
+    case TabAlign::Bar:
+      break;
+  }
+  return tab_right;
+}
+
 int spacing_line_extra_px(LineRule rule, int value, int box_px, double zoom)
 {
   const int box = std::max(1, box_px);

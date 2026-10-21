@@ -30,6 +30,10 @@ class TableSheet;
 enum class StoryKey { Pass, Undo, Redo };
 
 StoryKey story_key(unsigned keyval, unsigned state);
+
+// Status bar when a row or column paste is refused.
+inline constexpr const char* kTablePasteLimit = "A table holds at most 32 rows and 16 columns.";
+inline constexpr const char* kTablePasteMisfit = "That paste does not fit this table.";
 // One Find hit. index is -1 when there is none. length is in characters of
 // `doc`, which can differ from the needle when casefolding changes length.
 // `doc` is a buffer slice: pictures and table anchors count as U+FFFC, so the
@@ -383,6 +387,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // and the header and footer use it. Run tags scale on their own.
   Pango::FontDescription story_font() const;
   void apply_story_zoom();
+  // Header, footer, and note stops use story_zoom(), not the body's. Rebuilding
+  // them here would run from a size allocation, so the retag waits for an idle.
+  void queue_story_tabs();
   void use_story_css(Gtk::Widget& widget);
   void apply_margins();
   ViewGeometry geometry() const;
@@ -391,6 +398,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   int margin_right() const;
   int indent_px(int twips) const;
   double zoom_factor() const;
+  // Notes, the header, and the footer stop at 100%. Their tab pixels use this.
+  double story_zoom() const;
   // What apply_page_size() sizes the page's height to now, and whether the
   // page's size request differs from it.
   int page_height() const;
@@ -463,7 +472,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Pango stops for this paragraph: its own, then the default grid after the
   // last one. Positions are pixels from the layout's left edge.
   void apply_tab_stops(const Glib::RefPtr<Gtk::TextTag>& tag, const std::vector<TabStop>& tabs,
-                       const Indents& indents, bool cell, bool list) const;
+                       const Indents& indents, bool cell, bool list, double zoom) const;
   // Space before, space after, and the extra a line-spacing rule adds. A page
   // break's 18 stays. A heading's own gap is included when this tag is raised
   // over the heading, because an unset property is what lets the heading show.
@@ -616,6 +625,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Writes `widths` onto table `table_id` and rebuilds the sheet. The caller
   // must not use a TableSheet after this returns: the rebuild destroys it.
   void commit_table_widths(int table_id, const std::vector<int>& widths);
+  // One table keeps a row or column selection. A click on another table's
+  // edge clears the rest.
+  void sole_table_band(TableSheet& keep);
+  void clear_table_bands();
+  bool table_band_on() const;
+  // Edit → Copy when a row or column band is selected. False leaves Copy to
+  // the text selection.
+  bool copy_table_selection();
+  // Edit → Paste of that copy. True when the copy was a band, including a
+  // paste the status bar refused. False leaves Paste to the clipboard text.
+  bool paste_table_selection();
   void on_footnote();
   void on_picture();
   // Inserts a picture that has already been read. A cell being edited gets it
@@ -1094,6 +1114,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection list_shifts_idle_;
   // The list-tab idle, likewise; tabbing_ while it retags.
   sigc::connection list_tabs_idle_;
+  // Story tab pixels baked at this zoom. -1 until the first bake. An idle
+  // retags when story_zoom() moves; the idle is disconnected in the destructor.
+  sigc::connection story_tabs_idle_;
+  double story_tabs_zoom_ = -1;
   bool tabbing_ = false;
   // Paragraphs update_list_tabs() has looked at, for the tests.
   long list_tabs_evaluated_ = 0;
@@ -1132,6 +1156,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   // and updates the actions inside themselves until the stack overflows.
   // refresh_clipboard() asks, and the answer sets this through the loop.
   bool clipboard_text_ = false;
+  // The row or column copy. Paste uses it while this window still owns the
+  // clipboard text it published. Another program taking the clipboard clears it.
+  bool table_copy_on_ = false;
+  TableSlice table_copy_;
+  GObject* table_copy_owner_ = nullptr;
   // Lives as long as the window. An answer from the clipboard can arrive
   // after the window has closed; it holds this weakly and finds it gone.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);

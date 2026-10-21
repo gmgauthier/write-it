@@ -574,6 +574,44 @@ bool insert_table_row(std::vector<Paragraph>& paragraphs, size_t index);
 bool delete_table_row(std::vector<Paragraph>& paragraphs, size_t index);
 bool insert_table_column(std::vector<Paragraph>& paragraphs, size_t index);
 bool delete_table_column(std::vector<Paragraph>& paragraphs, size_t index);
+
+// A copied band of a table. Rows or columns, never a mix. `paragraphs` are
+// the selected cells, row and column renumbered from 0. `widths` is one
+// entry per copied column.
+enum class TableBand { Rows, Columns };
+
+struct TableSlice {
+  TableBand band = TableBand::Rows;
+  int rows = 0;
+  int columns = 0;
+  std::vector<int> widths;
+  std::vector<Paragraph> paragraphs;
+};
+
+// Why a row or column paste did not land. NotTable is an ordinary paragraph.
+// Misfit is the other side of the table (a row copy into a different column
+// count, a column copy into a different row count). TooBig would pass 32
+// rows or 16 columns. The document is unchanged unless the result is Placed.
+enum class TablePaste { Placed, NotTable, Misfit, TooBig };
+
+// `first` and `last` are inclusive and may be reversed. False when `index`
+// is not a cell, or the range is outside that table.
+bool copy_table_rows(const std::vector<Paragraph>& paragraphs, size_t index, int first, int last,
+                     TableSlice& out);
+bool copy_table_columns(const std::vector<Paragraph>& paragraphs, size_t index, int first, int last,
+                        TableSlice& out);
+// Inserts the copied rows after the caret cell's row. The copy must have
+// this table's column count.
+TablePaste paste_table_rows(std::vector<Paragraph>& paragraphs, size_t index,
+                            const TableSlice& slice);
+// Inserts the copied columns after the caret cell's column. The copy must
+// have this table's row count. Widths that would pass `width_limit` are
+// scaled; each column stays at least 200 twips.
+TablePaste paste_table_columns(std::vector<Paragraph>& paragraphs, size_t index,
+                               const TableSlice& slice, int width_limit);
+// The slice as body paragraphs, one cell after another, row by row. A cell's
+// own paragraphs stay in order. The cell itself is not copied.
+std::vector<Paragraph> table_slice_paragraphs(const TableSlice& slice);
 // Scales `widths` so the columns add up to `total`, each at least 200 twips.
 // `total` is brought inside the columns' minimum and `limit`. The last column
 // takes the remainder. False when `limit` cannot hold the columns.

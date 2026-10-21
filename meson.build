@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '2.3.0',
+  version: '2.4.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -223,6 +223,13 @@ write_it_tabs_tests = executable(
   dependencies: [writeit_dep],
 )
 test('tabs', write_it_tabs_tests)
+
+write_it_story_tabs_tests = executable(
+  'write-it-story-tabs-tests',
+  'tests/test_story_tabs.cpp',
+  dependencies: [writeit_dep],
+)
+test('story-tabs', with_display, args: [write_it_story_tabs_tests.full_path()], depends: write_it_story_tabs_tests, timeout: 90, suite: 'ui')
 
 # Enter twice after a page break must not start another sheet.
 write_it_double_return_tests = executable(
@@ -461,6 +468,20 @@ write_it_page_ui_tests = executable(
   dependencies: [writeit_dep],
 )
 test('page-ui', with_display, args: [write_it_page_ui_tests.full_path()], depends: write_it_page_ui_tests, timeout: 60, suite: 'ui')
+
+write_it_rows_tests = executable(
+  'write-it-rows-tests',
+  'tests/test_rows.cpp',
+  dependencies: [writeit_dep],
+)
+test('rows', write_it_rows_tests)
+
+write_it_row_select_tests = executable(
+  'write-it-row-select-tests',
+  'tests/test_row_select.cpp',
+  dependencies: [writeit_dep],
+)
+test('row-select', with_display, args: [write_it_row_select_tests.full_path()], depends: write_it_row_select_tests, timeout: 90, suite: 'ui')
 
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 namespace writeit {
 namespace {
@@ -158,6 +159,27 @@ int keep_twips(int original, double shown, double now, Units units)
   if (std::fabs(now - shown) < half)
     return original;
   return units_to_twips(now, units);
+}
+
+int shown_stop_twips(double typed, const std::vector<int>& positions, Units units)
+{
+  const int raw = units_to_twips(typed, units);
+  const double half = 0.5 / std::pow(10.0, units_digits(units));
+  int best = raw;
+  int best_gap = 0;
+  bool found = false;
+  for (int position : positions) {
+    const double shown = units_round(twips_to_units(position, units), units);
+    if (std::fabs(typed - shown) >= half)
+      continue;
+    const int gap = std::abs(position - raw);
+    if (!found || gap < best_gap) {
+      best = position;
+      best_gap = gap;
+      found = true;
+    }
+  }
+  return best;
 }
 
 int hang_twips(double now, int twips, int left_twips, double left_now, Units units)

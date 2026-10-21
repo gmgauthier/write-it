@@ -480,9 +480,8 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
     auto apply_tab = [this](int tab) {
       default_tab_ = tab;
       restyle_tags();
-      tag_story_spacing(header_view_, header_);
-      tag_story_spacing(footer_view_, footer_);
-      tag_note_spacing(notes_view_, notes_);
+      // Every note column, not only the first. A split column is its own view.
+      refresh_stories();
     };
     if (!replaced)
       apply_tab(new_tab);
