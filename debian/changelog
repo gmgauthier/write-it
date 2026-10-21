@@ -1,3 +1,12 @@
+write-it (2.4.0-1) unstable; urgency=medium
+
+  * A row's left edge and a column's top edge select that band. Shift extends the same kind.
+  * Copy and Paste insert those rows after the caret's row, or those columns after the caret's column.
+  * The cell's right-click Copy copies the selected band.
+  * A paste past 32 rows or 16 columns is refused.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Wed, 21 Oct 2026 20:03:32 +0100
+
 write-it (2.3.1-1) unstable; urgency=medium
 
   * Story tab stops follow the story type, which stops growing past 100%.

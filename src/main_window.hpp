@@ -30,6 +30,10 @@ class TableSheet;
 enum class StoryKey { Pass, Undo, Redo };
 
 StoryKey story_key(unsigned keyval, unsigned state);
+
+// Status bar when a row or column paste is refused.
+inline constexpr const char* kTablePasteLimit = "A table holds at most 32 rows and 16 columns.";
+inline constexpr const char* kTablePasteMisfit = "That paste does not fit this table.";
 // One Find hit. index is -1 when there is none. length is in characters of
 // `doc`, which can differ from the needle when casefolding changes length.
 // `doc` is a buffer slice: pictures and table anchors count as U+FFFC, so the
@@ -621,6 +625,17 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Writes `widths` onto table `table_id` and rebuilds the sheet. The caller
   // must not use a TableSheet after this returns: the rebuild destroys it.
   void commit_table_widths(int table_id, const std::vector<int>& widths);
+  // One table keeps a row or column selection. A click on another table's
+  // edge clears the rest.
+  void sole_table_band(TableSheet& keep);
+  void clear_table_bands();
+  bool table_band_on() const;
+  // Edit → Copy when a row or column band is selected. False leaves Copy to
+  // the text selection.
+  bool copy_table_selection();
+  // Edit → Paste of that copy. True when the copy was a band, including a
+  // paste the status bar refused. False leaves Paste to the clipboard text.
+  bool paste_table_selection();
   void on_footnote();
   void on_picture();
   // Inserts a picture that has already been read. A cell being edited gets it
@@ -1141,6 +1156,11 @@ class MainWindow : public Gtk::ApplicationWindow {
   // and updates the actions inside themselves until the stack overflows.
   // refresh_clipboard() asks, and the answer sets this through the loop.
   bool clipboard_text_ = false;
+  // The row or column copy. Paste uses it while this window still owns the
+  // clipboard text it published. Another program taking the clipboard clears it.
+  bool table_copy_on_ = false;
+  TableSlice table_copy_;
+  GObject* table_copy_owner_ = nullptr;
   // Lives as long as the window. An answer from the clipboard can arrive
   // after the window has closed; it holds this weakly and finds it gone.
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);

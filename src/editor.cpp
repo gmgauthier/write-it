@@ -1094,8 +1094,14 @@ void MainWindow::build_editor()
   // The clipboard outlives the window: ~MainWindow disconnects this. It is
   // asked again on every change, and when the window comes back to the
   // front, in case a change was missed while it was away.
-  clipboard_owner_ = Gtk::Clipboard::get()->signal_owner_change().connect(
-      [this](GdkEventOwnerChange*) { refresh_clipboard(); });
+  clipboard_owner_ =
+      Gtk::Clipboard::get()->signal_owner_change().connect([this](GdkEventOwnerChange*) {
+        auto clipboard = Gtk::Clipboard::get();
+        GObject* owner = clipboard ? gtk_clipboard_get_owner(clipboard->gobj()) : nullptr;
+        if (table_copy_on_ && owner != table_copy_owner_)
+          table_copy_on_ = false;
+        refresh_clipboard();
+      });
   signal_focus_in_event().connect(
       [this](GdkEventFocus*) {
         refresh_clipboard();
@@ -1134,20 +1140,36 @@ void MainWindow::build_editor()
   clicked(cut_tool_, [this] {
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.cut_clipboard(Gtk::Clipboard::get()); });
   });
-  activate(copy_item_, [this] {
+  auto copy_edit = [this] {
+    if (copy_table_selection())
+      return;
+    table_copy_on_ = false;
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.copy_clipboard(Gtk::Clipboard::get()); });
-  });
-  activate(context_copy_, [this] { buffer_->copy_clipboard(Gtk::Clipboard::get()); });
-  clicked(copy_tool_, [this] {
-    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.copy_clipboard(Gtk::Clipboard::get()); });
-  });
-  activate(paste_item_, [this] {
+  };
+  auto paste_edit = [this] {
+    if (paste_table_selection())
+      return;
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.paste_clipboard(Gtk::Clipboard::get()); });
+  };
+  activate(copy_item_, copy_edit);
+  activate(context_copy_, [this] {
+    if (copy_table_selection())
+      return;
+    table_copy_on_ = false;
+    if (buffer_)
+      buffer_->copy_clipboard(Gtk::Clipboard::get());
   });
-  activate(context_paste_, [this] { buffer_->paste_clipboard(Gtk::Clipboard::get()); });
-  clicked(paste_tool_, [this] {
-    edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.paste_clipboard(Gtk::Clipboard::get()); });
+  clicked(copy_tool_, copy_edit);
+  activate(paste_item_, paste_edit);
+  // The body's context menu. A click there has left the cell, so a band paste
+  // lands as paragraphs and any other paste lands in the body.
+  activate(context_paste_, [this] {
+    if (paste_table_selection())
+      return;
+    if (buffer_)
+      buffer_->paste_clipboard(Gtk::Clipboard::get());
   });
+  clicked(paste_tool_, paste_edit);
   activate(delete_item_, [this] {
     edit_at_caret([](Gtk::TextBuffer& buffer) { buffer.erase_selection(true, true); });
   });
@@ -2007,13 +2029,14 @@ void MainWindow::update_actions()
   sens(redo_item_, can_redo);
   sens(undo_tool_, can_undo);
   sens(redo_tool_, can_redo);
+  const bool band = table_band_on();
   sens(cut_item_, selection);
-  sens(copy_item_, selection);
+  sens(copy_item_, selection || band);
   sens(delete_item_, selection);
   sens(cut_tool_, selection);
-  sens(copy_tool_, selection);
+  sens(copy_tool_, selection || band);
   sens(context_cut_, body_selection);
-  sens(context_copy_, body_selection);
+  sens(context_copy_, body_selection || band);
   sens(paste_item_, can_paste);
   sens(paste_tool_, can_paste);
   sens(context_paste_, can_paste);
