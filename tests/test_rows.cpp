@@ -107,7 +107,7 @@ bool same_cells(const writeit::Document& doc, const writeit::Document& again)
 
 }  // namespace
 
-constexpr int kChecks = 70;
+constexpr int kChecks = 100;
 
 int main()
 {
@@ -262,6 +262,102 @@ int main()
   CHECK(body[0].cell.table == 0);
   CHECK(body[0].cell.shading.pattern == 0);
   CHECK(text_of(body[1]) == "C2" && text_of(body[2]) == "D");
+
+  // Pasting those cells into ordinary text follows the caret.
+  const std::vector<writeit::Paragraph> cells = body;
+
+  std::vector<writeit::Paragraph> at_start(1);
+  at_start[0].runs = {run_text("Intro", false)};
+  CHECK(writeit::insert_pasted_paragraphs(at_start, 0, 0, cells) ==
+        writeit::chars_before(at_start, 3));
+  CHECK(text_of(at_start[0]) == "C" && text_of(at_start[1]) == "C2" && text_of(at_start[2]) == "D" &&
+        text_of(at_start[3]) == "Intro");
+  CHECK(at_start[0].runs[0].bold && at_start[0].indents.left == 720 && at_start[0].cell.table == 0);
+
+  std::vector<writeit::Paragraph> at_end(1);
+  at_end[0].runs = {run_text("Intro", false)};
+  CHECK(writeit::insert_pasted_paragraphs(at_end, 0, 5, cells) ==
+        writeit::chars_before(at_end, at_end.size()));
+  CHECK(text_of(at_end[0]) == "Intro" && text_of(at_end[1]) == "C" && text_of(at_end[2]) == "C2" &&
+        text_of(at_end[3]) == "D");
+
+  std::vector<writeit::Paragraph> mid(1);
+  mid[0].runs = {run_text("Intro", true)};
+  mid[0].page_break = true;
+  CHECK(writeit::insert_pasted_paragraphs(mid, 0, 2, cells) == writeit::chars_before(mid, 4));
+  CHECK(text_of(mid[0]) == "In" && mid[0].page_break && mid[0].runs[0].bold);
+  CHECK(text_of(mid[1]) == "C" && !mid[1].page_break);
+  CHECK(text_of(mid[4]) == "tro" && !mid[4].page_break && mid[4].runs[0].bold);
+
+  std::vector<writeit::Paragraph> blank(1);
+  CHECK(writeit::insert_pasted_paragraphs(blank, 0, 0, cells) ==
+        writeit::chars_before(blank, blank.size()));
+  CHECK(blank.size() == 3 && text_of(blank[0]) == "C" && text_of(blank[2]) == "D");
+
+  std::vector<writeit::Paragraph> broken(1);
+  broken[0].page_break = true;
+  writeit::insert_pasted_paragraphs(broken, 0, 0, cells);
+  CHECK(broken.size() == 4 && text_of(broken[0]) == "C" && broken[3].runs.empty() &&
+        broken[3].page_break && !broken[0].page_break);
+
+  writeit::Document trail = make_table(1, 1);
+  const size_t trail_end = trail.paragraphs.size();
+  writeit::insert_pasted_paragraphs(trail.paragraphs, trail_end, 0, cells);
+  CHECK(trail.paragraphs[1].cell.table != 0);
+  CHECK(text_of(trail.paragraphs[trail_end]) == "C" && text_of(trail.paragraphs.back()) == "D");
+
+  writeit::Document on_anchor = make_table(1, 1);
+  writeit::insert_pasted_paragraphs(on_anchor.paragraphs, 1, 0, cells);
+  CHECK(on_anchor.paragraphs[1].cell.table == 0 && text_of(on_anchor.paragraphs[1]) == "C");
+  CHECK(on_anchor.paragraphs[1 + cells.size()].cell.table != 0);
+
+  std::vector<writeit::Paragraph> taken(1);
+  taken[0].runs = {run_text("Intro", false)};
+  taken[0].page_break = true;
+  writeit::insert_pasted_paragraphs(taken, 0, 5, 0, 0, 0, 5, cells);
+  CHECK(taken.size() == 3 && text_of(taken[0]) == "C" && taken[0].page_break);
+  CHECK(!taken[1].page_break && text_of(taken[2]) == "D");
+
+  std::vector<writeit::Paragraph> partial(1);
+  partial[0].runs = {run_text("Intro", false)};
+  partial[0].page_break = true;
+  writeit::insert_pasted_paragraphs(partial, 0, 0, 0, 0, 0, 2, cells);
+  CHECK(text_of(partial[0]) == "C" && partial[0].page_break);
+  CHECK(text_of(partial[3]) == "tro" && !partial[3].page_break);
+
+  std::vector<writeit::Paragraph> span(3);
+  span[0].runs = {run_text("One", false)};
+  span[1].runs = {run_text("Two", false)};
+  span[2].runs = {run_text("Three", false)};
+  writeit::insert_pasted_paragraphs(span, 0, 1, 0, 1, 2, 2, cells);
+  CHECK(span.size() == 5 && text_of(span[0]) == "O" && text_of(span[1]) == "C");
+  CHECK(text_of(span[4]) == "ree");
+
+  std::vector<writeit::Paragraph> reversed(1);
+  reversed[0].runs = {run_text("Intro", false)};
+  writeit::insert_pasted_paragraphs(reversed, 0, 0, 0, 5, 0, 0, cells);
+  CHECK(reversed.size() == 3 && text_of(reversed[0]) == "C" && text_of(reversed[2]) == "D");
+
+  writeit::Document mixed = make_table(1, 1);
+  const int mixed_rows = table_rows(mixed.paragraphs);
+  const size_t mixed_n = mixed.paragraphs.size();
+  writeit::insert_pasted_paragraphs(mixed.paragraphs, 0, 0, 0, 0, mixed_n, 0, cells);
+  CHECK(table_rows(mixed.paragraphs) == mixed_rows);
+  CHECK(mixed.paragraphs.size() == mixed_n + cells.size() && text_of(mixed.paragraphs[0]) == "C");
+
+  writeit::Document mixed_end = make_table(1, 1);
+  const size_t mixed_end_n = mixed_end.paragraphs.size();
+  writeit::insert_pasted_paragraphs(mixed_end.paragraphs, mixed_end_n, 0, 0, 0, mixed_end_n, 0,
+                                    cells);
+  CHECK(text_of(mixed_end.paragraphs.back()) == "D");
+  CHECK(mixed_end.paragraphs[1].cell.table != 0);
+  CHECK(mixed_end.paragraphs.size() == mixed_end_n + cells.size());
+
+  std::vector<writeit::Paragraph> stay(1);
+  stay[0].runs = {run_text("Stay", false)};
+  const std::vector<writeit::Paragraph> none;
+  CHECK(writeit::insert_pasted_paragraphs(stay, 0, 1, none) < 0);
+  CHECK(stay.size() == 1 && text_of(stay[0]) == "Stay");
 
   return suite_test::done("rows", kChecks);
 }

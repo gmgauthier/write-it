@@ -4385,20 +4385,44 @@ bool MainWindow::paste_table_selection()
     message_.set_text(sentence);
     return true;
   };
+  int anchor = -1;
   if (!in_cell) {
     std::vector<Paragraph> block = table_slice_paragraphs(table_copy_);
     if (block.empty())
       return true;
-    size_t at = caret_paragraph();
-    if (at > after.paragraphs.size())
-      at = after.paragraphs.size();
-    const bool only_empty = after.paragraphs.size() == 1 && after.paragraphs[0].cell.table == 0 &&
-                            after.paragraphs[0].runs.empty() && !after.paragraphs[0].page_break;
-    if (only_empty)
-      after.paragraphs = std::move(block);
-    else
-      after.paragraphs.insert(after.paragraphs.begin() + static_cast<std::ptrdiff_t>(at),
-                              block.begin(), block.end());
+    // The body caret, counted the same way as document_index_at(): a table is
+    // one anchor, and the newline that ends a paragraph belongs to it.
+    auto place_of = [&](int offset, size_t& index, int& into) {
+      index = document_index_at(offset);
+      if (index > after.paragraphs.size())
+        index = after.paragraphs.size();
+      into = 0;
+      if (index >= after.paragraphs.size() || after.paragraphs[index].cell.table != 0)
+        return;
+      into = offset - chars_before(after.paragraphs, index);
+      const int length = chars_of(after.paragraphs[index]);
+      if (into < 0)
+        into = 0;
+      if (into > length)
+        into = length;
+    };
+    size_t caret_at = 0;
+    int caret_into = 0;
+    place_of(cursor_offset(), caret_at, caret_into);
+    size_t from_at = caret_at;
+    int from_into = caret_into;
+    size_t to_at = caret_at;
+    int to_into = caret_into;
+    Gtk::TextIter sel_from;
+    Gtk::TextIter sel_to;
+    if (buffer_->get_selection_bounds(sel_from, sel_to)) {
+      place_of(sel_from.get_offset(), from_at, from_into);
+      place_of(sel_to.get_offset(), to_at, to_into);
+    }
+    anchor = insert_pasted_paragraphs(after.paragraphs, caret_at, caret_into, from_at, from_into,
+                                      to_at, to_into, block);
+    if (anchor < 0)
+      return true;
   } else {
     size_t index = after.paragraphs.size();
     for (size_t i = 0; i < after.paragraphs.size(); ++i) {
@@ -4424,7 +4448,6 @@ bool MainWindow::paste_table_selection()
   if (message_.get_text() == kTablePasteLimit || message_.get_text() == kTablePasteMisfit)
     message_.set_text("");
   hold_view();
-  int anchor = -1;
   if (in_cell) {
     size_t cell_index = before.paragraphs.size();
     for (size_t i = 0; i < before.paragraphs.size(); ++i) {

@@ -3,7 +3,8 @@
 // Rows and columns in the real window. The left edge of the first column
 // selects that row, and the top edge of the first row selects that column.
 // Shift extends one kind. Copy and Paste then insert the band after the
-// caret's row or column, or into the body when the caret has left the table.
+// caret's row or column. In ordinary text the cells become paragraphs at
+// the caret.
 
 #include "check.hpp"
 #include "document.hpp"
@@ -347,7 +348,7 @@ writeit::Document plain_table(int rows, int columns)
 
 }  // namespace
 
-constexpr int kChecks = 57;
+constexpr int kChecks = 59;
 
 int main(int argc, char* argv[])
 {
@@ -458,6 +459,12 @@ int main(int argc, char* argv[])
     settle();
     writeit::Document text_back = writeit::MainWindowProbe::doc(window);
     CHECK(body_text(text_back) == "Intro\n" && table_rows(text_back) == 3);
+
+    writeit::MainWindowProbe::caret(window, 2);
+    activate(paste);
+    writeit::Document at_mid = writeit::MainWindowProbe::doc(window);
+    CHECK(body_text(at_mid) == "In\nC\nD\ntro\n");
+    CHECK(table_rows(at_mid) == 3 && cell_text(at_mid, 0, 0) == "A");
 
     writeit::MainWindowProbe::load(window, writeit::blank_document("Sans", 11));
     settle();

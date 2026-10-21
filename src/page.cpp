@@ -4,6 +4,8 @@
 
 #include <gdkmm/pixbuf.h>
 
+#include <glibmm/ustring.h>
+
 #include <algorithm>
 #include <fstream>
 #include <limits>
@@ -169,6 +171,190 @@ bool copy_band(const std::vector<Paragraph>& paragraphs, size_t index, int row0,
   }
   out = std::move(slice);
   return true;
+}
+
+bool paragraph_is_cell(const std::vector<Paragraph>& paragraphs, size_t index)
+{
+  return index < paragraphs.size() && paragraphs[index].cell.table != 0;
+}
+
+int clamped_into(const Paragraph& paragraph, int into)
+{
+  const int length = chars_of(paragraph);
+  if (into < 0)
+    return 0;
+  if (into > length)
+    return length;
+  return into;
+}
+
+// Same cut as a page break, without forcing one. The right half is the rest
+// of the paragraph, not the start of a sheet. A mark stays on the left.
+void divide_paragraph(Paragraph& left, int at, Paragraph& right)
+{
+  right = left;
+  right.runs.clear();
+  right.page_break = false;
+  right.mark.reset();
+  if (at < 0)
+    at = 0;
+  std::vector<Run> kept;
+  bool splitting = true;
+  int seen = 0;
+  for (const Run& run : left.runs) {
+    const int n = chars_of(run);
+    if (!splitting) {
+      right.runs.push_back(run);
+      continue;
+    }
+    if (seen + n <= at) {
+      kept.push_back(run);
+      seen += n;
+      continue;
+    }
+    const int into = at - seen;
+    if (run.image) {
+      if (into <= 0)
+        right.runs.push_back(run);
+      else
+        kept.push_back(run);
+    } else {
+      const Glib::ustring text(run.text);
+      if (into > 0) {
+        Run part = run;
+        part.text = text.substr(0, static_cast<Glib::ustring::size_type>(into)).raw();
+        kept.push_back(part);
+      }
+      if (into < static_cast<int>(text.length())) {
+        Run part = run;
+        part.text = text.substr(static_cast<Glib::ustring::size_type>(into)).raw();
+        if (into > 0)
+          part.note = 0;
+        part.image.reset();
+        right.runs.push_back(part);
+      }
+    }
+    splitting = false;
+  }
+  left.runs = std::move(kept);
+}
+
+bool selection_touches_table(const std::vector<Paragraph>& paragraphs, size_t from_at,
+                             int from_into, size_t to_at, int to_into)
+{
+  if (from_at == to_at && from_into == to_into)
+    return false;
+  if (paragraph_is_cell(paragraphs, from_at))
+    return true;
+  if (to_into > 0 && paragraph_is_cell(paragraphs, to_at))
+    return true;
+  const size_t end = std::min(to_at, paragraphs.size());
+  for (size_t i = from_at + 1; i < end; ++i) {
+    if (paragraph_is_cell(paragraphs, i))
+      return true;
+  }
+  return false;
+}
+
+int place_collapsed(std::vector<Paragraph>& paragraphs, size_t at, int into,
+                    const std::vector<Paragraph>& block)
+{
+  const bool blank = paragraphs.size() == 1 && paragraphs[0].cell.table == 0 &&
+                     paragraphs[0].runs.empty() && !paragraphs[0].page_break;
+  if (blank || paragraphs.empty()) {
+    paragraphs = block;
+    return chars_before(paragraphs, paragraphs.size());
+  }
+  if (at > paragraphs.size())
+    at = paragraphs.size();
+  if (at == paragraphs.size()) {
+    paragraphs.insert(paragraphs.end(), block.begin(), block.end());
+    return chars_before(paragraphs, paragraphs.size());
+  }
+  if (paragraphs[at].cell.table != 0) {
+    const int id = paragraphs[at].cell.table;
+    while (at > 0 && paragraphs[at - 1].cell.table == id)
+      --at;
+    paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(at), block.begin(),
+                      block.end());
+    return chars_before(paragraphs, at + block.size());
+  }
+  into = clamped_into(paragraphs[at], into);
+  const int length = chars_of(paragraphs[at]);
+  if (into <= 0) {
+    paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(at), block.begin(),
+                      block.end());
+    return chars_before(paragraphs, at + block.size());
+  }
+  if (into >= length) {
+    const size_t dest = at + 1;
+    paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(dest), block.begin(),
+                      block.end());
+    return chars_before(paragraphs, dest + block.size());
+  }
+  Paragraph right;
+  divide_paragraph(paragraphs[at], into, right);
+  paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(at + 1), std::move(right));
+  paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(at + 1), block.begin(),
+                    block.end());
+  return chars_before(paragraphs, at + 1 + block.size());
+}
+
+int replace_body(std::vector<Paragraph>& paragraphs, size_t from_at, int from_into, size_t to_at,
+                 int to_into, const std::vector<Paragraph>& block)
+{
+  if (from_at > paragraphs.size())
+    from_at = paragraphs.size();
+  std::vector<Paragraph> out;
+  out.reserve(paragraphs.size() + block.size());
+  out.insert(out.end(), paragraphs.begin(),
+             paragraphs.begin() + static_cast<std::ptrdiff_t>(from_at));
+
+  bool inherit_break = false;
+  if (from_at < paragraphs.size() && paragraphs[from_at].cell.table == 0) {
+    const int cut = clamped_into(paragraphs[from_at], from_into);
+    if (cut > 0) {
+      Paragraph left = paragraphs[from_at];
+      Paragraph discarded;
+      divide_paragraph(left, cut, discarded);
+      out.push_back(std::move(left));
+    } else {
+      inherit_break = paragraphs[from_at].page_break;
+    }
+  }
+
+  std::vector<Paragraph> placed = block;
+  if (inherit_break && !placed.empty())
+    placed[0].page_break = true;
+  const size_t follow = out.size() + placed.size();
+  out.insert(out.end(), placed.begin(), placed.end());
+
+  size_t resume = to_at;
+  if (to_at < paragraphs.size() && paragraphs[to_at].cell.table == 0) {
+    const int end_into = clamped_into(paragraphs[to_at], to_into);
+    const int length = chars_of(paragraphs[to_at]);
+    if (end_into <= 0)
+      resume = to_at;
+    else if (end_into >= length)
+      resume = to_at + 1;
+    else {
+      Paragraph source = paragraphs[to_at];
+      Paragraph suffix;
+      divide_paragraph(source, end_into, suffix);
+      if (chars_of(suffix) > 0)
+        out.push_back(std::move(suffix));
+      resume = to_at + 1;
+    }
+  } else if (to_at > paragraphs.size()) {
+    resume = paragraphs.size();
+  }
+  if (resume < paragraphs.size())
+    out.insert(out.end(), paragraphs.begin() + static_cast<std::ptrdiff_t>(resume),
+               paragraphs.end());
+  paragraphs = std::move(out);
+  if (follow > paragraphs.size())
+    return chars_before(paragraphs, paragraphs.size());
+  return chars_before(paragraphs, follow);
 }
 
 Paragraph placed_cell(Paragraph paragraph, int table, int row, int column, int rows, int columns,
@@ -606,6 +792,28 @@ std::vector<Paragraph> table_slice_paragraphs(const TableSlice& slice)
     }
   }
   return out;
+}
+
+int insert_pasted_paragraphs(std::vector<Paragraph>& paragraphs, size_t at, int into,
+                             size_t from_at, int from_into, size_t to_at, int to_into,
+                             const std::vector<Paragraph>& block)
+{
+  if (block.empty())
+    return -1;
+  if (from_at > to_at || (from_at == to_at && from_into > to_into)) {
+    std::swap(from_at, to_at);
+    std::swap(from_into, to_into);
+  }
+  const bool collapsed = from_at == to_at && from_into == to_into;
+  if (collapsed || selection_touches_table(paragraphs, from_at, from_into, to_at, to_into))
+    return place_collapsed(paragraphs, at, into, block);
+  return replace_body(paragraphs, from_at, from_into, to_at, to_into, block);
+}
+
+int insert_pasted_paragraphs(std::vector<Paragraph>& paragraphs, size_t at, int into,
+                             const std::vector<Paragraph>& block)
+{
+  return insert_pasted_paragraphs(paragraphs, at, into, at, into, at, into, block);
 }
 
 bool fit_table_widths(std::vector<int>& widths, int total, int limit)
