@@ -1,3 +1,9 @@
+write-it (2.4.1-1) unstable; urgency=medium
+
+  * Pasting a copied row or column into ordinary text follows the caret.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Wed, 21 Oct 2026 21:00:54 +0100
+
 write-it (2.4.0-1) unstable; urgency=medium
 
   * A row's left edge and a column's top edge select that band. Shift extends the same kind.

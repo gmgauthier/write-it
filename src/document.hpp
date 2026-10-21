@@ -612,6 +612,23 @@ TablePaste paste_table_columns(std::vector<Paragraph>& paragraphs, size_t index,
 // The slice as body paragraphs, one cell after another, row by row. A cell's
 // own paragraphs stay in order. The cell itself is not copied.
 std::vector<Paragraph> table_slice_paragraphs(const TableSlice& slice);
+// Inserts `block` as ordinary paragraphs at the caret. `at` is the paragraph,
+// or one past the last paragraph to append. `into` is the character in that
+// paragraph: the start inserts before it, the end inserts after it, and the
+// middle splits it. The right half does not start a new page. `from_at` and
+// `to_at` are a selection, in either order. When they are the caret, nothing
+// is selected. A selection that stays in ordinary paragraphs is replaced. A
+// selection that touches a table is left as it is, and the block is inserted
+// at the caret. A document of one empty paragraph and no page break is
+// replaced by `block`. Returns the offset where the caret should sit, at the
+// start of whatever follows the block, or -1 when `block` is empty. The
+// document is unchanged then.
+int insert_pasted_paragraphs(std::vector<Paragraph>& paragraphs, size_t at, int into,
+                             size_t from_at, int from_into, size_t to_at, int to_into,
+                             const std::vector<Paragraph>& block);
+// The same paste, with nothing selected.
+int insert_pasted_paragraphs(std::vector<Paragraph>& paragraphs, size_t at, int into,
+                             const std::vector<Paragraph>& block);
 // Scales `widths` so the columns add up to `total`, each at least 200 twips.
 // `total` is brought inside the columns' minimum and `limit`. The last column
 // takes the remainder. False when `limit` cannot hold the columns.
