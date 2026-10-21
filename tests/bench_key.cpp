@@ -8,6 +8,9 @@
 // CPU is process CPU time. Wall time is beside it. After each key the pending
 // main-loop work, including list layout, is drained with no sleep. That drain
 // is the refresh. The lost script's timer is not in the tree.
+// A path on the command line measures that file with the same caret, key
+// count, and median. That run is not the gate. A .txt file opens as plain
+// text, because open_path follows the extension.
 
 #include "document.hpp"
 #include "main_window.hpp"
@@ -21,6 +24,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <ctime>
 #include <iostream>
 #include <string>
@@ -227,19 +231,39 @@ int main(int argc, char* argv[])
   g_setenv("XDG_CONFIG_HOME", home.c_str(), TRUE);
   g_setenv("GDK_BACKEND", "x11", FALSE);
   g_setenv("NO_AT_BRIDGE", "1", FALSE);
+  // gtk_init_check may rewrite argv. Keep a file argument before that.
+  const std::string measure_path = argc > 1 ? argv[1] : std::string();
   if (!gtk_init_check(&argc, &argv)) {
     std::cerr << "bench: no display\n";
     return 1;
   }
   Gtk::Main kit(argc, argv);
 
+  char host[256] = {};
+  gethostname(host, sizeof host);
+  if (!measure_path.empty()) {
+    const std::string label = Glib::path_get_basename(measure_path);
+    std::cout << "host " << host << "\n";
+    std::cout << label << ", paragraph " << kTarget << ", " << kKeys << " keys, median of " << kRuns
+              << "\n"
+              << std::flush;
+    {
+      writeit::MainWindow window;
+      window.show();
+      drain();
+      bench_file(window, measure_path, label.c_str());
+      window.hide();
+      drain();
+    }
+    g_rmdir(home.c_str());
+    return 0;
+  }
+
   const std::string plain_path = Glib::build_filename(home, "plain1000.rtf");
   const std::string list_path = Glib::build_filename(home, "list1000.rtf");
   Glib::file_set_contents(plain_path, writeit::rtf_export(make_doc(false)));
   Glib::file_set_contents(list_path, writeit::rtf_export(make_doc(true)));
 
-  char host[256] = {};
-  gethostname(host, sizeof host);
   std::cout << "host " << host << "\n";
   std::cout << "plain1000.rtf and list1000.rtf, paragraph " << kTarget << ", " << kKeys
             << " keys, median of " << kRuns << "\n"

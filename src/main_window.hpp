@@ -225,6 +225,25 @@ class MainWindow : public Gtk::ApplicationWindow {
   // pagination: a newline, a new paragraph format, or a line whose pixels
   // moved. apply_page_size() then keeps the page height it already has.
   void note_page_edit(int line, bool structure);
+  // A letter, one newline, or a paragraph-format change since the last
+  // pagination. The seam pass remeasures only the lines that moved.
+  void note_seam_edit(int line, bool structure, bool erased, bool at_start);
+  void note_seam_format(int line);
+  bool seam_geometry_matches() const;
+  // Seam tags below the screen. Applying every one lays the book out before
+  // the next key. A chunk idle finishes them without holding that key.
+  struct SeamJob {
+    int index = 0;
+    int start = 0;
+    int end = 0;
+    int pixels = 0;
+  };
+  void cancel_seam_pending();
+  void shift_seam_pending(int at, int delta);
+  void queue_seam_pending();
+  void apply_seam_pending_chunk();
+  void apply_one_seam(int start, int end, int pixels);
+  void drop_idle_seam_tags(const std::vector<int>& used);
   // True when the caret line's pixel box is the one remember_page_cache()
   // stored, so the seams and the page count are still right.
   bool page_box_unchanged() const;
@@ -1101,12 +1120,49 @@ class MainWindow : public Gtk::ApplicationWindow {
   int page_cache_notes_ = 0;
   double page_cache_zoom_ = 0;
   ViewMode page_cache_view_ = kDefaultView;
+  // Paragraph heights from the last pagination. A wrap or an Enter remeasures
+  // the lines it changed and places the sheets again, without laying out the
+  // paragraphs below. Asking for the buffer's end lays those lines out, and
+  // that is the pause.
+  struct SeamLine {
+    int text_h = 0;
+    int natural = 0;
+    int seam = 0;
+    bool page_break = false;
+    int start = 0;
+    // The sheet this paragraph's text is on, counting from 1. An empty block
+    // has none. Moving the caret reads this. It does not lay the book out.
+    int page = 0;
+  };
+  std::vector<SeamLine> seam_lines_;
+  bool seam_lines_valid_ = false;
+  int seam_lines_width_ = 0;
+  int seam_lines_notes_ = 0;
+  double seam_lines_zoom_ = 0;
+  ViewMode seam_lines_view_ = kDefaultView;
+  int seam_sheets_ = 1;
+  int seam_caret_page_ = 1;
+  bool seam_sheets_valid_ = false;
+  enum class SeamEdit { None, Line, Split, Join, Full };
+  SeamEdit seam_edit_ = SeamEdit::Full;
+  int seam_edit_line_ = -1;
+  bool seam_edit_at_start_ = false;
+  std::vector<SeamJob> seam_pending_;
+  size_t seam_pending_at_ = 0;
+  sigc::connection seam_pending_idle_;
   // sync_table_lines() after a table has its real height. One at a time.
   sigc::connection table_sync_;
   // update_page_seams() is applying its tags. Their signals are not edits.
   bool seaming_ = false;
   // drop_page_break_pads() is erasing the layout pad. That is not a new edit.
   bool dropping_pad_ = false;
+  // A page-break pad (U+200B) is in the body. Without one, a letter does not
+  // scan the buffer for it. Set when a pad is inserted, cleared once a scan
+  // finds none left.
+  bool pad_live_ = false;
+  // Tables mounted in the body. focused_sheet() walks every character when
+  // this is not zero, so a document with no table does not.
+  int table_anchors_ = 0;
   // Offset of the first newline inserted by the open user action, or -1.
   int inserted_newline_at_ = -1;
   bool list_shifts_queued_ = false;
