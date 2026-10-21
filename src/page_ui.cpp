@@ -739,6 +739,9 @@ class TableSheet : public Gtk::Grid {
               return on_cell_press(event, at_row, at_column, frame, view);
             });
         view->signal_button_press_event().connect([](GdkEventButton*) { return true; }, true);
+        // Right-click is claimed by the text view before this signal runs.
+        // Its menu is the one that opens. Copy there follows a row or column.
+        view->signal_populate_popup().connect([this](Gtk::Menu* menu) { offer_band_copy(menu); });
         view->signal_button_release_event().connect(
             [this](GdkEventButton* event) { return on_cell_release(event); });
         view->signal_button_release_event().connect([](GdkEventButton*) { return true; }, true);
@@ -990,6 +993,7 @@ class TableSheet : public Gtk::Grid {
 
   bool on_cell_press(GdkEventButton* event, int row, int column, CellFrame* frame,
                      Gtk::TextView* view);
+  void offer_band_copy(Gtk::Menu* menu);
   bool on_cell_motion(GdkEventMotion* event, int row, int column);
   void show_band();
   bool on_cell_release(GdkEventButton* event);
@@ -1179,6 +1183,37 @@ bool TableSheet::on_cell_press(GdkEventButton* event, int row, int column, CellF
   }
   window_.clear_table_bands();
   return false;
+}
+
+void TableSheet::offer_band_copy(Gtk::Menu* menu)
+{
+  // GTK grays this Copy unless the cell itself has a selection, and the
+  // handler copies that cell. A row or column band is the selection.
+  if (!menu || !band_on_)
+    return;
+  const GQuark quark = g_quark_try_string("gtk-signal");
+  for (Gtk::Widget* child : menu->get_children()) {
+    auto* item = dynamic_cast<Gtk::MenuItem*>(child);
+    if (!item)
+      continue;
+    bool copy = false;
+    if (quark) {
+      const char* signal =
+          static_cast<const char*>(g_object_get_qdata(G_OBJECT(item->gobj()), quark));
+      copy = signal && std::strcmp(signal, "copy-clipboard") == 0;
+    }
+    if (!copy && item->get_label() == "_Copy")
+      copy = true;
+    if (!copy)
+      continue;
+    const guint id = g_signal_lookup("activate", GTK_TYPE_MENU_ITEM);
+    g_signal_handlers_disconnect_matched(item->gobj(), G_SIGNAL_MATCH_ID, id, 0, nullptr, nullptr,
+                                         nullptr);
+    item->set_sensitive(true);
+    MainWindow* window = &window_;
+    item->signal_activate().connect([window] { window->copy_table_selection(); });
+    return;
+  }
 }
 
 bool TableSheet::on_cell_motion(GdkEventMotion* event, int row, int column)

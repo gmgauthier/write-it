@@ -62,6 +62,11 @@ struct MainWindowProbe {
     return window.nth_cell_view(0, row, column);
   }
 
+  static bool copied_rows(MainWindow& window)
+  {
+    return window.table_copy_on_ && window.table_copy_.band == TableBand::Rows;
+  }
+
   static void focus_cell(MainWindow& window, int row, int column)
   {
     Gtk::TextView* view = cell_view(window, row, column);
@@ -161,7 +166,8 @@ void activate(Gtk::MenuItem* item)
   settle();
 }
 
-void click_view(Gtk::TextView& view, double x, double y, guint time, bool shift)
+void click_view(Gtk::TextView& view, double x, double y, guint time, bool shift, guint button = 1,
+               bool release = true)
 {
   auto text_win = view.get_window(Gtk::TEXT_WINDOW_TEXT);
   if (!text_win)
@@ -179,21 +185,69 @@ void click_view(Gtk::TextView& view, double x, double y, guint time, bool shift)
     event->button.y = y;
     event->button.x_root = origin_x + x;
     event->button.y_root = origin_y + y;
-    event->button.button = 1;
-    guint state = type == GDK_BUTTON_RELEASE ? GDK_BUTTON1_MASK : 0;
+    event->button.button = button;
+    guint state = 0;
+    if (type == GDK_BUTTON_RELEASE)
+      state = button == 3 ? GDK_BUTTON3_MASK : GDK_BUTTON1_MASK;
     if (shift)
       state |= GDK_SHIFT_MASK;
     event->button.state = state;
     if (pointer) {
       event->button.device = pointer->gobj();
+      gdk_event_set_device(event, pointer->gobj());
       gdk_event_set_source_device(event, pointer->gobj());
     }
-    gtk_main_do_event(event);
+    // Button 1 goes through the normal path, which is what selects a band.
+    // A right-click is delivered to the text view: GTK claims it before the
+    // button-press signal and opens that view's own menu.
+    if (button == 1)
+      gtk_main_do_event(event);
+    else
+      gtk_widget_event(GTK_WIDGET(view.gobj()), event);
     gdk_event_free(event);
   };
   send(GDK_BUTTON_PRESS);
-  send(GDK_BUTTON_RELEASE);
+  if (release)
+    send(GDK_BUTTON_RELEASE);
   settle();
+}
+
+// The cell's menu is attached to the text view, and it appears only after
+// the clipboard answers.
+Gtk::Menu* cell_popup(Gtk::TextView& view)
+{
+  // GTK owns this list. Freeing it detaches the menu from a dangling node.
+  GList* list = gtk_menu_get_for_attach_widget(GTK_WIDGET(view.gobj()));
+  Gtk::Menu* found = nullptr;
+  for (GList* item = list; item; item = item->next) {
+    auto* menu = Glib::wrap(GTK_MENU(item->data));
+    if (menu && menu->get_mapped())
+      found = menu;
+  }
+  return found;
+}
+
+Gtk::Menu* wait_cell_popup(Gtk::TextView& view)
+{
+  auto context = Glib::MainContext::get_default();
+  for (int i = 0; i < 40; ++i) {
+    while (context->pending())
+      context->iteration(false);
+    if (Gtk::Menu* menu = cell_popup(view))
+      return menu;
+    g_usleep(10000);
+  }
+  return nullptr;
+}
+
+Gtk::MenuItem* menu_item(Gtk::Menu& menu, const char* label)
+{
+  for (Gtk::Widget* child : menu.get_children()) {
+    auto* item = dynamic_cast<Gtk::MenuItem*>(child);
+    if (item && (item->get_label() == label || item->get_label() == "Copy"))
+      return item;
+  }
+  return nullptr;
 }
 
 bool banded(Gtk::TextView* view)
@@ -293,7 +347,7 @@ writeit::Document plain_table(int rows, int columns)
 
 }  // namespace
 
-constexpr int kChecks = 53;
+constexpr int kChecks = 57;
 
 int main(int argc, char* argv[])
 {
@@ -359,7 +413,18 @@ int main(int argc, char* argv[])
       click_view(*row_cell, 2, 10, 5000, false);
     CHECK(banded(cell(1, 0)) && banded(cell(1, 1)));
     CHECK(!banded(cell(0, 0)) && !banded(cell(2, 0)));
-    activate(copy);
+    if (row_cell)
+      click_view(*row_cell, 30, 20, 5500, false, 3, false);
+    Gtk::Menu* popup = row_cell ? wait_cell_popup(*row_cell) : nullptr;
+    CHECK(popup);
+    CHECK(banded(cell(1, 0)) && banded(cell(1, 1)));
+    Gtk::MenuItem* cell_copy = popup ? menu_item(*popup, "_Copy") : nullptr;
+    CHECK(cell_copy && cell_copy->get_sensitive());
+    activate(cell_copy);
+    if (popup)
+      popup->popdown();
+    settle();
+    CHECK(writeit::MainWindowProbe::copied_rows(window));
     writeit::MainWindowProbe::focus_cell(window, 0, 0);
     settle();
     CHECK(paste && paste->get_sensitive());
