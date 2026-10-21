@@ -1,3 +1,9 @@
+write-it (2.4.2-1) unstable; urgency=medium
+
+  * Typing in a long document stays fast, including when a line wraps and when Enter is pressed.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Wed, 21 Oct 2026 23:36:38 +0100
+
 write-it (2.4.1-1) unstable; urgency=medium
 
   * Pasting a copied row or column into ordinary text follows the caret.

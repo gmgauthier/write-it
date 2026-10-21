@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdio>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1018,6 +1017,8 @@ void MainWindow::build_editor()
         auto start = end;
         start.backward_chars(static_cast<int>(text.length()));
         const bool structure = text.find('\n') != Glib::ustring::npos;
+        if (text.find(kPageBreakPad) != Glib::ustring::npos)
+          pad_live_ = true;
         if (structure) {
           tabs_renumber_ = true;
           // The first newline of this keystroke. A page break stays on the
@@ -1026,6 +1027,14 @@ void MainWindow::build_editor()
             inserted_newline_at_ = start.get_offset();
         }
         note_page_edit(start.get_line(), structure);
+        if (structure && text != "\n") {
+          if (!seaming_ && !dropping_pad_ && !loading_ && !restoring_)
+            cancel_seam_pending();
+          seam_edit_ = SeamEdit::Full;
+        } else
+          note_seam_edit(start.get_line(), structure, false, start.starts_line());
+        if (!structure && !seaming_ && !dropping_pad_ && !loading_ && !restoring_)
+          shift_seam_pending(start.get_offset(), static_cast<int>(text.length()));
         note_list_tabs(start, end);
       },
       true);
@@ -1036,6 +1045,22 @@ void MainWindow::build_editor()
         if (structure)
           tabs_renumber_ = true;
         note_page_edit(start.get_line(), structure);
+        const bool one_newline =
+            structure && end.get_offset() == start.get_offset() + 1 && start.get_char() == '\n';
+        if (structure && !one_newline) {
+          if (!seaming_ && !dropping_pad_ && !loading_ && !restoring_)
+            cancel_seam_pending();
+          seam_edit_ = SeamEdit::Full;
+        } else
+          note_seam_edit(start.get_line(), structure, true, false);
+        if (!structure && !seaming_ && !dropping_pad_ && !loading_ && !restoring_)
+          shift_seam_pending(start.get_offset(), start.get_offset() - end.get_offset());
+        if (table_anchors_ > 0) {
+          for (auto it = start; it.compare(end) < 0; ++it) {
+            if (it.get_child_anchor())
+              --table_anchors_;
+          }
+        }
       },
       false);
   buffer_->signal_erase().connect(
@@ -1075,6 +1100,7 @@ void MainWindow::build_editor()
       return;
     list_lines_valid_ = false;
     note_page_edit(start.get_line(), true);
+    note_seam_format(start.get_line());
   };
   buffer_->signal_apply_tag().connect(
       [changes_on_tag](const Glib::RefPtr<Gtk::TextTag>& tag, const Gtk::TextIter& start,
@@ -1837,6 +1863,10 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   page_letter_ = false;
   page_edit_maybe_ = false;
   page_cache_valid_ = false;
+  seam_lines_valid_ = false;
+  seam_sheets_valid_ = false;
+  seam_edit_ = SeamEdit::Full;
+  cancel_seam_pending();
   cell_edit_ = CellEdit{};
   cell_typing_on_ = false;
   styles_ = doc.styles;
@@ -3290,6 +3320,13 @@ bool MainWindow::sync_draft_gaps()
 {
   if (!buffer_)
     return false;
+  // Page view never draws a draft gap. Looking at every character to confirm
+  // the tag is absent walked the whole book on each key that paginated.
+  const bool want = view_ == ViewMode::Draft;
+  auto table = buffer_->get_tag_table();
+  auto gap = table->lookup("draft-gap");
+  if (!want && !gap)
+    return false;
   struct Range {
     int start = 0;
     int end = 0;
@@ -3318,12 +3355,9 @@ bool MainWindow::sync_draft_gaps()
       break;
     offset = next;
   }
-  const bool want = view_ == ViewMode::Draft;
   bool any = false;
   for (const Range& range : ranges)
     any = any || range.sheet;
-  auto table = buffer_->get_tag_table();
-  auto gap = table->lookup("draft-gap");
   if ((!want || !any) && !gap)
     return false;
   if (want && any && !gap)
@@ -4564,11 +4598,15 @@ void MainWindow::drop_page_break_pads()
 {
   // A pad beside a real character makes Backspace eat the pad first, and the
   // buffer then disagrees with capture(), which skips the pad. Once the
-  // paragraph has text, the seam sits on that text.
-  if (!buffer_ || dropping_pad_ || loading_ || restoring_)
+  // paragraph has text, the seam sits on that text. A document that never
+  // held a pad does not walk the buffer to find that out.
+  if (!buffer_ || dropping_pad_ || loading_ || restoring_ || !pad_live_)
     return;
   const int count = buffer_->get_char_count();
   std::vector<int> pads;
+  // A pad left in an empty page-break paragraph still has to be dropped once
+  // that paragraph gains text, so the flag stays set.
+  bool remain = false;
   for (int start = 0; start <= count;) {
     const int end = paragraph_end(start);
     bool real = false;
@@ -4583,12 +4621,17 @@ void MainWindow::drop_page_break_pads()
     }
     if (real)
       pads.insert(pads.end(), here.begin(), here.end());
+    else if (!here.empty())
+      remain = true;
     if (end <= start || end >= count)
       break;
     start = end;
   }
-  if (pads.empty())
+  if (pads.empty()) {
+    if (!remain)
+      pad_live_ = false;
     return;
+  }
   std::sort(pads.begin(), pads.end(), [](int a, int b) { return a > b; });
   dropping_pad_ = true;
   for (int at : pads) {
@@ -4598,6 +4641,8 @@ void MainWindow::drop_page_break_pads()
     buffer_->erase(from, to);
   }
   dropping_pad_ = false;
+  if (!remain)
+    pad_live_ = false;
 }
 
 ParaFormat MainWindow::para_at(int offset) const
@@ -5859,7 +5904,59 @@ void MainWindow::update_list_tabs()
   // The paragraphs to look at again, as indices into tab_lines_.
   std::vector<char> dirty;
   std::vector<int> starts;
-  const bool walk = tabs_full_ || tabs_renumber_ || static_cast<int>(tab_lines_.size()) != lines;
+  // GTK counts a final empty line when the buffer ends on a newline.
+  // forward_line() stops on that end iterator, so the cached paragraph count
+  // is one smaller and would never match. That gap is stable: a letter does
+  // not rebuild every paragraph because of it. An extra break in the middle
+  // still does.
+  bool ends_on_newline = false;
+  if (total > 0) {
+    auto tail = buffer_->end();
+    tail.backward_char();
+    ends_on_newline = tail.get_char() == '\n';
+  }
+  const auto aligned = [&](int cached) {
+    return cached == lines || (cached + 1 == lines && ends_on_newline);
+  };
+  const bool walk = tabs_full_ || tabs_renumber_ || !aligned(static_cast<int>(tab_lines_.size()));
+  // A plain Enter renumbers nothing. Walking every paragraph tag to learn
+  // that holds the next key for the whole book. Copy the format onto the
+  // new line and leave the numbers as they are. A document that has a list,
+  // or an edit that adds one, still walks.
+  if (walk && !tabs_full_ && seam_edit_ == SeamEdit::Split && !tab_lines_.empty()) {
+    const bool any_list =
+        std::any_of(tab_lines_.begin(), tab_lines_.end(),
+                    [](const TabLine& line) { return line.format.list.kind != ListKind::None; });
+    bool noted_list = false;
+    if (!any_list && tabs_noted_ && tabs_from_ && tabs_to_) {
+      const int from = tabs_from_->get_iter().get_line();
+      const int to = tabs_to_->get_iter().get_line();
+      const int last = std::max(0, buffer_->get_line_count() - 1);
+      for (int line = std::max(0, from); line <= to && line <= last; ++line) {
+        if (para_at(buffer_->get_iter_at_line(line).get_offset()).list.kind != ListKind::None) {
+          noted_list = true;
+          break;
+        }
+      }
+    }
+    if (!any_list && !noted_list) {
+      const int cached = static_cast<int>(tab_lines_.size());
+      int at = seam_edit_line_;
+      if (at < 0)
+        at = 0;
+      if (at > cached)
+        at = cached;
+      TabLine born;
+      if (cached > 0)
+        born = tab_lines_[static_cast<size_t>(std::min(at, cached - 1))];
+      const int insert_at = seam_edit_at_start_ ? at : std::min(at + 1, cached);
+      tab_lines_.insert(tab_lines_.begin() + insert_at, born);
+      tabs_full_ = false;
+      tabs_renumber_ = false;
+      tabs_noted_ = false;
+      return;
+    }
+  }
   if (walk) {
     // Each paragraph's start and format, as capture() reads them, and the
     // list numbers they give; GTK's lines also break at other separators.
@@ -5886,7 +5983,10 @@ void MainWindow::update_list_tabs()
       fresh[i].number = numbers[i];
     dirty.assign(fresh.size(), 0);
     const bool moved = fresh.size() != tab_lines_.size();
-    if (tabs_full_ || static_cast<int>(fresh.size()) != lines || (moved && !tabs_noted_)) {
+    // A final empty line is not a paragraph the cache missed. Any other
+    // difference between the paragraph count and GTK's line count is.
+    const bool count_mismatch = !aligned(static_cast<int>(fresh.size()));
+    if (tabs_full_ || count_mismatch || (moved && !tabs_noted_)) {
       std::fill(dirty.begin(), dirty.end(), 1);
     } else {
       // Paragraphs whose format or number changed, matching the old list
@@ -5922,10 +6022,11 @@ void MainWindow::update_list_tabs()
     dirty.assign(tab_lines_.size(), 0);
   }
   // The edited paragraphs, which a GTK line each when lines are paragraphs.
-  if (tabs_noted_ && static_cast<int>(tab_lines_.size()) == lines) {
+  if (tabs_noted_ && aligned(static_cast<int>(tab_lines_.size()))) {
     const int from = tabs_from_->get_iter().get_line();
     const int to = tabs_to_->get_iter().get_line();
-    for (int line = std::max(0, from); line <= to && line < lines; ++line)
+    const int cached = static_cast<int>(tab_lines_.size());
+    for (int line = std::max(0, from); line <= to && line < cached; ++line)
       dirty[static_cast<size_t>(line)] = 1;
   }
   const bool full = tabs_full_;
@@ -6986,6 +7087,179 @@ void MainWindow::place_split_notes()
   }
 }
 
+void MainWindow::note_seam_edit(int line, bool structure, bool erased, bool at_start)
+{
+  if (seaming_ || dropping_pad_ || loading_ || restoring_)
+    return;
+  if (seam_edit_ == SeamEdit::Full)
+    return;
+  if (structure) {
+    // The following pagination rebuilds the queue. A chunk still holding the
+    // old offsets would tag the wrong paragraph.
+    cancel_seam_pending();
+    if (seam_edit_ == SeamEdit::Split || seam_edit_ == SeamEdit::Join) {
+      seam_edit_ = SeamEdit::Full;
+      return;
+    }
+    seam_edit_ = erased ? SeamEdit::Join : SeamEdit::Split;
+    seam_edit_line_ = line;
+    seam_edit_at_start_ = at_start;
+    return;
+  }
+  if (seam_edit_ == SeamEdit::Split || seam_edit_ == SeamEdit::Join)
+    return;
+  if (seam_edit_ == SeamEdit::Line && line != seam_edit_line_) {
+    seam_edit_ = SeamEdit::Full;
+    return;
+  }
+  seam_edit_ = SeamEdit::Line;
+  seam_edit_line_ = line;
+}
+
+void MainWindow::note_seam_format(int line)
+{
+  // restoring_ stays set while a command retags a paragraph, including a
+  // page break. That retag is the edit. Loading rebuilds the buffer and
+  // marks the seams itself.
+  if (seaming_ || loading_ || seam_edit_ == SeamEdit::Full)
+    return;
+  if ((seam_edit_ == SeamEdit::Line || seam_edit_ == SeamEdit::Split ||
+       seam_edit_ == SeamEdit::Join) &&
+      (line == seam_edit_line_ || line == seam_edit_line_ + 1))
+    return;
+  cancel_seam_pending();
+  seam_edit_ = SeamEdit::Full;
+}
+
+void MainWindow::cancel_seam_pending()
+{
+  seam_pending_idle_.disconnect();
+  seam_pending_.clear();
+  seam_pending_at_ = 0;
+}
+
+void MainWindow::shift_seam_pending(int at, int delta)
+{
+  if (seam_pending_.empty() || delta == 0)
+    return;
+  const int end_at = delta < 0 ? at - delta : at;
+  std::vector<SeamJob> kept;
+  kept.reserve(seam_pending_.size());
+  for (size_t i = 0; i < seam_pending_.size(); ++i) {
+    if (i < seam_pending_at_)
+      continue;
+    SeamJob job = seam_pending_[i];
+    if (delta < 0 && job.start >= at && job.end <= end_at)
+      continue;
+    if (job.start >= at)
+      job.start += delta;
+    if (job.end >= at)
+      job.end += delta;
+    if (job.end > job.start && job.start >= 0)
+      kept.push_back(job);
+  }
+  seam_pending_ = std::move(kept);
+  seam_pending_at_ = 0;
+  if (seam_pending_.empty())
+    seam_pending_idle_.disconnect();
+}
+
+void MainWindow::apply_one_seam(int start, int end, int pixels)
+{
+  if (!buffer_ || end <= start)
+    return;
+  const int count = buffer_->get_char_count();
+  if (start < 0 || end > count)
+    return;
+  auto from = buffer_->get_iter_at_offset(start);
+  auto to = buffer_->get_iter_at_offset(end);
+  std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
+  for (const auto& tag : from.get_tags()) {
+    if (is_page_seam(tag_name(tag)))
+      drop.push_back(tag);
+  }
+  for (const auto& tag : drop)
+    buffer_->remove_tag(tag, from, to);
+  if (pixels > 0)
+    buffer_->apply_tag(page_seam_tag(pixels), from, to);
+}
+
+void MainWindow::drop_idle_seam_tags(const std::vector<int>& used)
+{
+  if (!buffer_)
+    return;
+  // GTK removes a tag by first raising it to the top priority, which lays
+  // out every line of the buffer. The page text is as tall as the book, so
+  // that is one turn and the next key waits behind it. The tag is already
+  // off the text. It can stay in the table until a short document is open.
+  if (!loading_ && text_.get_allocated_height() > 4000)
+    return;
+  std::vector<Glib::RefPtr<Gtk::TextTag>> idle;
+  auto table = buffer_->get_tag_table();
+  table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    const int pixels = page_seam_pixels(tag_name(tag));
+    if (pixels > 0 && std::find(used.begin(), used.end(), pixels) == used.end())
+      idle.push_back(tag);
+  });
+  for (const auto& tag : idle)
+    table->remove(tag);
+}
+
+void MainWindow::queue_seam_pending()
+{
+  if (seam_pending_at_ >= seam_pending_.size() || seam_pending_idle_.connected())
+    return;
+  seam_pending_idle_ = Glib::signal_idle().connect(
+      [this] {
+        apply_seam_pending_chunk();
+        if (seam_pending_at_ >= seam_pending_.size()) {
+          seam_pending_.clear();
+          seam_pending_at_ = 0;
+          return false;
+        }
+        return true;
+      },
+      Glib::PRIORITY_DEFAULT_IDLE);
+}
+
+void MainWindow::apply_seam_pending_chunk()
+{
+  if (closing_ || !buffer_ || seam_pending_at_ >= seam_pending_.size())
+    return;
+  constexpr int kChunk = 12;
+  seaming_ = true;
+  int n = 0;
+  const int count = buffer_->get_char_count();
+  while (seam_pending_at_ < seam_pending_.size() && n < kChunk) {
+    const SeamJob job = seam_pending_[seam_pending_at_++];
+    if (job.start < 0 || job.end > count || job.end <= job.start)
+      continue;
+    apply_one_seam(job.start, job.end, job.pixels);
+    if (seam_lines_valid_ && job.index >= 0 && job.index < static_cast<int>(seam_lines_.size()))
+      seam_lines_[static_cast<size_t>(job.index)].seam = job.pixels;
+    ++n;
+  }
+  seaming_ = false;
+  if (seam_pending_at_ >= seam_pending_.size()) {
+    std::vector<int> used;
+    used.reserve(seam_lines_.size());
+    for (const SeamLine& line : seam_lines_) {
+      if (line.seam > 0)
+        used.push_back(line.seam);
+    }
+    seaming_ = true;
+    drop_idle_seam_tags(used);
+    seaming_ = false;
+    raise_seams();
+  }
+}
+
+bool MainWindow::seam_geometry_matches() const
+{
+  return seam_lines_valid_ && view_ == seam_lines_view_ && zoom_factor() == seam_lines_zoom_ &&
+         text_.get_allocated_width() == seam_lines_width_ && note_block_px() == seam_lines_notes_;
+}
+
 void MainWindow::update_page_seams()
 {
   if (closing_ || seaming_ || !buffer_)
@@ -6994,6 +7268,8 @@ void MainWindow::update_page_seams()
   // still opens the short gap, including on a heading: the heading's own
   // space would win, and the gap would never show.
   if (view_ != ViewMode::Page) {
+    seam_lines_valid_ = false;
+    seam_sheets_valid_ = false;
     std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
     buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
       if (is_page_seam(tag_name(tag)))
@@ -7020,6 +7296,10 @@ void MainWindow::update_page_seams()
   sync_draft_gaps();
   if (text_.get_allocated_width() <= 1)
     return;
+  // Nothing has changed the paragraph heights since they were stored. A
+  // queued follow-up from applying the seams would lay the book out again.
+  if (!loading_ && !restoring_ && seam_edit_ == SeamEdit::None && seam_geometry_matches())
+    return;
   ++page_walks_;
   // Measure the notes at the width they will wrap, not the width they had
   // at the previous zoom.
@@ -7035,37 +7315,109 @@ void MainWindow::update_page_seams()
     bool page_break = false;
   };
   std::vector<Block> blocks;
-  int bottom_y = 0;
-  int bottom_h = 0;
-  text_.get_line_yrange(buffer_->end(), bottom_y, bottom_h);
-  const int bottom = bottom_y + bottom_h;
-  int offset = 0;
   const int count = buffer_->get_char_count();
-  while (offset <= count) {
-    auto iter = buffer_->get_iter_at_offset(offset);
+  auto measure_one = [&](Block& block) {
+    auto iter = buffer_->get_iter_at_offset(block.start);
+    block.natural = natural_line_above(iter);
+    block.seam = seam_at(iter);
+    block.page_break = starts_sheet(block.start);
     int top = 0;
     int height = 0;
     text_.get_line_yrange(iter, top, height);
-    Block block;
-    block.start = offset;
     block.top = top;
-    block.natural = natural_line_above(iter);
-    block.seam = seam_at(iter);
-    const int next = next_paragraph_offset(iter);
-    block.end = next < 0 ? count : next;
-    block.page_break = starts_sheet(block.start);
-    blocks.push_back(block);
-    if (next < 0)
-      break;
-    offset = next;
+    const int displayed = block.seam > 0 ? block.seam : block.natural;
+    block.text_h = std::max(1, height - displayed);
+  };
+  bool reused = false;
+  int got = -1;
+  int had = -1;
+  int at = -1;
+  if (!loading_ && !restoring_ && seam_geometry_matches() &&
+      (seam_edit_ == SeamEdit::Line || seam_edit_ == SeamEdit::Split ||
+       seam_edit_ == SeamEdit::Join)) {
+    // The same starts as the full walk, including the empty block after a
+    // trailing newline. forward_line() alone stops one short of that block.
+    std::vector<int> starts;
+    int offset = 0;
+    while (offset <= count) {
+      starts.push_back(offset);
+      const int next = next_paragraph_offset(buffer_->get_iter_at_offset(offset));
+      if (next < 0)
+        break;
+      offset = next;
+    }
+    got = static_cast<int>(starts.size());
+    had = static_cast<int>(seam_lines_.size());
+    const bool split = seam_edit_ == SeamEdit::Split && got == had + 1;
+    const bool join = seam_edit_ == SeamEdit::Join && got + 1 == had;
+    const bool same = seam_edit_ == SeamEdit::Line && got == had;
+    at = seam_edit_line_;
+    if ((split || join || same) && at >= 0 && at < got && !(split && at + 1 >= got)) {
+      blocks.resize(static_cast<size_t>(got));
+      bool ok = true;
+      for (int i = 0; i < got; ++i) {
+        Block& block = blocks[static_cast<size_t>(i)];
+        block.start = starts[static_cast<size_t>(i)];
+        block.end = i + 1 < got ? starts[static_cast<size_t>(i + 1)] : count;
+        const bool touch = i == at || ((split || join) && i == at + 1);
+        if (touch) {
+          measure_one(block);
+          continue;
+        }
+        int src = i;
+        if (split)
+          src = seam_edit_at_start_ ? (i < at ? i : i - 1) : (i <= at ? i : i - 1);
+        else if (join)
+          src = i < at ? i : i + 1;
+        if (src < 0 || src >= had) {
+          ok = false;
+          break;
+        }
+        const SeamLine& cached = seam_lines_[static_cast<size_t>(src)];
+        block.text_h = cached.text_h;
+        block.natural = cached.natural;
+        block.seam = cached.seam;
+        block.page_break = cached.page_break;
+      }
+      reused = ok;
+      if (!ok)
+        blocks.clear();
+    }
+  }
+  if (!reused) {
+    int bottom_y = 0;
+    int bottom_h = 0;
+    text_.get_line_yrange(buffer_->end(), bottom_y, bottom_h);
+    const int bottom = bottom_y + bottom_h;
+    int offset = 0;
+    while (offset <= count) {
+      auto iter = buffer_->get_iter_at_offset(offset);
+      int top = 0;
+      int height = 0;
+      text_.get_line_yrange(iter, top, height);
+      Block block;
+      block.start = offset;
+      block.top = top;
+      block.natural = natural_line_above(iter);
+      block.seam = seam_at(iter);
+      const int next = next_paragraph_offset(iter);
+      block.end = next < 0 ? count : next;
+      block.page_break = starts_sheet(block.start);
+      blocks.push_back(block);
+      if (next < 0)
+        break;
+      offset = next;
+    }
+    if (blocks.empty())
+      return;
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const int next_top = i + 1 < blocks.size() ? blocks[i + 1].top : bottom;
+      const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
+      blocks[i].text_h = std::max(1, next_top - blocks[i].top - displayed);
+    }
   }
   if (blocks.empty())
     return;
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    const int next_top = i + 1 < blocks.size() ? blocks[i + 1].top : bottom;
-    const int displayed = blocks[i].seam > 0 ? blocks[i].seam : blocks[i].natural;
-    blocks[i].text_h = std::max(1, next_top - blocks[i].top - displayed);
-  }
 
   const ViewGeometry sheet = geometry();
   const int per = std::max(1, page_text_height(page_setup_, zoom_factor()));
@@ -7315,38 +7667,84 @@ void MainWindow::update_page_seams()
       want[i] = 0;
   }
 
+  // Store the sheet count before the seam tags are applied. Applying one
+  // invalidates that paragraph, and laying out every later sheet holds the
+  // next key. Tags on the caret's sheet are applied now. The rest are a
+  // chunk at a time.
+  int changes = 0;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (want[i] != blocks[i].seam && blocks[i].start != blocks[i].end)
+      ++changes;
+  }
+  const int caret_at = buffer_->get_insert()->get_iter().get_offset();
+  int caret_visual = 0;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    if (blocks[i].start == blocks[i].end)
+      continue;
+    if (caret_at >= blocks[i].start)
+      caret_visual = page_of[i] + (want[i] > 0 ? 1 : 0);
+  }
+  const bool defer =
+      !loading_ && !restoring_ && changes > 24 && text_.get_allocated_height() > 4000;
+  cancel_seam_pending();
+  seam_lines_.resize(blocks.size());
+  int sheets = 1;
+  int caret_page = 1;
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const int visual = blocks[i].start == blocks[i].end ? 0 : page_of[i] + (want[i] > 0 ? 1 : 0);
+    const bool near = std::abs(visual - caret_visual) <= 1;
+    const bool now = !defer || near || blocks[i].start == blocks[i].end;
+    seam_lines_[i].text_h = blocks[i].text_h;
+    seam_lines_[i].natural = blocks[i].natural;
+    seam_lines_[i].page_break = blocks[i].page_break;
+    seam_lines_[i].start = blocks[i].start;
+    seam_lines_[i].page = blocks[i].start == blocks[i].end ? 0 : visual + 1;
+    // A deferred paragraph still wears its old seam. The cache has to say
+    // so until the chunk idle catches up, or the next pass will skip it.
+    seam_lines_[i].seam = now ? want[i] : blocks[i].seam;
+    if (blocks[i].start == blocks[i].end)
+      continue;
+    sheets = std::max(sheets, visual + 1);
+    if (caret_at >= blocks[i].start)
+      caret_page = visual + 1;
+  }
+  seam_lines_valid_ = true;
+  seam_lines_width_ = text_.get_allocated_width();
+  seam_lines_zoom_ = zoom_factor();
+  seam_lines_view_ = view_;
+  seam_lines_notes_ = note_block_px();
+  seam_sheets_ = sheets;
+  seam_caret_page_ = caret_page;
+  seam_sheets_valid_ = true;
+  seam_edit_ = SeamEdit::None;
+
   bool changed = false;
   seaming_ = true;
   for (size_t i = 0; i < blocks.size(); ++i) {
-    if (want[i] == blocks[i].seam)
+    if (want[i] == blocks[i].seam || blocks[i].start == blocks[i].end)
       continue;
-    auto from = buffer_->get_iter_at_offset(blocks[i].start);
-    auto to = buffer_->get_iter_at_offset(blocks[i].end);
-    std::vector<Glib::RefPtr<Gtk::TextTag>> drop;
-    for (const auto& tag : from.get_tags()) {
-      if (is_page_seam(tag_name(tag)))
-        drop.push_back(tag);
+    const int visual = page_of[i] + (want[i] > 0 ? 1 : 0);
+    const bool near = std::abs(visual - caret_visual) <= 1;
+    if (defer && !near) {
+      SeamJob job;
+      job.index = static_cast<int>(i);
+      job.start = blocks[i].start;
+      job.end = blocks[i].end;
+      job.pixels = want[i];
+      seam_pending_.push_back(job);
+      changed = true;
+      continue;
     }
-    for (const auto& tag : drop)
-      buffer_->remove_tag(tag, from, to);
-    if (want[i] > 0)
-      buffer_->apply_tag(page_seam_tag(want[i]), from, to);
+    apply_one_seam(blocks[i].start, blocks[i].end, want[i]);
     changed = true;
   }
-  if (changed) {
-    std::vector<int> used = want;
-    std::vector<Glib::RefPtr<Gtk::TextTag>> idle;
-    auto table = buffer_->get_tag_table();
-    table->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
-      const int pixels = page_seam_pixels(tag_name(tag));
-      if (pixels > 0 && std::find(used.begin(), used.end(), pixels) == used.end())
-        idle.push_back(tag);
-    });
-    for (const auto& tag : idle)
-      table->remove(tag);
+  if (seam_pending_.empty())
+    drop_idle_seam_tags(want);
+  if (changed)
     raise_seams();
-  }
   seaming_ = false;
+  if (!seam_pending_.empty())
+    queue_seam_pending();
   if (changed) {
     grow_page_ = true;
     queue_page_size();
@@ -7372,58 +7770,80 @@ void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
   const int view_bottom =
       std::min(visible.get_y() + visible.get_height(), static_cast<int>(std::ceil(clip_y2)));
   const int width = text_.get_allocated_width();
-  auto iter = buffer_->begin();
-  while (true) {
-    const int seam = seam_at(iter);
-    if (seam > 0) {
-      int top = 0;
-      int height = 0;
-      text_.get_line_yrange(iter, top, height);
-      // GTK paints a selected first line through its pixels-above. The seam
-      // is that margin, so the highlight runs up the previous sheet and stops
-      // only when it meets the line above. The page is white there. The gray
-      // gap is painted over this.
-      int cover_x = 0;
-      int cover_y = 0;
-      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top, cover_x, cover_y);
-      int text_x = 0;
-      int text_y = 0;
-      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top + seam, text_x, text_y);
-      if (text_y > cover_y && text_y >= view_top && cover_y <= view_bottom) {
-        const int y0 = std::max(cover_y, view_top);
-        const int y1 = std::min(text_y, view_bottom);
-        if (y1 > y0) {
-          cr->set_source_rgb(1, 1, 1);
-          cr->rectangle(0, y0, width, y1 - y0);
-          cr->fill();
-        }
-      }
-      // [pad][bottom margin][gray][top margin]. The gray is the pasteboard.
-      const int gray_y = top + seam - sheet.gap - sheet.margin_y;
-      int window_x = 0;
-      int window_y = 0;
-      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, gray_y, window_x, window_y);
-      if (window_y + sheet.gap >= view_top && window_y <= view_bottom) {
-        cr->set_source_rgb(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
-        cr->rectangle(0, window_y, width, sheet.gap);
+  // A seam is a tag on the paragraph that starts a sheet. Paragraphs between
+  // sheets have none, so the gray is found from those tags. A merged range
+  // still paints each paragraph in it: two page breaks in a row share a tag.
+  std::vector<Glib::RefPtr<Gtk::TextTag>> seams;
+  buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    if (is_page_seam(tag_name(tag)))
+      seams.push_back(tag);
+  });
+  if (seams.empty())
+    return;
+  auto paint = [&](const Gtk::TextIter& at) {
+    const int seam = seam_at(at);
+    if (seam <= 0)
+      return;
+    int top = 0;
+    int height = 0;
+    text_.get_line_yrange(at, top, height);
+    // GTK paints a selected first line through its pixels-above. The seam
+    // is that margin, so the highlight runs up the previous sheet and stops
+    // only when it meets the line above. The page is white there. The gray
+    // gap is painted over this.
+    int cover_x = 0;
+    int cover_y = 0;
+    text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top, cover_x, cover_y);
+    int text_x = 0;
+    int text_y = 0;
+    text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top + seam, text_x, text_y);
+    if (text_y > cover_y && text_y >= view_top && cover_y <= view_bottom) {
+      const int y0 = std::max(cover_y, view_top);
+      const int y1 = std::min(text_y, view_bottom);
+      if (y1 > y0) {
+        cr->set_source_rgb(1, 1, 1);
+        cr->rectangle(0, y0, width, y1 - y0);
         cr->fill();
-        cr->set_source_rgb(92.0 / 255.0, 92.0 / 255.0, 92.0 / 255.0);
-        cr->set_line_width(1);
-        cr->move_to(0, window_y + 0.5);
-        cr->line_to(width, window_y + 0.5);
-        cr->move_to(0, window_y + sheet.gap - 0.5);
-        cr->line_to(width, window_y + sheet.gap - 0.5);
-        cr->stroke();
       }
     }
-    // The next paragraph. A seam sits on the paragraph's first character, so
-    // the characters in between are not visited.
-    Gtk::TextIter match_start;
-    Gtk::TextIter match_end;
-    if (!iter.forward_search("\n", Gtk::TEXT_SEARCH_TEXT_ONLY, match_start, match_end) ||
-        match_end.is_end())
-      break;
-    iter = match_end;
+    // [pad][bottom margin][gray][top margin]. The gray is the pasteboard.
+    const int gray_y = top + seam - sheet.gap - sheet.margin_y;
+    int window_x = 0;
+    int window_y = 0;
+    text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, gray_y, window_x, window_y);
+    if (window_y + sheet.gap >= view_top && window_y <= view_bottom) {
+      cr->set_source_rgb(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
+      cr->rectangle(0, window_y, width, sheet.gap);
+      cr->fill();
+      cr->set_source_rgb(92.0 / 255.0, 92.0 / 255.0, 92.0 / 255.0);
+      cr->set_line_width(1);
+      cr->move_to(0, window_y + 0.5);
+      cr->line_to(width, window_y + 0.5);
+      cr->move_to(0, window_y + sheet.gap - 0.5);
+      cr->line_to(width, window_y + sheet.gap - 0.5);
+      cr->stroke();
+    }
+  };
+  for (const auto& tag : seams) {
+    Gtk::TextIter iter = buffer_->begin();
+    while (true) {
+      if (!iter.has_tag(tag) && !iter.forward_to_tag_toggle(tag))
+        break;
+      if (!iter.has_tag(tag))
+        break;
+      Gtk::TextIter range_end = iter;
+      if (!range_end.forward_to_tag_toggle(tag))
+        range_end = buffer_->end();
+      paint(iter);
+      Gtk::TextIter match_start;
+      Gtk::TextIter match_end;
+      while (iter.forward_search("\n", Gtk::TEXT_SEARCH_TEXT_ONLY, match_start, match_end) &&
+             match_end.compare(range_end) < 0 && !match_end.is_end()) {
+        paint(match_end);
+        iter = match_end;
+      }
+      iter = range_end;
+    }
   }
 }
 

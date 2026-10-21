@@ -1392,6 +1392,7 @@ void TableSheet::finish_drag()
 void MainWindow::mount_table(const std::vector<Paragraph>& cells, bool separator)
 {
   auto anchor = buffer_->create_child_anchor(buffer_->end());
+  ++table_anchors_;
   if (separator)
     buffer_->insert(buffer_->end(), "\n");
   auto* sheet = Gtk::manage(new TableSheet(*this, cells));
@@ -1415,7 +1416,7 @@ int MainWindow::table_paragraph_count(const Glib::RefPtr<Gtk::TextChildAnchor>& 
 
 TableSheet* MainWindow::focused_sheet() const
 {
-  if (!buffer_)
+  if (!buffer_ || table_anchors_ == 0)
     return nullptr;
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
     TableSheet* sheet = sheet_from(iter.get_child_anchor());
@@ -4310,7 +4311,7 @@ void MainWindow::clear_table_bands()
 
 bool MainWindow::table_band_on() const
 {
-  if (!buffer_)
+  if (!buffer_ || table_anchors_ == 0)
     return false;
   for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
     TableSheet* sheet = sheet_from(iter.get_child_anchor());

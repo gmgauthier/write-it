@@ -23,6 +23,8 @@ The bench opens a window. On this i3/Regolith desktop a normal launch tiles and 
 xvfb-run -a ./build-release/write-it-bench-key
 ```
 
+A path argument measures that file with the same caret, key count, and median. That result is not the gate. A `.txt` path opens as plain text.
+
 The same commands on another machine give that machine's number. A 4-vCPU LCOS guest is a useful second run. Build there too. Do not copy the host binary.
 
 The program writes the two RTF files in a temporary directory, opens them, and deletes them. It sets `XDG_CONFIG_HOME` to that directory, so it does not read or write `~/.config/write-it`.

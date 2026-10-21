@@ -284,6 +284,7 @@ MainWindow::~MainWindow()
   list_shifts_idle_.disconnect();
   list_tabs_idle_.disconnect();
   story_tabs_idle_.disconnect();
+  seam_pending_idle_.disconnect();
   clipboard_owner_.disconnect();
   mark_set_.disconnect();
   set_focus_.disconnect();
@@ -1475,6 +1476,10 @@ void MainWindow::update_page_status()
   if (page_box_unchanged()) {
     page_edit_maybe_ = false;
     page_letter_ = false;
+    // The letter did not move this line. The stored sheets stay correct, and
+    // a later status pass must not measure them again.
+    if (seam_edit_ == SeamEdit::Line)
+      seam_edit_ = SeamEdit::None;
     return;
   }
   page_letter_ = false;
@@ -1485,16 +1490,31 @@ void MainWindow::update_page_status()
   if (remeasure)
     apply_page_size();
   update_page_seams();
-  int end_y = 0;
-  int end_h = 0;
-  text_.get_line_yrange(buffer_->end(), end_y, end_h);
-  const auto caret_iter = buffer_->get_iter_at_mark(buffer_->get_insert());
-  Gdk::Rectangle caret;
-  text_.get_iter_location(caret_iter, caret);
-  const int per = page_text_height(page_setup_, zoom_factor());
-  const int content_end = page_content_y(end_y + end_h, buffer_->get_char_count());
-  const int content_caret = page_content_y(caret.get_y(), caret_iter.get_offset());
-  const Glib::ustring label = page_label(page_count(content_end, content_caret, per));
+  Glib::ustring label;
+  if (view_ == ViewMode::Page && seam_sheets_valid_ && seam_geometry_matches()) {
+    PageCount count;
+    count.pages = std::max(1, seam_sheets_);
+    const int at = buffer_->get_insert()->get_iter().get_offset();
+    int caret_page = 1;
+    for (const SeamLine& line : seam_lines_) {
+      if (line.page > 0 && at >= line.start)
+        caret_page = line.page;
+    }
+    seam_caret_page_ = caret_page;
+    count.page = std::clamp(caret_page, 1, count.pages);
+    label = page_label(count);
+  } else {
+    int end_y = 0;
+    int end_h = 0;
+    text_.get_line_yrange(buffer_->end(), end_y, end_h);
+    const auto caret_iter = buffer_->get_iter_at_mark(buffer_->get_insert());
+    Gdk::Rectangle caret;
+    text_.get_iter_location(caret_iter, caret);
+    const int per = page_text_height(page_setup_, zoom_factor());
+    const int content_end = page_content_y(end_y + end_h, buffer_->get_char_count());
+    const int content_caret = page_content_y(caret.get_y(), caret_iter.get_offset());
+    label = page_label(page_count(content_end, content_caret, per));
+  }
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
   remember_page_cache();
@@ -1771,7 +1791,11 @@ bool MainWindow::on_context(GdkEventButton* event)
 int MainWindow::print_page_count() const
 {
   // The same count as the status bar. The widget is taller than that by the
-  // gray gaps between sheets, and those gaps are not pages.
+  // gray gaps between sheets, and those gaps are not pages. The stored count
+  // is that result from the last pagination. Measuring the buffer's end lays
+  // out every line below the caret.
+  if (seam_sheets_valid_ && seam_geometry_matches())
+    return std::max(1, seam_sheets_);
   ++page_walks_;
   if (!buffer_)
     return 1;
