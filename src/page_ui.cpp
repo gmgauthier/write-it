@@ -4468,6 +4468,56 @@ bool MainWindow::paste_table_selection()
   return true;
 }
 
+void MainWindow::on_table_background(Ink ink)
+{
+  if (!buffer_)
+    return;
+  TableSheet* band = nullptr;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (sheet && sheet->has_band()) {
+      band = sheet;
+      break;
+    }
+  }
+  if (!band)
+    return;
+  Shading shading;
+  if (ink != Ink::Auto) {
+    shading.pattern = kMaxShading;
+    shading.background = ink_clamp(static_cast<int>(ink));
+    if (shading.background == Ink::Auto)
+      shading = Shading{};
+  }
+  const Document before = capture();
+  size_t index = before.paragraphs.size();
+  for (size_t i = 0; i < before.paragraphs.size(); ++i) {
+    if (before.paragraphs[i].cell.table == band->table_id()) {
+      index = i;
+      break;
+    }
+  }
+  if (!in_table(before.paragraphs, index))
+    return;
+  int from = 0;
+  int to = 0;
+  band->band_span(from, to);
+  const bool restore_cell = editing_cell();
+  const CellEdit saved = cell_edit_;
+  Document after = before;
+  if (!paint_table_band(after.paragraphs, index, band->band_kind(), from, to, shading) ||
+      after.paragraphs == before.paragraphs)
+    return;
+  const int anchor =
+      std::max(0, std::min(chars_before(before.paragraphs, index), buffer_->get_char_count()));
+  hold_view();
+  buffer_->place_cursor(buffer_->get_iter_at_offset(anchor));
+  commit_document(before, after, anchor);
+  if (restore_cell)
+    restore_cell_edit(saved);
+  release_view();
+}
+
 void MainWindow::on_table_width()
 {
   if (!buffer_)

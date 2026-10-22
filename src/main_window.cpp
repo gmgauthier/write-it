@@ -606,6 +606,22 @@ void MainWindow::build_menus()
   table->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
   table_width_item_ = add_item(*table, "Table _Width…", false);
   table_width_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_table_width));
+  table->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
+  table_background_item_ = Gtk::manage(new Gtk::MenuItem("_Background", true));
+  table_background_item_->set_sensitive(false);
+  auto* colours = Gtk::manage(new Gtk::Menu());
+  table_background_item_->set_submenu(*colours);
+  for (int ink = 1; ink <= 16; ++ink) {
+    const Ink chosen = static_cast<Ink>(ink);
+    auto* item = Gtk::manage(new Gtk::MenuItem(ink_name(chosen, false), true));
+    item->signal_activate().connect([this, chosen] { on_table_background(chosen); });
+    colours->append(*item);
+  }
+  colours->append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
+  auto* none = Gtk::manage(new Gtk::MenuItem("_None", true));
+  none->signal_activate().connect([this] { on_table_background(Ink::Auto); });
+  colours->append(*none);
+  table->append(*table_background_item_);
 
   auto* help = add_menu("_Help");
   add_item(*help, "_About Write-It", true, GDK_KEY_F1, static_cast<Gdk::ModifierType>(0))

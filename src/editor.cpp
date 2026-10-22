@@ -2088,6 +2088,7 @@ void MainWindow::update_actions()
   // Opening the Table menu leaves the cell, and the body caret may still be
   // outside the table. The cell that was edited stays available.
   sens(table_width_item_, in_cell || cell_edit_.on);
+  sens(table_background_item_, band);
   updating_actions_ = false;
   --actions_depth_;
 }

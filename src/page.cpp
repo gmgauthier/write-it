@@ -669,6 +669,42 @@ bool copy_table_columns(const std::vector<Paragraph>& paragraphs, size_t index, 
   return copy_band(paragraphs, index, 0, cell.rows - 1, first, last, TableBand::Columns, out);
 }
 
+bool paint_table_band(std::vector<Paragraph>& paragraphs, size_t index, TableBand band, int first,
+                      int last, const Shading& shading)
+{
+  if (!in_table(paragraphs, index))
+    return false;
+  if (first > last)
+    std::swap(first, last);
+  const Cell cell = paragraphs[index].cell;
+  if (cell.rows < 1 || cell.columns < 1)
+    return false;
+  int row0 = 0;
+  int row1 = cell.rows - 1;
+  int column0 = 0;
+  int column1 = cell.columns - 1;
+  if (band == TableBand::Rows) {
+    row0 = first;
+    row1 = last;
+  } else {
+    column0 = first;
+    column1 = last;
+  }
+  if (row0 < 0 || column0 < 0 || row1 >= cell.rows || column1 >= cell.columns)
+    return false;
+  const Shading paint = clamp_shading(shading);
+  const int id = cell.table;
+  bool any = false;
+  for (Paragraph& paragraph : paragraphs) {
+    if (paragraph.cell.table != id || paragraph.cell.row < row0 || paragraph.cell.row > row1 ||
+        paragraph.cell.column < column0 || paragraph.cell.column > column1)
+      continue;
+    paragraph.cell.shading = paint;
+    any = true;
+  }
+  return any;
+}
+
 TablePaste paste_table_rows(std::vector<Paragraph>& paragraphs, size_t index,
                             const TableSlice& slice)
 {

@@ -641,6 +641,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // caret back to the start of the document.
   void change_table_at_caret(bool (*edit)(std::vector<Paragraph>&, size_t));
   void on_table_width();
+  // Table → Background. `Ink::Auto` clears the cell shading. Any other colour
+  // is a solid fill on every cell of the selected row or column band.
+  void on_table_background(Ink ink);
   // Writes `widths` onto table `table_id` and rebuilds the sheet. The caller
   // must not use a TableSheet after this returns: the rebuild destroys it.
   void commit_table_widths(int table_id, const std::vector<int>& widths);
@@ -1023,6 +1026,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* table_delete_row_item_ = nullptr;
   Gtk::MenuItem* table_delete_column_item_ = nullptr;
   Gtk::MenuItem* table_width_item_ = nullptr;
+  Gtk::MenuItem* table_background_item_ = nullptr;
   Gtk::CheckMenuItem* header_footer_item_ = nullptr;
   Gtk::MenuItem* context_cut_ = nullptr;
   Gtk::MenuItem* context_copy_ = nullptr;
