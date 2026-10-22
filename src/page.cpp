@@ -909,7 +909,7 @@ bool paint_spans(std::vector<Paragraph>& paragraphs, const std::vector<PaintSpan
       }
     }
   }
-  if (painted == paragraphs)
+  if (same_stored_paragraphs(painted, paragraphs))
     return false;
   paragraphs.swap(painted);
   return true;

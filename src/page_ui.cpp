@@ -708,6 +708,11 @@ class TableSheet : public Gtk::Grid {
               window_.tag_cell_insert(*this, at_row, at_column, end, text);
             },
             true);
+        form_hooks_.push_back(buffer->signal_erase().connect(
+            [this, at_row, at_column](const Gtk::TextIter& start, const Gtk::TextIter& end) {
+              note_erased(at_row, at_column, start, end);
+            },
+            false));
         buffer->signal_mark_set().connect([this, at_row, at_column](
                                               const Gtk::TextBuffer::iterator&,
                                               const Glib::RefPtr<Gtk::TextBuffer::Mark>& mark) {
@@ -899,6 +904,11 @@ class TableSheet : public Gtk::Grid {
   const Paragraph* form_at(int row, int column, int line) const;
   int paragraphs_before(int row, int column) const;
   int line_at(int row, int column, int offset) const;
+  // A new paragraph break copies the paragraph it split. Deleting a break
+  // drops the paragraph that was joined away. capture() reads these forms
+  // by line, so a stale list saves the next paragraph's format onto this one.
+  void repeat_form(int row, int column, int line, int copies);
+  void drop_forms(int row, int column, int line, int drops);
   void caret_of(int row, int column, int& caret, int& bound) const;
   bool focused_place(int& row, int& column, int& caret, int& bound) const;
   void collapse_selections(const Gtk::TextView* keep) const;
@@ -1007,6 +1017,8 @@ class TableSheet : public Gtk::Grid {
   void begin_drag(GdkEvent* event);
   void apply_drag(int root_x);
   void finish_drag();
+  void note_erased(int row, int column, const Gtk::TextIter& start, const Gtk::TextIter& end);
+  ~TableSheet() override;
 
   MainWindow& window_;
   int rows_ = 0;
@@ -1028,7 +1040,14 @@ class TableSheet : public Gtk::Grid {
   std::vector<std::vector<Gtk::TextView*>> views_;
   std::vector<std::vector<CellFrame*>> frames_;
   std::vector<std::vector<std::vector<Paragraph>>> forms_;
+  std::vector<sigc::connection> form_hooks_;
 };
+
+TableSheet::~TableSheet()
+{
+  for (sigc::connection& hook : form_hooks_)
+    hook.disconnect();
+}
 
 int TableSheet::table_id() const
 {
@@ -1084,6 +1103,50 @@ int TableSheet::paragraphs_before(int row, int column) const
     }
   }
   return index;
+}
+
+void TableSheet::repeat_form(int row, int column, int line, int copies)
+{
+  if (copies < 1 || row < 0 || column < 0 || row >= rows_ || column >= cols_)
+    return;
+  auto& forms = forms_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+  if (forms.empty())
+    return;
+  if (line < 0)
+    line = 0;
+  if (line >= static_cast<int>(forms.size()))
+    line = static_cast<int>(forms.size()) - 1;
+  const Paragraph form = forms[static_cast<size_t>(line)];
+  forms.insert(forms.begin() + static_cast<std::ptrdiff_t>(line + 1), static_cast<size_t>(copies),
+               form);
+}
+
+void TableSheet::drop_forms(int row, int column, int line, int drops)
+{
+  if (drops < 1 || row < 0 || column < 0 || row >= rows_ || column >= cols_)
+    return;
+  auto& forms = forms_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+  const int first = line + 1;
+  if (first < 0 || first >= static_cast<int>(forms.size()))
+    return;
+  const int last = std::min(first + drops, static_cast<int>(forms.size()));
+  forms.erase(forms.begin() + static_cast<std::ptrdiff_t>(first),
+              forms.begin() + static_cast<std::ptrdiff_t>(last));
+}
+
+void TableSheet::note_erased(int row, int column, const Gtk::TextIter& start,
+                             const Gtk::TextIter& end)
+{
+  if (window_.loading_ || window_.restoring_ || window_.cell_tagging_)
+    return;
+  int breaks = 0;
+  for (auto iter = start; iter != end; ++iter) {
+    if (iter.get_char() == '\n')
+      ++breaks;
+  }
+  if (breaks < 1)
+    return;
+  drop_forms(row, column, line_at(row, column, start.get_offset()), breaks);
 }
 
 int TableSheet::line_at(int row, int column, int offset) const
@@ -1812,6 +1875,13 @@ void MainWindow::tag_cell_insert(TableSheet& sheet, int row, int column, const G
   const int at = end.get_offset() - length;
   if (length <= 0 || at < 0)
     return;
+  int breaks = 0;
+  for (auto iter = text.begin(); iter != text.end(); ++iter) {
+    if (*iter == '\n')
+      ++breaks;
+  }
+  if (breaks > 0)
+    sheet.repeat_form(row, column, sheet.line_at(row, column, at), breaks);
   Run format;
   bool continued = false;
   bool from_typing = false;
@@ -5137,6 +5207,14 @@ void expand_word(Gtk::TextBuffer& buffer, int& from, int& to)
     return;
   const int count = buffer.get_char_count();
   auto iter = buffer.get_iter_at_offset(std::max(0, std::min(from, count)));
+  // A click on the trailing half of the last letter leaves the caret on the
+  // boundary after that word. The word under the pointer is the one before it.
+  if ((iter.is_end() || iter.get_char() == '\n' || !iter.inside_word()) && iter.get_offset() > 0) {
+    auto prev = iter;
+    prev.backward_char();
+    if (prev.get_char() != '\n' && prev.inside_word())
+      iter = prev;
+  }
   if (iter.is_end() || iter.get_char() == '\n' || !iter.inside_word())
     return;
   auto start = iter;
