@@ -10,7 +10,7 @@ Repos: https://github.com/gmgauthier/write-it is the source of truth, where pull
 
 ## Status
 
-**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands. **`v2.0.0` is 2.0 M1.** Font colour, highlight, strikethrough, superscript, and subscript are in that release. **`v2.1.0` is 2.0 M2.** Space before, space after, and line spacing are in that release. **`v2.2.0` is 2.0 M3.** Borders and shading on a paragraph and on a table cell are in that release. **`v2.2.1`** fixes that release: a body paragraph's borders and shading round-trip, a header, a footer, and a footnote draw theirs, and Insert Row and Insert Column keep each cell's own. **`v2.2.2`** brings a keystroke in a 1000-paragraph document under the 50 ms gate. **`v2.3.0` is 2.0 M4.** A paragraph's own tab stops are set from Format → Tabs… and the ruler, and they round-trip. **`v2.3.1`** fixes that release: story tab stops follow the story zoom, a later footnote column takes a new default interval, center, right, and decimal leaders are drawn, Set replaces the stop the list shows, a story selection sets every paragraph, and a cell's ruler follows the caret. **`v2.4.0` is 2.0 M5.** Several whole rows, or several whole columns, can be selected, copied, and pasted. **`v2.4.1`** fixes that release: pasting a copied row or column into ordinary text follows the caret. **`v2.4.2`** keeps typing in a long document fast, including when a line wraps and when Enter is pressed. **`v2.5.0` is 2.0 M6.** A selected row or column takes one background colour, and that colour round-trips.
+**M5 (1.0) is done and tagged `v1.0.0`.** 1.0 is M0 through M5. The packaged release is `v1.0.0` at M5: the `.deb`, the source tarball, and the AppImage. Live with that release before adding a filter. Majors after 1.0 are the roadmap at the end of this file. What each feature does is in its own section of this file; this table only says where it stands. **`v2.0.0` is 2.0 M1.** Font colour, highlight, strikethrough, superscript, and subscript are in that release. **`v2.1.0` is 2.0 M2.** Space before, space after, and line spacing are in that release. **`v2.2.0` is 2.0 M3.** Borders and shading on a paragraph and on a table cell are in that release. **`v2.2.1`** fixes that release: a body paragraph's borders and shading round-trip, a header, a footer, and a footnote draw theirs, and Insert Row and Insert Column keep each cell's own. **`v2.2.2`** brings a keystroke in a 1000-paragraph document under the 50 ms gate. **`v2.3.0` is 2.0 M4.** A paragraph's own tab stops are set from Format → Tabs… and the ruler, and they round-trip. **`v2.3.1`** fixes that release: story tab stops follow the story zoom, a later footnote column takes a new default interval, center, right, and decimal leaders are drawn, Set replaces the stop the list shows, a story selection sets every paragraph, and a cell's ruler follows the caret. **`v2.4.0` is 2.0 M5.** Several whole rows, or several whole columns, can be selected, copied, and pasted. **`v2.4.1`** fixes that release: pasting a copied row or column into ordinary text follows the caret. **`v2.4.2`** keeps typing in a long document fast, including when a line wraps and when Enter is pressed. **`v2.5.0` is 2.0 M6.** A selected row or column takes one background colour, and that colour round-trips. **`v2.6.0` is 2.0 M7.** The format painter copies the format of M1–M4, and a cell's shading from M3 and M6.
 
 | M2 item | State |
 |---|---|
@@ -108,7 +108,7 @@ The page sits on a neutral gray pasteboard, `#808080`. Text that fills more than
 +------------------------------------------------------------------+
 | File  Edit  View  Insert  Format  Tools  Table  Help             |
 +------------------------------------------------------------------+
-| [New] [Open] [Save] | [Print] | [Cut] [Copy] [Paste] | [Undo] [Redo]
+| [New] [Open] [Save] | [Print] | [Cut] [Copy] [Paste] [Painter] | [Undo] [Redo]
 | [Font ▾] [Size ▾] [B] [I] [U] | [Left] [Center] [Right] [Justify] | [Style ▾]
 +------------------------------------------------------------------+
 | ruler                                                            |
@@ -121,7 +121,7 @@ The page sits on a neutral gray pasteboard, `#808080`. Text that fills more than
 +------------------------------------------------------------------+
 ```
 
-Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-justify-fill`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
+Icons come from the desktop icon theme, by freedesktop name: `document-new`, `document-open`, `document-save`, `document-print`, `edit-cut`, `edit-copy`, `edit-paste`, `draw-brush`, `edit-undo`, `edit-redo`, `format-text-bold`, `format-text-italic`, `format-text-underline`, `format-justify-left`, `format-justify-center`, `format-justify-right`, `format-justify-fill`, `format-list-unordered`, `format-list-ordered`. Toolbars are icons. The menu’s words are the tooltip. A missing icon falls back to that short word. A toolbar combo that applies a format returns focus to the document afterward.
 
 Cut, Copy, Paste, Undo, and Redo are insensitive when there is nothing to do. Save stays sensitive. The right-click menu starts with Cut, Copy, Paste, then a separator, then this app’s own items. On a numbered list item those are Restart Numbering and Continue Previous List, each insensitive when it would change nothing.
 
@@ -191,7 +191,7 @@ The only keyboard is the Word 97 map in the menus above. WordPerfect 5.1’s fun
 
 ### Toolbars
 
-The standard toolbar never grows an app-specific button. Groups, left to right: New Open Save, Print, Cut Copy Paste, Undo Redo.
+The standard toolbar never grows an app-specific button. Groups, left to right: New Open Save, Print, Cut Copy Paste, Format Painter, Undo Redo. Format Painter is the brush Word 97 puts after Paste.
 
 The format toolbar: font, size, bold, italic, underline, font colour, highlight, align left, align center, align right, justify, then a separator, then the style combo, bullets, and numbering. Font colour and highlight sit together after underline, which is where Word 97 puts the highlight next to the font colour.
 
@@ -404,6 +404,14 @@ The left 6 pixels of the first column select that row, except the top 6 pixels o
 Table → Background is that command. It is insensitive until a row band or a column band is selected. The submenu lists the sixteen colours in Word's order, then None. A colour is stored as a solid fill on each cell in the band: `\clshdng10000` and `\clcbpatN`. None clears that shading, and the file omits the cell shading words. The cell's borders stay, and so does any shading on a paragraph inside the cell. Every paragraph of a cell takes the same cell shading. Format → Borders and Shading… on one cell afterwards replaces the colour there and leaves the other cells in the band. The command is one undo step.
 
 **2.0 M7 — Painter.** The format painter copies character and paragraph format, including M1–M4, from the selection onto the text it is dragged across. Inside a table it also copies the cell's shading, whether that shading came from M3 or from a row or column colour. One click paints once. A double click keeps painting until Escape, as in Word 97. It does not invent a format 2.0 does not store.
+
+The brush is the Format Painter button on the standard toolbar, after Paste, with the `draw-brush` icon. One click copies the format and arms one drag. A second click within the system's double-click time, or a double click, leaves the brush armed until Escape or another click of the button. The pointer is a pencil while the brush is armed. The header, the footer, and notes do not arm it and do not take a drag: those stories stay plain.
+
+The copy is taken when the brush is armed. A selection uses its first character and that character's paragraph. A caret uses the character before it, or the first character when the caret is at the start, and that paragraph. An empty paragraph uses its paragraph mark. Character format is the font, the size, bold, italic, underline, the font colour, the highlight, strikethrough, and superscript or subscript, with the direct bits that go with them. Paragraph format is the style, the indents, the alignment, the list, the spacing, the borders, the shading, and the tab stops, with that paragraph's direct bits and outline level. A page break is not copied. A picture and a footnote marker are not copied and are not painted over.
+
+A drag in the body paints every body paragraph it touches, and the characters it covers. A drag in a cell paints that cell only. A click with no drag paints the word under the pointer, and the paragraph format of the paragraph that holds it. Text outside the drag keeps its character format. One drag is one undo step. A drag that changes nothing is not an undo step, and a one-click brush is still finished. A second drag of a locked brush is its own undo step.
+
+When the copied paragraph is a table cell, a drag in a cell also copies that cell's shading, including a clear, onto every paragraph of the cell under the pointer. The cell's borders stay. Cell shading is not painted onto ordinary text, and ordinary text does not clear a cell's shading. A paragraph's own shading stays a paragraph property, separate from the cell.
 
 **Done when** the seven lines are true. 2.0 M1 is `v2.0.0`. Each later milestone is tagged when Greg says it is ready.
 

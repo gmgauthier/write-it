@@ -705,6 +705,275 @@ bool paint_table_band(std::vector<Paragraph>& paragraphs, size_t index, TableBan
   return any;
 }
 
+namespace {
+
+constexpr unsigned kCharacterDirect = kDirectFont | kDirectSize | kDirectBold | kDirectItalic |
+                                      kDirectUnderline | kDirectColor | kDirectHighlight |
+                                      kDirectStrike | kDirectScript;
+
+Run bare_character(Run run)
+{
+  run.text.clear();
+  run.note = 0;
+  run.image.reset();
+  run.direct &= kCharacterDirect;
+  return run;
+}
+
+Run character_at(const Paragraph& paragraph, int into)
+{
+  const int count = chars_of(paragraph);
+  if (count <= 0) {
+    if (paragraph.mark)
+      return bare_character(*paragraph.mark);
+    return bare_character(Run{});
+  }
+  if (into < 0)
+    into = 0;
+  if (into >= count)
+    into = count - 1;
+  int at = 0;
+  const Run* found = nullptr;
+  for (const Run& run : paragraph.runs) {
+    const int n = chars_of(run);
+    if (n <= 0)
+      continue;
+    if (into < at + n) {
+      found = &run;
+      break;
+    }
+    at += n;
+    found = &run;
+  }
+  if (!found)
+    return bare_character(Run{});
+  return bare_character(*found);
+}
+
+void take_paragraph_format(Paragraph& dest, const Paragraph& src)
+{
+  dest.heading = src.heading;
+  dest.style = src.style.empty() ? std::string(kNormalStyle) : src.style;
+  dest.indents = clamp_indents(src.indents);
+  dest.align = src.align;
+  dest.spacing = clamp_spacing(src.spacing);
+  dest.borders = clamp_borders(src.borders);
+  dest.shading = clamp_shading(src.shading);
+  dest.tabs = clamp_tabs(src.tabs);
+  dest.list = clamp_list(src.list);
+  dest.direct = src.direct;
+}
+
+void apply_character(Run& run, const Run& format)
+{
+  run.font = format.font;
+  run.size = format.size;
+  run.bold = format.bold;
+  run.italic = format.italic;
+  run.underline = format.underline;
+  run.color = format.color;
+  run.highlight = format.highlight;
+  run.strike = format.strike;
+  run.script = format.script;
+  run.direct = (run.direct & ~kCharacterDirect) | (format.direct & kCharacterDirect);
+}
+
+bool paintable_run(const Run& run)
+{
+  return !run.image && run.note == 0 && !run.text.empty();
+}
+
+void paint_characters(Paragraph& paragraph, int from, int to, const Run& format)
+{
+  if (from > to)
+    std::swap(from, to);
+  if (chars_of(paragraph) <= 0) {
+    paragraph.mark = bare_character(format);
+    paragraph.runs.clear();
+    return;
+  }
+  if (from >= to)
+    return;
+  if (from < 0)
+    from = 0;
+  std::vector<Run> out;
+  int at = 0;
+  for (const Run& run : paragraph.runs) {
+    const int n = chars_of(run);
+    if (n <= 0 || !paintable_run(run)) {
+      out.push_back(run);
+      at += n;
+      continue;
+    }
+    const int run_end = at + n;
+    if (run_end <= from || at >= to) {
+      out.push_back(run);
+      at = run_end;
+      continue;
+    }
+    const int left_n = std::max(0, from - at);
+    const int right_n = std::max(0, run_end - to);
+    const int mid_n = n - left_n - right_n;
+    const Glib::ustring text(run.text);
+    auto piece = [&](int start, int len, bool paint) {
+      if (len <= 0)
+        return;
+      Run part = run;
+      part.text = text.substr(static_cast<size_t>(start), static_cast<size_t>(len)).raw();
+      if (paint)
+        apply_character(part, format);
+      out.push_back(std::move(part));
+    };
+    piece(0, left_n, false);
+    piece(left_n, mid_n, true);
+    piece(left_n + mid_n, right_n, false);
+    at = run_end;
+  }
+  std::vector<Run> merged;
+  for (Run& run : out) {
+    if (!merged.empty() && paintable_run(run) && paintable_run(merged.back()) &&
+        same_format(merged.back(), run))
+      merged.back().text += run.text;
+    else
+      merged.push_back(std::move(run));
+  }
+  paragraph.runs = std::move(merged);
+}
+
+void push_paint_span(std::vector<PaintSpan>& spans, size_t index, int start, int chars,
+                     int boundary, bool last, int from, int to)
+{
+  const bool overlaps = from < boundary && to > start;
+  const int caret_limit = last ? boundary : boundary - 1;
+  const bool caret_here = from == to && from >= start && from <= caret_limit;
+  if (!overlaps && !caret_here)
+    return;
+  int rel_from = 0;
+  int rel_to = 0;
+  if (to > from) {
+    const int lo = std::max(start, from);
+    const int hi = std::min(start + chars, to);
+    if (hi > lo) {
+      rel_from = lo - start;
+      rel_to = hi - start;
+    }
+  }
+  spans.push_back(PaintSpan{index, rel_from, rel_to});
+}
+
+}  // namespace
+
+bool sample_painter(const std::vector<Paragraph>& paragraphs, size_t index, int into,
+                    PainterFormat& out)
+{
+  if (index >= paragraphs.size())
+    return false;
+  const Paragraph& paragraph = paragraphs[index];
+  PainterFormat format;
+  format.character = character_at(paragraph, into);
+  format.paragraph = paragraph;
+  format.paragraph.runs.clear();
+  format.paragraph.mark.reset();
+  format.paragraph.basis = 0;
+  format.from_cell = paragraph.cell.table != 0;
+  format.cell_shading = paragraph.cell.shading;
+  out = std::move(format);
+  return true;
+}
+
+bool paint_spans(std::vector<Paragraph>& paragraphs, const std::vector<PaintSpan>& spans,
+                 const PainterFormat& format)
+{
+  if (spans.empty())
+    return false;
+  for (const PaintSpan& span : spans) {
+    if (span.index >= paragraphs.size())
+      return false;
+  }
+  std::vector<Paragraph> painted = paragraphs;
+  for (PaintSpan span : spans) {
+    Paragraph& paragraph = painted[span.index];
+    take_paragraph_format(paragraph, format.paragraph);
+    paint_characters(paragraph, span.from, span.to, format.character);
+  }
+  if (format.from_cell) {
+    const Shading shading = clamp_shading(format.cell_shading);
+    for (const PaintSpan& span : spans) {
+      const Cell& cell = painted[span.index].cell;
+      if (cell.table == 0)
+        continue;
+      for (Paragraph& paragraph : painted) {
+        if (paragraph.cell.table == cell.table && paragraph.cell.row == cell.row &&
+            paragraph.cell.column == cell.column)
+          paragraph.cell.shading = shading;
+      }
+    }
+  }
+  if (painted == paragraphs)
+    return false;
+  paragraphs.swap(painted);
+  return true;
+}
+
+bool painter_body_spans(const std::vector<Paragraph>& paragraphs, int from, int to,
+                        std::vector<PaintSpan>& spans)
+{
+  spans.clear();
+  if (paragraphs.empty())
+    return false;
+  if (from > to)
+    std::swap(from, to);
+  if (from < 0)
+    from = 0;
+  if (to < 0)
+    to = 0;
+  int cursor = 0;
+  size_t i = 0;
+  while (i < paragraphs.size()) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      size_t j = i + 1;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id)
+        ++j;
+      cursor += 1;
+      if (j < paragraphs.size())
+        cursor += 1;
+      i = j;
+      continue;
+    }
+    const int chars = chars_of(paragraphs[i]);
+    const bool last = i + 1 == paragraphs.size();
+    const int boundary = cursor + chars + (last ? 0 : 1);
+    push_paint_span(spans, i, cursor, chars, boundary, last, from, to);
+    cursor = boundary;
+    ++i;
+  }
+  return !spans.empty();
+}
+
+bool painter_linear_spans(const std::vector<Paragraph>& paragraphs, size_t base, int from, int to,
+                          std::vector<PaintSpan>& spans)
+{
+  spans.clear();
+  if (paragraphs.empty())
+    return false;
+  if (from > to)
+    std::swap(from, to);
+  if (from < 0)
+    from = 0;
+  if (to < 0)
+    to = 0;
+  int cursor = 0;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const int chars = chars_of(paragraphs[i]);
+    const bool last = i + 1 == paragraphs.size();
+    const int boundary = cursor + chars + (last ? 0 : 1);
+    push_paint_span(spans, base + i, cursor, chars, boundary, last, from, to);
+    cursor = boundary;
+  }
+  return !spans.empty();
+}
+
 TablePaste paste_table_rows(std::vector<Paragraph>& paragraphs, size_t index,
                             const TableSlice& slice)
 {

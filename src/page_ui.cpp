@@ -742,8 +742,12 @@ class TableSheet : public Gtk::Grid {
         // Right-click is claimed by the text view before this signal runs.
         // Its menu is the one that opens. Copy there follows a row or column.
         view->signal_populate_popup().connect([this](Gtk::Menu* menu) { offer_band_copy(menu); });
-        view->signal_button_release_event().connect(
-            [this](GdkEventButton* event) { return on_cell_release(event); });
+        view->signal_button_release_event().connect([this, view](GdkEventButton* event) {
+          const bool claimed = on_cell_release(event);
+          if (!claimed && event && event->button == 1)
+            window_.queue_painter(*view);
+          return claimed;
+        });
         view->signal_button_release_event().connect([](GdkEventButton*) { return true; }, true);
         view->signal_motion_notify_event().connect(
             [this, at_row, at_column](GdkEventMotion* event) {
@@ -891,6 +895,7 @@ class TableSheet : public Gtk::Grid {
 
   int table_id() const;
   Gtk::TextView* view_at(int row, int column) const;
+  bool find_view(const Gtk::TextView& view, int& row, int& column) const;
   const Paragraph* form_at(int row, int column, int line) const;
   int paragraphs_before(int row, int column) const;
   int line_at(int row, int column, int offset) const;
@@ -1037,6 +1042,20 @@ Gtk::TextView* TableSheet::view_at(int row, int column) const
   if (row < 0 || column < 0 || row >= rows_ || column >= cols_)
     return nullptr;
   return views_[static_cast<size_t>(row)][static_cast<size_t>(column)];
+}
+
+bool TableSheet::find_view(const Gtk::TextView& view, int& row, int& column) const
+{
+  for (int r = 0; r < rows_; ++r) {
+    for (int c = 0; c < cols_; ++c) {
+      if (views_[static_cast<size_t>(r)][static_cast<size_t>(c)] == &view) {
+        row = r;
+        column = c;
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 const Paragraph* TableSheet::form_at(int row, int column, int line) const
@@ -1249,6 +1268,8 @@ bool TableSheet::on_cell_motion(GdkEventMotion* event, int row, int column)
     cursor(Gdk::SB_DOWN_ARROW);
   else if (left)
     cursor(Gdk::SB_RIGHT_ARROW);
+  else if (window_.painter_on())
+    cursor(Gdk::PENCIL);
   else
     window->set_cursor({});
   return false;
@@ -5091,6 +5112,383 @@ void MainWindow::rescale_pictures()
       rescale_picture_buffer(view.get_buffer(), limit);
     });
   }
+}
+
+namespace {
+
+void buffer_bounds(Gtk::TextBuffer& buffer, int& from, int& to, bool& selected)
+{
+  Gtk::TextIter start;
+  Gtk::TextIter end;
+  if (buffer.get_selection_bounds(start, end) && start != end) {
+    from = start.get_offset();
+    to = end.get_offset();
+    selected = true;
+    return;
+  }
+  from = buffer.get_insert()->get_iter().get_offset();
+  to = from;
+  selected = false;
+}
+
+void expand_word(Gtk::TextBuffer& buffer, int& from, int& to)
+{
+  if (from != to)
+    return;
+  const int count = buffer.get_char_count();
+  auto iter = buffer.get_iter_at_offset(std::max(0, std::min(from, count)));
+  if (iter.is_end() || iter.get_char() == '\n' || !iter.inside_word())
+    return;
+  auto start = iter;
+  if (!start.starts_word())
+    start.backward_word_start();
+  auto end = iter;
+  if (!end.ends_word())
+    end.forward_word_end();
+  if (start.get_offset() >= end.get_offset())
+    return;
+  from = start.get_offset();
+  to = end.get_offset();
+  buffer.select_range(start, end);
+}
+
+// The paragraph and character a body-buffer offset sits on. A table anchor
+// is not a paragraph. The separator newline after a table belongs to the
+// body paragraph that follows it.
+bool place_body(const std::vector<Paragraph>& paragraphs, int offset, size_t& index, int& into)
+{
+  if (paragraphs.empty())
+    return false;
+  if (offset < 0)
+    offset = 0;
+  int cursor = 0;
+  size_t i = 0;
+  while (i < paragraphs.size()) {
+    if (paragraphs[i].cell.table != 0) {
+      const int id = paragraphs[i].cell.table;
+      size_t j = i + 1;
+      while (j < paragraphs.size() && paragraphs[j].cell.table == id)
+        ++j;
+      cursor += 1;
+      if (j < paragraphs.size())
+        cursor += 1;
+      if (offset < cursor) {
+        if (j < paragraphs.size() && paragraphs[j].cell.table == 0 && offset == cursor - 1) {
+          index = j;
+          into = 0;
+          return true;
+        }
+        return false;
+      }
+      i = j;
+      continue;
+    }
+    const int chars = chars_of(paragraphs[i]);
+    const bool last = i + 1 == paragraphs.size();
+    const int boundary = cursor + chars + (last ? 0 : 1);
+    const int caret_limit = last ? boundary : boundary - 1;
+    if (offset <= caret_limit) {
+      index = i;
+      into = std::max(0, std::min(offset - cursor, chars));
+      return true;
+    }
+    cursor = boundary;
+    ++i;
+  }
+  return false;
+}
+
+bool place_linear(const std::vector<Paragraph>& paragraphs, int offset, size_t& index, int& into)
+{
+  if (paragraphs.empty())
+    return false;
+  if (offset < 0)
+    offset = 0;
+  int cursor = 0;
+  for (size_t i = 0; i < paragraphs.size(); ++i) {
+    const int chars = chars_of(paragraphs[i]);
+    const bool last = i + 1 == paragraphs.size();
+    const int boundary = cursor + chars + (last ? 0 : 1);
+    const int caret_limit = last ? boundary : boundary - 1;
+    if (offset <= caret_limit) {
+      index = i;
+      into = std::max(0, std::min(offset - cursor, chars));
+      return true;
+    }
+    cursor = boundary;
+  }
+  index = paragraphs.size() - 1;
+  into = chars_of(paragraphs.back());
+  return true;
+}
+
+int sample_into(bool selected, int into)
+{
+  if (!selected && into > 0)
+    return into - 1;
+  return into;
+}
+
+}  // namespace
+
+void MainWindow::show_painter_button(bool on)
+{
+  if (!painter_tool_)
+    return;
+  painter_block_ = true;
+  if (painter_tool_->get_active() != on)
+    painter_tool_->set_active(on);
+  painter_block_ = false;
+}
+
+void MainWindow::sync_painter_pointer()
+{
+  auto apply = [this](Gtk::TextView& view) {
+    auto window = view.get_window(Gtk::TEXT_WINDOW_TEXT);
+    if (!window)
+      return;
+    if (!painter_on_) {
+      window->set_cursor({});
+      return;
+    }
+    if (!painter_cursor_)
+      painter_cursor_ = Gdk::Cursor::create(window->get_display(), Gdk::PENCIL);
+    window->set_cursor(painter_cursor_);
+  };
+  apply(text_);
+  if (!buffer_)
+    return;
+  for (auto iter = buffer_->begin(); !iter.is_end(); ++iter) {
+    TableSheet* sheet = sheet_from(iter.get_child_anchor());
+    if (!sheet)
+      continue;
+    sheet->each_view(apply);
+  }
+}
+
+void MainWindow::disarm_painter()
+{
+  painter_on_ = false;
+  painter_sticky_ = false;
+  painter_applying_ = false;
+  if (painter_idle_.connected())
+    painter_idle_.disconnect();
+  painter_view_ = nullptr;
+  show_painter_button(false);
+  sync_painter_pointer();
+}
+
+bool MainWindow::capture_painter_format()
+{
+  if (!buffer_)
+    return false;
+  if (story_target_ != 0 && !editing_cell())
+    return false;
+  const Document doc = capture();
+  if (editing_cell()) {
+    TableSheet* sheet = editing_sheet();
+    if (!sheet)
+      return false;
+    int row = 0;
+    int column = 0;
+    int caret = 0;
+    int bound = 0;
+    if (!cell_place(*sheet, row, column, caret, bound))
+      return false;
+    Gtk::TextView* view = sheet->view_at(row, column);
+    if (!view || !view->get_buffer())
+      return false;
+    int from = std::min(caret, bound);
+    int to = std::max(caret, bound);
+    bool selected = from != to;
+    buffer_bounds(*view->get_buffer().get(), from, to, selected);
+    if (from > to)
+      std::swap(from, to);
+    const size_t base = cell_paragraph_index(*sheet, row, column, 0);
+    if (base >= doc.paragraphs.size())
+      return false;
+    size_t end = base;
+    const int id = doc.paragraphs[base].cell.table;
+    while (end < doc.paragraphs.size() && doc.paragraphs[end].cell.table == id &&
+           doc.paragraphs[end].cell.row == row && doc.paragraphs[end].cell.column == column)
+      ++end;
+    const std::vector<Paragraph> cell(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(base),
+                                      doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(end));
+    size_t local = 0;
+    int into = 0;
+    if (!place_linear(cell, std::min(from, to), local, into))
+      return false;
+    return sample_painter(cell, local, sample_into(selected, into), painter_format_);
+  }
+  int from = 0;
+  int to = 0;
+  bool selected = false;
+  buffer_bounds(*buffer_.get(), from, to, selected);
+  size_t index = 0;
+  int into = 0;
+  if (!place_body(doc.paragraphs, std::min(from, to), index, into))
+    return false;
+  return sample_painter(doc.paragraphs, index, sample_into(selected, into), painter_format_);
+}
+
+bool MainWindow::arm_painter(bool sticky)
+{
+  if (!capture_painter_format())
+    return false;
+  painter_on_ = true;
+  painter_sticky_ = sticky;
+  show_painter_button(true);
+  sync_painter_pointer();
+  return true;
+}
+
+bool MainWindow::on_painter_press(GdkEventButton* event)
+{
+  if (!event || event->button != 1)
+    return false;
+  if (event->type != GDK_BUTTON_PRESS && event->type != GDK_2BUTTON_PRESS)
+    return false;
+  int gap = 250;
+  if (GtkSettings* settings = gtk_settings_get_default()) {
+    gint value = gap;
+    g_object_get(settings, "gtk-double-click-time", &value, nullptr);
+    if (value > 0)
+      gap = value;
+  }
+  const bool quick = painter_on_ && !painter_sticky_ &&
+                     event->time - painter_arm_time_ <= static_cast<guint32>(gap);
+  if ((event->type == GDK_2BUTTON_PRESS || quick) && painter_on_) {
+    painter_sticky_ = true;
+    show_painter_button(true);
+    return true;
+  }
+  if (painter_on_) {
+    disarm_painter();
+    return true;
+  }
+  painter_arm_time_ = event->time;
+  if (!arm_painter(false))
+    show_painter_button(false);
+  return true;
+}
+
+void MainWindow::on_painter_toggled()
+{
+  if (painter_block_ || !painter_tool_)
+    return;
+  if (painter_tool_->get_active()) {
+    if (!painter_on_ && !arm_painter(false))
+      show_painter_button(false);
+    return;
+  }
+  if (painter_on_)
+    disarm_painter();
+}
+
+void MainWindow::queue_painter(Gtk::TextView& view)
+{
+  if (!painter_on_ || painter_applying_)
+    return;
+  painter_view_ = &view;
+  if (painter_idle_.connected())
+    return;
+  painter_idle_ = Glib::signal_idle().connect([this] {
+    painter_idle_.disconnect();
+    Gtk::TextView* view = painter_view_;
+    painter_view_ = nullptr;
+    if (view && painter_on_)
+      apply_painter(*view);
+    return false;
+  });
+}
+
+void MainWindow::apply_painter(Gtk::TextView& view)
+{
+  if (!painter_on_ || painter_applying_ || !view.get_buffer() || !buffer_)
+    return;
+  auto cell_buffer = view.get_buffer();
+  int from = 0;
+  int to = 0;
+  bool selected = false;
+  buffer_bounds(*cell_buffer.get(), from, to, selected);
+  expand_word(*cell_buffer.get(), from, to);
+  if (from > to)
+    std::swap(from, to);
+
+  TableSheet* sheet = nullptr;
+  int row = 0;
+  int column = 0;
+  bool in_cell = false;
+  if (&view != &text_ && buffer_) {
+    for (auto iter = buffer_->begin(); !iter.is_end() && !in_cell; ++iter) {
+      TableSheet* candidate = sheet_from(iter.get_child_anchor());
+      if (candidate && candidate->find_view(view, row, column)) {
+        sheet = candidate;
+        in_cell = true;
+      }
+    }
+  }
+  if (&view != &text_ && !in_cell)
+    return;
+
+  painter_applying_ = true;
+  const Document before = capture();
+  Document after = before;
+  std::vector<PaintSpan> spans;
+  bool mapped = false;
+  if (in_cell) {
+    const size_t base = cell_paragraph_index(*sheet, row, column, 0);
+    if (base < after.paragraphs.size()) {
+      size_t end = base;
+      const int id = after.paragraphs[base].cell.table;
+      while (end < after.paragraphs.size() && after.paragraphs[end].cell.table == id &&
+             after.paragraphs[end].cell.row == row && after.paragraphs[end].cell.column == column)
+        ++end;
+      const std::vector<Paragraph> cell(
+          after.paragraphs.begin() + static_cast<std::ptrdiff_t>(base),
+          after.paragraphs.begin() + static_cast<std::ptrdiff_t>(end));
+      mapped = painter_linear_spans(cell, base, from, to, spans);
+    }
+  } else {
+    mapped = painter_body_spans(after.paragraphs, from, to, spans);
+  }
+  const bool changed = mapped && paint_spans(after.paragraphs, spans, painter_format_);
+  if (changed) {
+    if (in_cell) {
+      CellEdit saved;
+      saved.on = true;
+      saved.table = sheet->table_id();
+      saved.row = row;
+      saved.column = column;
+      saved.caret = from;
+      saved.bound = to;
+      const size_t base = cell_paragraph_index(*sheet, row, column, 0);
+      const int anchor =
+          base < before.paragraphs.size() ? chars_before(before.paragraphs, base) : 0;
+      hold_view();
+      const int park = std::max(0, std::min(anchor, buffer_->get_char_count()));
+      buffer_->place_cursor(buffer_->get_iter_at_offset(park));
+      commit_document(before, after, anchor);
+      restore_cell_edit(saved);
+      release_view();
+    } else {
+      hold_view();
+      const int park = std::max(0, std::min(from, buffer_->get_char_count()));
+      buffer_->place_cursor(buffer_->get_iter_at_offset(park));
+      commit_document(before, after, from);
+      if (buffer_) {
+        const int count = buffer_->get_char_count();
+        const int start = std::max(0, std::min(from, count));
+        const int end = std::max(0, std::min(to, count));
+        buffer_->select_range(buffer_->get_iter_at_offset(start), buffer_->get_iter_at_offset(end));
+      }
+      release_view();
+      text_.grab_focus();
+    }
+  }
+  painter_applying_ = false;
+  if (!painter_sticky_)
+    disarm_painter();
 }
 
 }  // namespace writeit

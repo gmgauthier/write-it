@@ -644,6 +644,21 @@ class MainWindow : public Gtk::ApplicationWindow {
   // Table → Background. `Ink::Auto` clears the cell shading. Any other colour
   // is a solid fill on every cell of the selected row or column band.
   void on_table_background(Ink ink);
+  // Format Painter. One click arms a single drag. A double click stays
+  // armed until Escape or another click of the button.
+  bool on_painter_press(GdkEventButton* event);
+  void on_painter_toggled();
+  bool capture_painter_format();
+  bool arm_painter(bool sticky);
+  void disarm_painter();
+  void show_painter_button(bool on);
+  void sync_painter_pointer();
+  void queue_painter(Gtk::TextView& view);
+  void apply_painter(Gtk::TextView& view);
+  bool painter_on() const
+  {
+    return painter_on_;
+  }
   // Writes `widths` onto table `table_id` and rebuilds the sheet. The caller
   // must not use a TableSheet after this returns: the rebuild destroys it.
   void commit_table_widths(int table_id, const std::vector<int>& widths);
@@ -1043,6 +1058,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToolButton* cut_tool_ = nullptr;
   Gtk::ToolButton* copy_tool_ = nullptr;
   Gtk::ToolButton* paste_tool_ = nullptr;
+  Gtk::ToggleToolButton* painter_tool_ = nullptr;
   Gtk::ToolButton* undo_tool_ = nullptr;
   Gtk::ToolButton* redo_tool_ = nullptr;
   Gtk::ToggleToolButton* bold_toggle_ = nullptr;
@@ -1060,6 +1076,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::ToggleToolButton* justify_toggle_ = nullptr;
   Gtk::ToggleToolButton* bullets_toggle_ = nullptr;
   Gtk::ToggleToolButton* numbering_toggle_ = nullptr;
+  // The brush copies once, at the click, and paints the next drag.
+  bool painter_on_ = false;
+  bool painter_sticky_ = false;
+  bool painter_block_ = false;
+  bool painter_applying_ = false;
+  guint32 painter_arm_time_ = 0;
+  PainterFormat painter_format_;
+  sigc::connection painter_idle_;
+  Gtk::TextView* painter_view_ = nullptr;
+  Glib::RefPtr<Gdk::Cursor> painter_cursor_;
 
   std::string save_path_;
   std::string title_name_ = "Untitled";

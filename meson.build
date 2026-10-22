@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '2.5.0',
+  version: '2.6.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -489,6 +489,13 @@ write_it_row_colour_tests = executable(
   dependencies: [writeit_dep],
 )
 test('row-colour', with_display, args: [write_it_row_colour_tests.full_path()], depends: write_it_row_colour_tests, timeout: 90, suite: 'ui')
+
+write_it_painter_tests = executable(
+  'write-it-painter-tests',
+  'tests/test_painter.cpp',
+  dependencies: [writeit_dep],
+)
+test('painter', with_display, args: [write_it_painter_tests.full_path()], depends: write_it_painter_tests, timeout: 90, suite: 'ui')
 
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',
