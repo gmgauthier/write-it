@@ -505,6 +505,7 @@ class CellFrame : public Gtk::Frame {
       else
         child_context->remove_class("cell-shade");
     }
+    apply_fill();
     queue_draw();
   }
 
@@ -523,14 +524,15 @@ class CellFrame : public Gtk::Frame {
     mark(*this, on);
     if (Gtk::Widget* child = get_child())
       mark(*child, on);
+    apply_fill();
     queue_draw();
   }
 
  protected:
   bool on_draw(const Cairo::RefPtr<Cairo::Context>& cr) override
   {
-    Rgb rgb;
-    const bool shade = shading_color(shading_, rgb);
+    const bool shade = paint_fill_;
+    const Rgb rgb = paint_rgb_;
     const int width = std::max(0, get_allocated_width());
     const int height = std::max(0, get_allocated_height());
     bool drawn = false;
@@ -547,13 +549,6 @@ class CellFrame : public Gtk::Frame {
       if (borders_set_)
         paint_borders(cr, 0, 0, width, height, borders_, zoom_);
     }
-    // A shaded cell is transparent, so the wash has to be on the frame.
-    // An unshaded cell paints the same wash from the text view's class.
-    if (band_ && shade) {
-      cr->set_source_rgba(0.45, 0.62, 0.86, 0.45);
-      cr->rectangle(0, 0, width, height);
-      cr->fill();
-    }
     return drawn;
   }
 
@@ -568,12 +563,67 @@ class CellFrame : public Gtk::Frame {
   }
 
  private:
+  // The text view has its own window and covers the frame, so a cairo fill
+  // here never reaches the page. The colour is a style on that window. A
+  // selected band tints it; the same colour is filled on the frame for the
+  // edge the text view does not cover.
+  void apply_fill()
+  {
+    Rgb rgb;
+    bool shade = shading_color(shading_, rgb);
+    if (shade && band_) {
+      constexpr double cover = 0.45;
+      auto mix = [cover](int base, double wash) {
+        const double value = base * (1.0 - cover) + wash * 255.0 * cover;
+        return std::max(0, std::min(255, static_cast<int>(std::lround(value))));
+      };
+      rgb.red = mix(rgb.red, 0.45);
+      rgb.green = mix(rgb.green, 0.62);
+      rgb.blue = mix(rgb.blue, 0.86);
+    }
+    paint_fill_ = shade;
+    paint_rgb_ = rgb;
+    if (shade) {
+      if (!fill_css_)
+        fill_css_ = Gtk::CssProvider::create();
+      const std::string css =
+          "frame.table-cell,\n"
+          "textview.table-cell-text,\n"
+          "textview.table-cell-text text {\n"
+          "  background-color: " +
+          rgb_hex(rgb) +
+          ";\n"
+          "}\n";
+      try {
+        fill_css_->load_from_data(css);
+      } catch (const Glib::Error&) {
+        shade = false;
+        paint_fill_ = false;
+      }
+    }
+    auto touch = [&](Gtk::Widget* widget) {
+      if (!widget || !fill_css_)
+        return;
+      auto context = widget->get_style_context();
+      if (!context)
+        return;
+      context->remove_provider(fill_css_);
+      if (paint_fill_)
+        context->add_provider(fill_css_, GTK_STYLE_PROVIDER_PRIORITY_USER);
+    };
+    touch(this);
+    touch(get_child());
+  }
+
   int width_ = 1;
   bool borders_set_ = false;
   bool band_ = false;
+  bool paint_fill_ = false;
   Borders borders_;
   Shading shading_;
+  Rgb paint_rgb_{};
   double zoom_ = 1;
+  Glib::RefPtr<Gtk::CssProvider> fill_css_;
 };
 
 // The strip of a row's left edge, and of a column's top edge, that selects
@@ -1570,7 +1620,10 @@ void MainWindow::sync_table_lines()
   if (!changed)
     return;
   // The text moved down by the table's real height. The page and the gray
-  // between sheets were placed for the short line.
+  // between sheets were placed for the short line. A follow-up that finds
+  // the seams already stored would keep that short page, and the notes with
+  // it.
+  seam_edit_ = SeamEdit::Full;
   grow_page_ = true;
   queue_page_size();
   queue_page_status();

@@ -14,6 +14,7 @@
 
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <string>
 
 namespace writeit {
@@ -44,6 +45,82 @@ struct MainWindowProbe {
   static Gtk::TextView* cell_view(MainWindow& window, int row, int column)
   {
     return window.nth_cell_view(0, row, column);
+  }
+
+  // The note column sits on the marker's sheet, just above that sheet's foot.
+  // A place that ran before the seam tags were in the line tops is short by
+  // those seams, up in the page above.
+  static bool notes_at_seam(MainWindow& window)
+  {
+    auto fail = [](const std::string& why) {
+      std::cerr << "notes: " << why << "\n";
+      return false;
+    };
+    if (!window.buffer_ || !window.note_box_.get_visible() || window.note_groups_.size() > 1)
+      return fail("column not showing");
+    int marker_y = -1;
+    for (auto iter = window.buffer_->begin(); !iter.is_end(); ++iter) {
+      bool marked = false;
+      for (const auto& tag : iter.get_tags()) {
+        if (tag->property_rise().get_value() > 0)
+          marked = true;
+      }
+      if (!marked)
+        continue;
+      int top = 0;
+      int height = 0;
+      window.text_.get_line_yrange(iter, top, height);
+      marker_y = top;
+      break;
+    }
+    if (marker_y < 0)
+      return fail("no marker");
+    int seam_top = -1;
+    int seam = 0;
+    auto iter = window.buffer_->begin();
+    while (!iter.is_end()) {
+      int pixels = 0;
+      for (const auto& tag : iter.get_tags())
+        pixels = std::max(pixels, page_seam_pixels(tag->property_name().get_value().raw()));
+      if (pixels > 0) {
+        int top = 0;
+        int height = 0;
+        window.text_.get_line_yrange(iter, top, height);
+        if (top > marker_y) {
+          seam_top = top;
+          seam = pixels;
+          break;
+        }
+      }
+      bool more = false;
+      while (!iter.is_end()) {
+        if (iter.get_char() == '\n') {
+          iter.forward_char();
+          more = !iter.is_end();
+          break;
+        }
+        iter.forward_char();
+      }
+      if (!more)
+        break;
+    }
+    if (seam_top < 0)
+      return fail("no seam below the marker");
+    const ViewGeometry sheet = window.geometry();
+    const int chrome = sheet.margin_bottom + sheet.gap + sheet.margin_y;
+    const int buffer_y = seam_top + seam - chrome - window.note_h_;
+    int wx = 0;
+    int wy = 0;
+    window.text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, buffer_y, wx, wy);
+    int ox = 0;
+    int oy = 0;
+    if (!window.text_.translate_coordinates(window.page_overlay_, wx, wy, ox, oy))
+      return fail("no overlay");
+    const int miss = oy > window.note_y_ ? oy - window.note_y_ : window.note_y_ - oy;
+    if (miss > 2)
+      return fail("note_y " + std::to_string(window.note_y_) + " seam foot " + std::to_string(oy) +
+                  " marker " + std::to_string(marker_y));
+    return true;
   }
 };
 
@@ -225,9 +302,86 @@ bool paint(writeit::Document& doc, writeit::TableBand band, int first, int last,
   return writeit::paint_table_band(doc.paragraphs, 1, band, first, last, shading);
 }
 
+// A pixel of the cell's text window. The frame's own fill sits behind that
+// window, so this is the colour the page shows.
+bool near_color(Gtk::TextView* view, int x, int y, int er, int eg, int eb)
+{
+  int r = -1;
+  int g = -1;
+  int b = -1;
+  auto fail = [&]() {
+    std::cerr << "cell pixel " << x << "," << y << " is " << r << " " << g << " " << b
+              << ", expected " << er << " " << eg << " " << eb << "\n";
+    return false;
+  };
+  if (!view)
+    return fail();
+  auto win = view->get_window(Gtk::TEXT_WINDOW_TEXT);
+  if (!win || x < 0 || y < 0 || x >= win->get_width() || y >= win->get_height())
+    return fail();
+  try {
+    auto pix = Gdk::Pixbuf::create(win, x, y, 1, 1);
+    if (!pix || !pix->get_pixels() || pix->get_n_channels() < 3)
+      return fail();
+    const guint8* p = pix->get_pixels();
+    r = p[0];
+    g = p[1];
+    b = p[2];
+  } catch (const Glib::Error&) {
+    return fail();
+  }
+  const int dr = r > er ? r - er : er - r;
+  const int dg = g > eg ? g - eg : eg - g;
+  const int db = b > eb ? b - eb : eb - b;
+  if (dr > 3 || dg > 3 || db > 3)
+    return fail();
+  return true;
+}
+
 }  // namespace
 
-constexpr int kChecks = 42;
+writeit::Document footnote_before_table()
+{
+  writeit::Document doc = writeit::blank_document("Sans", 11);
+  auto line = [](const std::string& text) {
+    writeit::Paragraph paragraph;
+    writeit::Run run;
+    run.text = text;
+    paragraph.runs.push_back(std::move(run));
+    return paragraph;
+  };
+  for (int i = 0; i < 8; ++i)
+    doc.paragraphs.push_back(
+        line("Body line " + std::to_string(i) + " fills the page before the note."));
+  writeit::Paragraph noted = line("The footnote marker sits on this paragraph. ");
+  noted.page_break = true;
+  writeit::Run marker;
+  marker.text = "1";
+  marker.note = 1;
+  noted.runs.push_back(marker);
+  doc.paragraphs.push_back(std::move(noted));
+  for (int i = 0; i < 4; ++i)
+    doc.paragraphs.push_back(line("Still on the note's page, line " + std::to_string(i)));
+  writeit::Paragraph heading = line("Sample Table");
+  heading.page_break = true;
+  doc.paragraphs.push_back(std::move(heading));
+  writeit::insert_table(doc.paragraphs, doc.paragraphs.size(), 2, 2, 4800);
+  for (writeit::Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table == 0)
+      continue;
+    writeit::Run run;
+    run.text = "cell";
+    paragraph.runs = {run};
+  }
+  writeit::Paragraph note;
+  writeit::Run note_run;
+  note_run.text = "buster keaton";
+  note.runs.push_back(note_run);
+  doc.notes.push_back({note});
+  return doc;
+}
+
+constexpr int kChecks = 56;
 
 int main(int argc, char* argv[])
 {
@@ -348,11 +502,21 @@ int main(int argc, char* argv[])
     CHECK(background);
     CHECK(background && !background->get_sensitive());
 
-    writeit::MainWindowProbe::load(window, make_table(3, 2));
-    settle();
     auto cell = [&](int row, int column) {
       return writeit::MainWindowProbe::cell_view(window, row, column);
     };
+    writeit::Document preset = make_table(2, 2);
+    for (writeit::Paragraph& paragraph : preset.paragraphs) {
+      if (paragraph.cell.table != 0 && paragraph.cell.row == 0)
+        paragraph.cell.shading = solid(Ink::Red);
+    }
+    writeit::MainWindowProbe::load(window, preset);
+    settle();
+    CHECK(near_color(cell(0, 0), 2, 1, 255, 0, 0));
+    CHECK(near_color(cell(1, 0), 2, 1, 255, 255, 255));
+
+    writeit::MainWindowProbe::load(window, make_table(3, 2));
+    settle();
     Gtk::TextView* row_cell = cell(0, 0);
     CHECK(row_cell);
     if (row_cell)
@@ -368,6 +532,19 @@ int main(int argc, char* argv[])
     writeit::Document painted = writeit::MainWindowProbe::doc(window);
     CHECK(cell_fill(painted, 0, 0, 10000, Ink::Red) && cell_fill(painted, 0, 1, 10000, Ink::Red));
     CHECK(plain_cell(painted, 1, 0) && plain_cell(painted, 2, 1));
+    // The command rebuilds the sheet, so the band is gone and the cell is the
+    // colour itself. Selecting that row again tints it, and must not cover it.
+    CHECK(near_color(cell(0, 0), 2, 1, 255, 0, 0));
+    row_cell = cell(0, 0);
+    if (row_cell)
+      click_view(*row_cell, 2, 10, 1400, false);
+    CHECK(near_color(cell(0, 0), 2, 1, 192, 71, 99));
+    {
+      Gtk::TextView* away = cell(1, 0);
+      if (away)
+        click_view(*away, 30, 20, 1500, false);
+    }
+    CHECK(near_color(cell(0, 0), 2, 1, 255, 0, 0));
 
     writeit::MainWindowProbe::undo(window);
     settle();
@@ -384,6 +561,12 @@ int main(int argc, char* argv[])
     writeit::Document column = writeit::MainWindowProbe::doc(window);
     CHECK(cell_fill(column, 0, 0, 10000, Ink::Blue) && cell_fill(column, 2, 0, 10000, Ink::Blue));
     CHECK(plain_cell(column, 0, 1) && plain_cell(column, 1, 1));
+    {
+      Gtk::TextView* away = cell(0, 1);
+      if (away)
+        click_view(*away, 30, 20, 2500, false);
+    }
+    CHECK(near_color(cell(2, 0), 2, 1, 0, 0, 255));
 
     row_cell = cell(0, 0);
     if (row_cell)
@@ -398,6 +581,48 @@ int main(int argc, char* argv[])
     if (row_cell)
       click_view(*row_cell, 30, 20, 4000, false);
     CHECK(background && !background->get_sensitive());
+    CHECK(near_color(cell(0, 0), 2, 1, 255, 255, 255));
+
+    writeit::Document layered = make_table(1, 1);
+    for (writeit::Paragraph& paragraph : layered.paragraphs) {
+      if (paragraph.cell.table == 0)
+        continue;
+      paragraph.cell.shading = solid(Ink::Red);
+      paragraph.shading.pattern = writeit::kMaxShading;
+      paragraph.shading.background = Ink::Green;
+      writeit::Run run;
+      run.text = "Word";
+      paragraph.runs = {run};
+    }
+    writeit::MainWindowProbe::load(window, layered);
+    settle();
+    // The cell colour fills the padding. The paragraph's own shading covers the line.
+    CHECK(near_color(cell(0, 0), 2, 1, 255, 0, 0));
+    CHECK(near_color(cell(0, 0), 70, 8, 0, 255, 0));
+
+    // The first Table → Background rebuilds the sheet. The notes above that
+    // table stay on the marker's page, at its foot.
+    writeit::MainWindowProbe::load(window, footnote_before_table());
+    settle();
+    CHECK(writeit::MainWindowProbe::notes_at_seam(window));
+    Gtk::TextView* noted_cell = cell(0, 0);
+    if (noted_cell)
+      click_view(*noted_cell, 2, 10, 5000, false);
+    Gtk::MenuItem* yellow = background ? submenu_named(*background, "Yellow") : nullptr;
+    CHECK(yellow);
+    if (yellow)
+      yellow->activate();
+    settle();
+    CHECK(cell_fill(writeit::MainWindowProbe::doc(window), 0, 0, 10000, Ink::Yellow));
+    CHECK(writeit::MainWindowProbe::notes_at_seam(window));
+    noted_cell = cell(0, 0);
+    if (noted_cell)
+      click_view(*noted_cell, 2, 10, 6000, false);
+    Gtk::MenuItem* again = background ? submenu_named(*background, "Red") : nullptr;
+    if (again)
+      again->activate();
+    settle();
+    CHECK(writeit::MainWindowProbe::notes_at_seam(window));
   }
   g_rmdir(home.c_str());
   return suite_test::done("row-colour", kChecks);

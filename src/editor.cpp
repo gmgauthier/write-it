@@ -6794,6 +6794,23 @@ void show_note_marks(Gtk::Fixed& marks, Gtk::Label& first, const std::vector<Gtk
   }
 }
 
+void MainWindow::queue_place_notes()
+{
+  if (closing_)
+    return;
+  // A newer seam pass has to win. An idle already waiting would run before
+  // this pass's tags are validated.
+  if (note_place_idle_.connected())
+    note_place_idle_.disconnect();
+  note_place_idle_ = Glib::signal_idle().connect(
+      [this] {
+        note_place_idle_.disconnect();
+        place_notes();
+        return false;
+      },
+      Glib::PRIORITY_DEFAULT_IDLE);
+}
+
 void MainWindow::place_notes()
 {
   if (closing_)
@@ -6806,6 +6823,10 @@ void MainWindow::place_notes()
   // Every marker on one sheet keeps the single column this has always drawn.
   fit_note_views();
   if (note_groups_.size() > 1) {
+    // The rebuild cleared the seam tags. Placing from the foot of that empty
+    // measure parks every group on the last page until the tags return.
+    if (!seam_lines_valid_)
+      return;
     place_split_notes();
     return;
   }
@@ -6889,6 +6910,10 @@ void MainWindow::place_notes()
     int oy = 0;
     if (text_.translate_coordinates(page_overlay_, wx, wy, ox, oy))
       top_px = oy;
+  } else if (!seam_lines_valid_) {
+    // No seam is on the buffer yet. The foot of this measure is the middle
+    // of the page the seams will open, which is where the notes were jumping.
+    return;
   } else {
     int ox = 0;
     int oy = 0;
@@ -7754,7 +7779,10 @@ void MainWindow::update_page_seams()
     grow_page_ = true;
     queue_page_size();
   }
-  place_notes();
+  // The seam tags are on the buffer. Their pixels-above are not in the line
+  // tops until the text view validates, and a place from these tops leaves
+  // the notes a seam too high. The idle runs after that validation.
+  queue_place_notes();
 }
 
 void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)

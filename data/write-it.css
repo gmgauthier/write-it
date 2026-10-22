@@ -47,7 +47,10 @@ textview.table-cell-text text {
   caret-color: #000000;
 }
 
-/* Stored cell borders replace the 1.0 line. A cairo fill shows through. */
+/* Stored cell borders replace the 1.0 line. cell-shade marks a stored fill.
+   The fill itself is a style provider on the frame and the text view: the
+   text view has its own window and would hide a fill drawn on the frame.
+   These transparent rules apply only when that provider is absent. */
 frame.table-cell.cell-borders {
   border: none;
 }
