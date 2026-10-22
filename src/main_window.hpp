@@ -593,6 +593,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The notes column. One sheet keeps every note in the first column. A
   // marker on a later sheet gets that note at the foot of its own sheet.
   void place_notes();
+  // place_notes() after the text view has validated the seam tags. One idle.
+  void queue_place_notes();
   void place_split_notes();
   // Body offsets of table anchors that hold a footnote the body does not.
   // A body marker is left out, so its sheet stays the one it has always used.
@@ -1182,6 +1184,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   sigc::connection seam_pending_idle_;
   // sync_table_lines() after a table has its real height. One at a time.
   sigc::connection table_sync_;
+  // queue_place_notes() after the seam tags are in the line tops.
+  sigc::connection note_place_idle_;
   // update_page_seams() is applying its tags. Their signals are not edits.
   bool seaming_ = false;
   // drop_page_break_pads() is erasing the layout pad. That is not a new edit.

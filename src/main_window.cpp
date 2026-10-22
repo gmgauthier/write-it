@@ -285,6 +285,7 @@ MainWindow::~MainWindow()
   list_tabs_idle_.disconnect();
   story_tabs_idle_.disconnect();
   seam_pending_idle_.disconnect();
+  note_place_idle_.disconnect();
   painter_idle_.disconnect();
   clipboard_owner_.disconnect();
   mark_set_.disconnect();
