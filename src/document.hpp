@@ -600,6 +600,13 @@ bool copy_table_rows(const std::vector<Paragraph>& paragraphs, size_t index, int
                      TableSlice& out);
 bool copy_table_columns(const std::vector<Paragraph>& paragraphs, size_t index, int first, int last,
                         TableSlice& out);
+// Paints `shading` onto every paragraph of each cell in the band. Rows use
+// `first` and `last` as row indexes and cover every column. Columns use them
+// as column indexes and cover every row. The range is inclusive and may be
+// reversed. Borders and paragraph shading stay. False when `index` is not a
+// cell, the range is outside that table, or no cell was there to paint.
+bool paint_table_band(std::vector<Paragraph>& paragraphs, size_t index, TableBand band, int first,
+                      int last, const Shading& shading);
 // Inserts the copied rows after the caret cell's row. The copy must have
 // this table's column count.
 TablePaste paste_table_rows(std::vector<Paragraph>& paragraphs, size_t index,

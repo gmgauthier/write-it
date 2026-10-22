@@ -483,6 +483,13 @@ write_it_row_select_tests = executable(
 )
 test('row-select', with_display, args: [write_it_row_select_tests.full_path()], depends: write_it_row_select_tests, timeout: 90, suite: 'ui')
 
+write_it_row_colour_tests = executable(
+  'write-it-row-colour-tests',
+  'tests/test_row_colour.cpp',
+  dependencies: [writeit_dep],
+)
+test('row-colour', with_display, args: [write_it_row_colour_tests.full_path()], depends: write_it_row_colour_tests, timeout: 90, suite: 'ui')
+
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',
   'tests/test_heading_paragraphs.cpp',
