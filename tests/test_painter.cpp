@@ -372,7 +372,7 @@ writeit::Document paint_table()
 
 }  // namespace
 
-constexpr int kChecks = 125;
+constexpr int kChecks = 141;
 
 int main(int argc, char* argv[])
 {
@@ -515,6 +515,47 @@ int main(int argc, char* argv[])
           doc.paragraphs[0].runs.empty() && doc.paragraphs[0].mark &&
           rich_look(*doc.paragraphs[0].mark) && doc.paragraphs[0].mark->text.empty());
     CHECK(!writeit::paint_spans(doc.paragraphs, {PaintSpan{0, 0, 0}}, format));
+  }
+
+  {
+    // A look that already matches still stores the direct bits. A later style
+    // change keeps an override only when those bits were copied.
+    writeit::Document doc = writeit::blank_document("Sans", 11);
+    doc.paragraphs[0].runs = {text_run("Bold")};
+    doc.paragraphs[0].runs[0].bold = true;
+    doc.paragraphs[0].runs[0].direct = writeit::kDirectBold;
+    doc.paragraphs.push_back(paragraph_of("Same"));
+    doc.paragraphs[1].runs[0].bold = true;
+    writeit::PainterFormat format;
+    CHECK(writeit::sample_painter(doc.paragraphs, 0, 0, format));
+    CHECK(format.character.bold && (format.character.direct & writeit::kDirectBold) != 0);
+    CHECK(writeit::paint_spans(doc.paragraphs, {PaintSpan{1, 0, 4}}, format));
+    CHECK(doc.paragraphs[1].runs.size() == 1 && doc.paragraphs[1].runs[0].text == "Same" &&
+          doc.paragraphs[1].runs[0].bold &&
+          (doc.paragraphs[1].runs[0].direct & writeit::kDirectBold) != 0);
+    CHECK(!writeit::paint_spans(doc.paragraphs, {PaintSpan{1, 0, 4}}, format));
+
+    doc.paragraphs[0].align = writeit::Align::Center;
+    doc.paragraphs[0].direct = writeit::kDirectAlign;
+    doc.paragraphs[1].align = writeit::Align::Center;
+    CHECK(writeit::sample_painter(doc.paragraphs, 0, 0, format));
+    CHECK(writeit::paint_spans(doc.paragraphs, {PaintSpan{1, 0, 4}}, format));
+    CHECK(doc.paragraphs[1].align == writeit::Align::Center &&
+          (doc.paragraphs[1].direct & writeit::kDirectAlign) != 0);
+    CHECK(!writeit::paint_spans(doc.paragraphs, {PaintSpan{1, 0, 4}}, format));
+
+    writeit::Run mark;
+    mark.bold = true;
+    mark.direct = writeit::kDirectBold;
+    writeit::Paragraph empty;
+    empty.mark = mark;
+    doc.paragraphs = {empty, empty};
+    doc.paragraphs[1].mark->direct = 0;
+    CHECK(writeit::sample_painter(doc.paragraphs, 0, 0, format));
+    CHECK(writeit::paint_spans(doc.paragraphs, {PaintSpan{1, 0, 0}}, format));
+    CHECK(doc.paragraphs[1].mark && doc.paragraphs[1].mark->bold &&
+          (doc.paragraphs[1].mark->direct & writeit::kDirectBold) != 0);
+    CHECK(!writeit::paint_spans(doc.paragraphs, {PaintSpan{1, 0, 0}}, format));
   }
 
   {
@@ -798,6 +839,53 @@ int main(int argc, char* argv[])
     plain = cell_at(cells, 0, 1, 0);
     CHECK(plain && writeit::shading_plain(plain->cell.shading) && joined(*plain) == "Plain" &&
           plain->runs.size() == 1 && !plain->runs[0].bold);
+
+    writeit::Document direct = writeit::blank_document("Sans", 11);
+    direct.paragraphs[0].runs = {text_run("Bold")};
+    direct.paragraphs[0].runs[0].bold = true;
+    direct.paragraphs[0].runs[0].direct = writeit::kDirectBold;
+    direct.paragraphs[0].align = writeit::Align::Center;
+    direct.paragraphs[0].direct = writeit::kDirectAlign;
+    direct.paragraphs.push_back(paragraph_of("Same"));
+    direct.paragraphs[1].runs[0].bold = true;
+    direct.paragraphs[1].align = writeit::Align::Center;
+    MainWindowProbe::load(window, direct);
+    settle();
+    MainWindowProbe::select(body, 0, 4);
+    if (face)
+      click_face(*face, 9000);
+    settle();
+    MainWindowProbe::select(body, 5, 9);
+    MainWindowProbe::apply(window, body);
+    settle();
+    painted = MainWindowProbe::doc(window);
+    target = body_named(painted, "Same");
+    CHECK(target && target->runs.size() == 1 && target->runs[0].bold &&
+          (target->runs[0].direct & writeit::kDirectBold) != 0 &&
+          target->align == writeit::Align::Center &&
+          (target->direct & writeit::kDirectAlign) != 0 && MainWindowProbe::can_undo(window));
+    MainWindowProbe::undo(window);
+    settle();
+    painted = MainWindowProbe::doc(window);
+    target = body_named(painted, "Same");
+    CHECK(target && target->runs.size() == 1 && target->runs[0].bold &&
+          (target->runs[0].direct & writeit::kDirectBold) == 0 &&
+          target->align == writeit::Align::Center &&
+          (target->direct & writeit::kDirectAlign) == 0 && !MainWindowProbe::can_undo(window));
+
+    MainWindowProbe::load(window, paint_source());
+    settle();
+    MainWindowProbe::select(body, 0, 6);
+    if (face)
+      click_face(*face, 10000);
+    settle();
+    MainWindowProbe::caret(body, 13);
+    MainWindowProbe::apply(window, body);
+    settle();
+    painted = MainWindowProbe::doc(window);
+    target = body_named(painted, "Target");
+    CHECK(target && target->runs.size() == 1 && rich_look(target->runs[0]) &&
+          target->runs[0].text == "Target");
   }
   g_rmdir(home.c_str());
   return suite_test::done("painter", kChecks);

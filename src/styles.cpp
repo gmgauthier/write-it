@@ -366,7 +366,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
       return;
     }
   }
-  if (before == after) {
+  if (before == after && same_stored_paragraphs(before.paragraphs, after.paragraphs)) {
     finish_focus();
     return;
   }
@@ -381,6 +381,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   // holds a table or a picture used to rebuild the body for a note key. The
   // rebuild clears the page, and the pasteboard jumps to the top and back.
   const bool stories_only = before.paragraphs == after.paragraphs &&
+                            same_stored_paragraphs(before.paragraphs, after.paragraphs) &&
                             before.styles == after.styles && before.page == after.page;
   // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
   // so the rebuild's operations stand for the whole document this once.
@@ -547,7 +548,7 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
     if ((was.cell.table == 0) != (now.cell.table == 0) || was.cell.table != now.cell.table)
       return false;
     if (now.cell.table != 0) {
-      if (!(was == now))
+      if (!same_stored_paragraph(was, now))
         return false;
       continue;
     }
@@ -569,7 +570,7 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
   const size_t last = after.paragraphs.size() - 1;
   for (size_t i = 0; i <= last; ++i) {
     const Paragraph& paragraph = after.paragraphs[i];
-    if (paragraph.cell.table != 0 || paragraph == before.paragraphs[i])
+    if (paragraph.cell.table != 0 || same_stored_paragraph(paragraph, before.paragraphs[i]))
       continue;
     const int start = chars_before(after.paragraphs, i);
     const int end = i < last ? chars_before(after.paragraphs, i + 1) : count;

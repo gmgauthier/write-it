@@ -536,6 +536,10 @@ bool operator==(const ListFormat& a, const ListFormat& b);
 bool operator!=(const ListFormat& a, const ListFormat& b);
 bool operator==(const Run& a, const Run& b);
 bool operator==(const Paragraph& a, const Paragraph& b);
+// Reader equality, plus the direct bits operator== leaves out. A look that
+// already matches can still store an override.
+bool same_stored_paragraph(const Paragraph& a, const Paragraph& b);
+bool same_stored_paragraphs(const std::vector<Paragraph>& a, const std::vector<Paragraph>& b);
 bool operator==(const Document& a, const Document& b);
 bool operator==(const Style& a, const Style& b);
 bool operator!=(const Style& a, const Style& b);

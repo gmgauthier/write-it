@@ -8,6 +8,8 @@ Checked and left out of Open: a short page stays still on Enter (`MainWindow::sc
 
 Reviewed 2026-10-21 against 2.4.0. The row and column specification is the second M5 paragraph in `DEVELOPMENT.md`. One defect is in Closed.
 
+Reviewed 2026-10-22 against 2.6.0. Row and column selection, row and column colour, and the format painter were checked against `DEVELOPMENT.md`. Three defects are in Closed, fixed in 2.6.1. The standing typing item stays open. Checked and left out: a letter still skips the page walk, the painter does not arm on a header, a footer, or a note, a column-edge drag does not paint, and a row or column colour does not set a cell's borders.
+
 ## Open
 
 ### Rerun the typing-speed bench, and optimize above 100 ms
@@ -16,7 +18,7 @@ Reviewed 2026-10-21 against 2.4.0. The row and column specification is the secon
 - Confidence: high
 - Where: `tests/bench_key.cpp` (`write-it-bench-key`). How to build and run it is `tests/README.md`.
 - Trigger: Periodically, on a release build, run `xvfb-run -a ./build-release/write-it-bench-key`. Read the `plain1000` and `list1000` gate lines. Each line is the median of three runs of 50 keys at the end of paragraph 500, process CPU, refresh included. This item stays open. A run at or under 100 ms is recorded here and does not close it.
-- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-21, release build on Plato after the key-path cuts, shipped in 2.4.2: `plain1000` 0.6 ms, `list1000` 0.8 ms. The handlers were about 0.4 ms and 0.5 ms. Both gate lines are under 50 ms. The same measure on `pg11.txt` (Alice's Adventures in Wonderland, 3762 lines of plain text, caret at the end of paragraph 500) was 0.9 ms, handler about 0.6 ms. Later loads of that file took about 4.4 s and 2.9 s of wall time. That file is not a gate line. Earlier the same day, the 2.4.1 release build was `plain1000` 24.3 ms and `list1000` 24.8 ms. The handlers were about 16.9 ms and 17.0 ms. Both gate lines were under 50 ms. The same measure on `pg11.txt` was 88.3 ms, handler about 55.7 ms. Later loads of that file took about 4.3 s of wall time. That file is not a gate line. The 2.3.1 pair on 2026-10-17 was `plain1000` 22.5 ms and `list1000` 22.9 ms, handlers about 15.2 ms and 15.2 ms. The 2.3.0 pair the same day was `plain1000` 21.8 ms and `list1000` 22.6 ms, handlers about 14.5 ms and 15.1 ms. The 2.2.2 pair the same day was `plain1000` 19.2 ms and `list1000` 18.2 ms, handlers about 14.1 ms and 13.4 ms. The 2.2.1 pair on 2026-10-16 was `plain1000` 69.2 ms and `list1000` 80.4 ms, handlers 36.5 ms and 40.2 ms. The 2.1.1 pair that day was `plain1000` 58.7 ms and `list1000` 68.8 ms, handlers 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release.
+- Outcome: The specification in `DEVELOPMENT.md` stays under 50 ms. This item is the later check. When either gate line is over 100 ms, optimize the key path, rerun the bench, and record the new pair here. A pair at or under 100 ms needs no code change. Last run, 2026-10-21, release build on Plato after the key-path cuts, shipped in 2.4.2: `plain1000` 0.6 ms, `list1000` 0.8 ms. The handlers were about 0.4 ms and 0.5 ms. Both gate lines are under 50 ms. The same measure on `pg11.txt` (Alice's Adventures in Wonderland, 3762 lines of plain text, caret at the end of paragraph 500) was 0.9 ms, handler about 0.6 ms. Later loads of that file took about 4.4 s and 2.9 s of wall time. That file is not a gate line. Earlier the same day, the 2.4.1 release build was `plain1000` 24.3 ms and `list1000` 24.8 ms. The handlers were about 16.9 ms and 17.0 ms. Both gate lines were under 50 ms. The same measure on `pg11.txt` was 88.3 ms, handler about 55.7 ms. Later loads of that file took about 4.3 s of wall time. That file is not a gate line. The 2.3.1 pair on 2026-10-17 was `plain1000` 22.5 ms and `list1000` 22.9 ms, handlers about 15.2 ms and 15.2 ms. The 2.3.0 pair the same day was `plain1000` 21.8 ms and `list1000` 22.6 ms, handlers about 14.5 ms and 15.1 ms. The 2.2.2 pair the same day was `plain1000` 19.2 ms and `list1000` 18.2 ms, handlers about 14.1 ms and 13.4 ms. The 2.2.1 pair on 2026-10-16 was `plain1000` 69.2 ms and `list1000` 80.4 ms, handlers 36.5 ms and 40.2 ms. The 2.1.1 pair that day was `plain1000` 58.7 ms and `list1000` 68.8 ms, handlers 31.2 ms and 34.6 ms. The 2.1.0 pair on 2026-10-15 was `plain1000` 55.6 ms and `list1000` 65.8 ms, handlers 25.4 ms and 28.3 ms. The 2.0.0 pair that day was `plain1000` 55.7 ms and `list1000` 66.6 ms, handlers 25.4 ms and 28.5 ms. The 1.0.23 pair the same day was `plain1000` 51.4 ms and `list1000` 60.5 ms, handlers 22.7 ms and 26.0 ms. Both gate lines are under 100 ms. The page is measured by paragraph. The next run at or under 100 ms is recorded and does not change the code. The 2026-10-14 run of 1.0.22 (`176f90b`) was `plain1000` 154.6 ms and `list1000` 178.4 ms, handlers 48.9 ms and 52.2 ms. The 2026-10-13 run of 1.0.16 (`f53ad21`) was `plain1000` 128.7 ms and `list1000` 145.1 ms, handlers 39.4 ms and 42.0 ms. The 1.0.8 pair in `tests/README.md` (4.35 ms and 6.93 ms on this machine, 4.63 ms and 7.31 ms on the 4-vCPU LCOS guest) still stands for that release. On 2.6.0, 2026-10-22, the release build was `plain1000` 0.7 ms and `list1000` 0.8 ms. The handlers were about 0.5 ms and 0.5 ms. Both gate lines are under 50 ms. The same measure on `pg11.txt` was 0.9 ms, handler about 0.6 ms. The first load of that file took about 1.8 s of wall time, and the later loads about 0.6 s. That file is not a gate line.
 
 ## Test defects
 
@@ -39,6 +41,33 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Enter or a deleted break in a cell rebinds the following paragraph's format
+
+- Fixed in 2.6.1.
+- Severity: data-loss
+- Confidence: high
+- Where: `TableSheet::forms_` in `src/page_ui.cpp`, filled only when the sheet is built. `MainWindow::read_cell` in `src/editor.cpp` copies `forms_[i]` for line `i` and does not read the line's paragraph tag.
+- Trigger: A cell has two or more paragraphs whose spacing, paragraph borders, paragraph shading, tab stops, styles, or outline levels differ. Press Enter in an earlier paragraph, paste text that inserts a paragraph break, or delete a paragraph break. Save, or run a command that captures the document.
+- Outcome: The screen still drew the tags on the text. The capture shifted the stored forms. The second half of a split took the next paragraph's format, and every paragraph after a deleted break took the previous one's. Save wrote that, and the keystroke's redo snapshot was that capture. A new break now copies the paragraph it split, and deleting a break drops the paragraph that was joined away. Spacing, paragraph borders and shading, and tab stops inside a cell stay with their paragraph.
+
+### A click at the end of a word paints no characters
+
+- Fixed in 2.6.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `expand_word` in `src/page_ui.cpp`, called from `MainWindow::apply_painter`.
+- Trigger: Arm the painter. Click once, without dragging, so the caret lands on the boundary after a word: the trailing half of its last letter, or the caret at the end of the paragraph.
+- Outcome: The paragraph format was applied and the character range stayed empty, so the word kept its old character format. A caret on an earlier letter of the same word did expand. `inside_word()` is false at the boundary after the word, and at the end of the buffer. A caret on that boundary now steps onto the word. A click in later whitespace still paints the paragraph format only.
+
+### The format painter drops direct bits when the look already matches
+
+- Fixed in 2.6.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `paint_spans` in `src/page.cpp`. `commit_document` and `retag_paragraphs` in `src/styles.cpp`. `Paragraph::operator==` ignores `direct`.
+- Trigger: Arm the painter on a character or paragraph whose bold, font, alignment, or other value was set directly. Paint it onto text that already has that value from its style, so nothing visible changes. Change the paragraph's style afterwards.
+- Outcome: The brush copied the direct bits, then treated the paragraph as unchanged and did not store them. A later style change cleared the value. The painter now stores those bits when the look already matches, and Undo puts back the paragraph that had no override. A reader's equality is unchanged. The same direct bold, applied with the button to text that is bold only from its style, stays stored, and a later style change leaves it.
 
 ### Pasting a copied row or column into ordinary text ignores the caret
 

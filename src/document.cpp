@@ -919,6 +919,66 @@ bool operator==(const Paragraph& a, const Paragraph& b)
          a.page_break == b.page_break && same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
+namespace {
+
+std::vector<Run> stored_runs(const std::vector<Run>& runs)
+{
+  std::vector<Run> out;
+  for (const Run& run : runs) {
+    if (run.text.empty() && !run.image.has_value() && run.note == 0)
+      continue;
+    const bool sticky = !run.image.has_value() && run.note == 0 && !out.empty() &&
+                        !out.back().image.has_value() && out.back().note == 0 &&
+                        same_format(out.back(), run);
+    if (sticky)
+      out.back().text += run.text;
+    else
+      out.push_back(run);
+  }
+  return out;
+}
+
+bool same_stored_runs(const std::vector<Run>& a, const std::vector<Run>& b)
+{
+  const std::vector<Run> left = stored_runs(a);
+  const std::vector<Run> right = stored_runs(b);
+  if (left.size() != right.size())
+    return false;
+  for (size_t i = 0; i < left.size(); ++i) {
+    if (!(left[i] == right[i]) || left[i].direct != right[i].direct)
+      return false;
+  }
+  return true;
+}
+
+bool same_stored_mark(const Paragraph& a, const Paragraph& b)
+{
+  if (!a.runs.empty() || !b.runs.empty())
+    return true;
+  if (a.mark.has_value() != b.mark.has_value())
+    return false;
+  return !a.mark || same_format(*a.mark, *b.mark);
+}
+
+}  // namespace
+
+bool same_stored_paragraph(const Paragraph& a, const Paragraph& b)
+{
+  return a == b && a.direct == b.direct && same_stored_runs(a.runs, b.runs) &&
+         same_stored_mark(a, b);
+}
+
+bool same_stored_paragraphs(const std::vector<Paragraph>& a, const std::vector<Paragraph>& b)
+{
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (!same_stored_paragraph(a[i], b[i]))
+      return false;
+  }
+  return true;
+}
+
 bool indents_fit(const Indents& indents)
 {
   return indents.left + indents.first >= 0;

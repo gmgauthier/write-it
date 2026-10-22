@@ -20,6 +20,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace writeit {
 
@@ -340,6 +341,57 @@ const Paragraph* body_named(const Document& doc, const char* text)
   return nullptr;
 }
 
+Document split_cell()
+{
+  Document doc = writeit::blank_document("Sans", 11);
+  doc.paragraphs.clear();
+  writeit::insert_table(doc.paragraphs, 0, 1, 1, writeit::page_text_twips(doc.page));
+  Run hello;
+  hello.font = "Sans";
+  hello.size = 11;
+  hello.text = "Hello";
+  Paragraph& first = doc.paragraphs[0];
+  first.runs = {hello};
+  first.style = "Heading 1";
+  first.heading = 1;
+  first.spacing.before = 200;
+  first.borders.top.style = writeit::BorderStyle::Single;
+  first.borders.top.width = 10;
+  first.borders.top.color = writeit::Ink::Red;
+  writeit::TabStop tab;
+  tab.position = 1440;
+  first.tabs = {tab};
+
+  Paragraph mid = first;
+  mid.runs[0].text = "Mid";
+  mid.style = writeit::kNormalStyle;
+  mid.heading = 0;
+  mid.spacing.before = 80;
+  mid.borders = writeit::Borders{};
+  mid.tabs.clear();
+
+  Paragraph tail = first;
+  tail.runs[0].text = "Tail";
+  tail.style = "Heading 2";
+  tail.heading = 2;
+  tail.spacing.before = 40;
+  tail.borders = writeit::Borders{};
+  tail.tabs.clear();
+  doc.paragraphs.insert(doc.paragraphs.begin() + 1, mid);
+  doc.paragraphs.insert(doc.paragraphs.begin() + 2, tail);
+  return doc;
+}
+
+std::vector<const Paragraph*> cell_lines(const Document& doc)
+{
+  std::vector<const Paragraph*> lines;
+  for (const Paragraph& paragraph : doc.paragraphs) {
+    if (paragraph.cell.table != 0)
+      lines.push_back(&paragraph);
+  }
+  return lines;
+}
+
 std::string runs_text(const Paragraph& paragraph)
 {
   std::string out;
@@ -469,7 +521,7 @@ int markers(const Document& doc, int& number, std::string& text)
 
 }  // namespace
 
-constexpr int kChecks = 37;
+constexpr int kChecks = 46;
 
 int main(int argc, char* argv[])
 {
@@ -611,6 +663,55 @@ int main(int argc, char* argv[])
     CHECK(MainWindowProbe::footer_red(window));
     CHECK(MainWindowProbe::note_yellow(window));
     CHECK(MainWindowProbe::note_red(window));
+
+    MainWindowProbe::load(window, split_cell());
+    settle();
+    Gtk::TextView* splitting = MainWindowProbe::cell(window);
+    CHECK(splitting && splitting->get_buffer());
+    if (splitting && splitting->get_buffer()) {
+      splitting->grab_focus();
+      settle();
+      splitting->get_buffer()->place_cursor(splitting->get_buffer()->get_iter_at_offset(2));
+      MainWindowProbe::type_key(*splitting, "\n");
+    }
+    settle();
+    const writeit::Document split_doc = MainWindowProbe::doc(window);
+    const std::vector<const Paragraph*> split = cell_lines(split_doc);
+    CHECK(split.size() == 4 && runs_text(*split[0]) == "He" && runs_text(*split[1]) == "llo" &&
+          runs_text(*split[2]) == "Mid" && runs_text(*split[3]) == "Tail");
+    CHECK(split.size() == 4 && split[0]->spacing.before == 200 && split[1]->spacing.before == 200 &&
+          split[2]->spacing.before == 80 && split[3]->spacing.before == 40);
+    CHECK(split.size() == 4 && split[0]->style == "Heading 1" && split[0]->heading == 1 &&
+          split[1]->style == "Heading 1" && split[1]->heading == 1 &&
+          split[2]->style == writeit::kNormalStyle && split[2]->heading == 0 &&
+          split[3]->style == "Heading 2" && split[3]->heading == 2);
+    CHECK(split.size() == 4 && split[0]->tabs.size() == 1 && split[1]->tabs.size() == 1 &&
+          split[2]->tabs.empty() && split[3]->tabs.empty());
+    CHECK(split.size() == 4 && split[0]->borders.top.style == writeit::BorderStyle::Single &&
+          split[1]->borders.top.style == writeit::BorderStyle::Single &&
+          writeit::borders_plain(split[2]->borders) && writeit::borders_plain(split[3]->borders));
+
+    MainWindowProbe::load(window, split_cell());
+    settle();
+    Gtk::TextView* joining = MainWindowProbe::cell(window);
+    CHECK(joining && joining->get_buffer());
+    if (joining && joining->get_buffer()) {
+      joining->grab_focus();
+      settle();
+      auto buffer = joining->get_buffer();
+      buffer->begin_user_action();
+      buffer->erase(buffer->get_iter_at_offset(5), buffer->get_iter_at_offset(6));
+      buffer->end_user_action();
+    }
+    settle();
+    const writeit::Document joined_doc = MainWindowProbe::doc(window);
+    const std::vector<const Paragraph*> joined = cell_lines(joined_doc);
+    CHECK(joined.size() == 2 && runs_text(*joined[0]) == "HelloMid" &&
+          runs_text(*joined[1]) == "Tail");
+    CHECK(joined.size() == 2 && joined[0]->spacing.before == 200 &&
+          joined[0]->style == "Heading 1" && joined[0]->heading == 1 &&
+          joined[1]->spacing.before == 40 && joined[1]->style == "Heading 2" &&
+          joined[1]->heading == 2);
   }
   return suite_test::done("bug-bash", kChecks);
 }
