@@ -490,6 +490,13 @@ write_it_row_colour_tests = executable(
 )
 test('row-colour', with_display, args: [write_it_row_colour_tests.full_path()], depends: write_it_row_colour_tests, timeout: 90, suite: 'ui')
 
+write_it_painter_tests = executable(
+  'write-it-painter-tests',
+  'tests/test_painter.cpp',
+  dependencies: [writeit_dep],
+)
+test('painter', with_display, args: [write_it_painter_tests.full_path()], depends: write_it_painter_tests, timeout: 90, suite: 'ui')
+
 write_it_heading_paragraph_tests = executable(
   'write-it-heading-paragraph-tests',
   'tests/test_heading_paragraphs.cpp',

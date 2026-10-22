@@ -607,6 +607,53 @@ bool copy_table_columns(const std::vector<Paragraph>& paragraphs, size_t index, 
 // cell, the range is outside that table, or no cell was there to paint.
 bool paint_table_band(std::vector<Paragraph>& paragraphs, size_t index, TableBand band, int first,
                       int last, const Shading& shading);
+
+// What the format painter copies. `character` has no text, picture, or note.
+// `paragraph` holds the paragraph format (style, indents, alignment, list,
+// spacing, borders, shading, tabs, outline level, and direct bits) and not
+// the text. `from_cell` is set when that paragraph is a table cell, and
+// `cell_shading` is the cell's shading, including a clear.
+struct PainterFormat {
+  Run character;
+  Paragraph paragraph;
+  bool from_cell = false;
+  Shading cell_shading;
+};
+
+// One paragraph the painter touches. `from` and `to` are character offsets
+// in that paragraph, `to` exclusive. An empty range still takes the
+// paragraph format. A reversed range is swapped.
+struct PaintSpan {
+  size_t index = 0;
+  int from = 0;
+  int to = 0;
+};
+
+// The character at `into`, or the last character when `into` is past the
+// end, or the paragraph mark when the paragraph has no text. False when
+// `index` is outside `paragraphs`.
+bool sample_painter(const std::vector<Paragraph>& paragraphs, size_t index, int into,
+                    PainterFormat& out);
+// Paints `format` onto `spans`. Character format covers the characters in
+// each range. Paragraph format covers every named paragraph. A picture and
+// a footnote marker stay as they are. When `format.from_cell` is set, every
+// cell a span lands in takes `format.cell_shading`, and a cell's borders
+// stay. Ordinary text does not take cell shading. False when a span is
+// outside `paragraphs`, nothing was named, or nothing changed.
+bool paint_spans(std::vector<Paragraph>& paragraphs, const std::vector<PaintSpan>& spans,
+                 const PainterFormat& format);
+// Body-buffer offsets, as the page lays paragraphs out: a newline after
+// every paragraph except the last, and a table as one anchor plus a
+// separator newline when something follows. The anchor is not a span.
+// `from` and `to` may be reversed. A caret touches the paragraph it sits
+// in and names no characters.
+bool painter_body_spans(const std::vector<Paragraph>& paragraphs, int from, int to,
+                        std::vector<PaintSpan>& spans);
+// The same for a cell, a header, or a footer: the paragraphs' text with one
+// newline between them and none after the last. Each index is `base` plus
+// the paragraph's place in `paragraphs`.
+bool painter_linear_spans(const std::vector<Paragraph>& paragraphs, size_t base, int from, int to,
+                          std::vector<PaintSpan>& spans);
 // Inserts the copied rows after the caret cell's row. The copy must have
 // this table's column count.
 TablePaste paste_table_rows(std::vector<Paragraph>& paragraphs, size_t index,

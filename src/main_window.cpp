@@ -285,6 +285,7 @@ MainWindow::~MainWindow()
   list_tabs_idle_.disconnect();
   story_tabs_idle_.disconnect();
   seam_pending_idle_.disconnect();
+  painter_idle_.disconnect();
   clipboard_owner_.disconnect();
   mark_set_.disconnect();
   set_focus_.disconnect();
@@ -693,6 +694,24 @@ void MainWindow::build_toolbars()
   cut_tool_ = add_tool(standard_bar_, "edit-cut", "Cut", false);
   copy_tool_ = add_tool(standard_bar_, "edit-copy", "Copy", false);
   paste_tool_ = add_tool(standard_bar_, "edit-paste", "Paste", false);
+  painter_tool_ = Gtk::manage(new Gtk::ToggleToolButton());
+  if (Gtk::IconTheme::get_default()->has_icon("draw-brush"))
+    painter_tool_->set_icon_name("draw-brush");
+  else
+    fallback_label(*painter_tool_, "Painter");
+  painter_tool_->set_tooltip_text("Format Painter");
+  standard_bar_.append(*painter_tool_);
+  painter_tool_->signal_toggled().connect(sigc::mem_fun(*this, &MainWindow::on_painter_toggled));
+  // A click hits the toggle inside the tool item. glibmm connects after the
+  // class handler, and that handler returns true, so a later slot never runs.
+  // The press owns the state. The release returns true so the button does not
+  // turn itself off on the next click.
+  if (Gtk::Widget* face = painter_tool_->get_child()) {
+    face->signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_painter_press),
+                                              false);
+    face->signal_button_release_event().connect(
+        [](GdkEventButton* event) { return event && event->button == 1; }, false);
+  }
   standard_bar_.append(*Gtk::manage(new Gtk::SeparatorToolItem()));
   undo_tool_ = add_tool(standard_bar_, "edit-undo", "Undo", false);
   redo_tool_ = add_tool(standard_bar_, "edit-redo", "Redo", false);
@@ -787,6 +806,8 @@ void MainWindow::build_toolbars()
   proxy_button(*cut_tool_, "Cu_t");
   proxy_button(*copy_tool_, "_Copy");
   proxy_button(*paste_tool_, "_Paste");
+  if (painter_tool_)
+    proxy_toggle(*painter_tool_, "Format Painter");
   proxy_button(*undo_tool_, "_Undo");
   proxy_button(*redo_tool_, "_Redo");
   proxy_combo(*font_item, font_combo_, "_Font");
@@ -946,6 +967,26 @@ void MainWindow::build_page()
     sync_format_controls();
     return false;
   });
+  text_.signal_button_release_event().connect(
+      [this](GdkEventButton* event) {
+        if (event && event->button == 1)
+          queue_painter(text_);
+        return false;
+      },
+      true);
+  text_.signal_motion_notify_event().connect(
+      [this](GdkEventMotion* event) {
+        if (!painter_on_ || !event || !event->window)
+          return false;
+        auto window = Glib::wrap(event->window, true);
+        if (!window)
+          return false;
+        if (!painter_cursor_)
+          painter_cursor_ = Gdk::Cursor::create(window->get_display(), Gdk::PENCIL);
+        window->set_cursor(painter_cursor_);
+        return false;
+      },
+      true);
   text_.signal_button_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_context), false);
   text_.signal_button_press_event().connect(
       [this](GdkEventButton*) {

@@ -804,6 +804,10 @@ bool field(Gtk::Widget* widget)
 
 bool MainWindow::on_key_press_event(GdkEventKey* event)
 {
+  if (event && event->keyval == GDK_KEY_Escape && painter_on_) {
+    disarm_painter();
+    return true;
+  }
   // GTK's window tries its accelerators before the focused widget, so the
   // Edit menu's Delete, Select All and Undo took these keys from the size
   // box and acted on the document. A field gets them first here, as Word's
