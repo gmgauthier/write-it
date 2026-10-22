@@ -39,7 +39,7 @@ A run line has three times, each the median of the 50 keys:
 - with refresh: that time plus draining pending main-loop work, including list layout, with no sleep
 - wall: the same span on the clock
 
-The gate line is the median of the three run medians, refresh included. The gate in the spec is under 50 ms of CPU.
+The gate line is the median of the three run medians, refresh included. The gate in the spec is under 10 ms of CPU. A gate line over 10 ms is the point to plan a round of performance fixes.
 
 A burst line types 50 keys that may share one undo step. That line is not the gate.
 
