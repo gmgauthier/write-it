@@ -148,6 +148,16 @@ struct MainWindowProbe {
     Gtk::TextView* view = window.nth_cell_view(which, row, column);
     return view && view->has_focus();
   }
+
+  static void type(MainWindow& window, const char* text)
+  {
+    auto buffer = window.buffer_;
+    if (!buffer)
+      return;
+    buffer->begin_user_action();
+    buffer->insert_at_cursor(text);
+    buffer->end_user_action();
+  }
 };
 
 }  // namespace writeit
@@ -285,7 +295,7 @@ using Probe = writeit::MainWindowProbe;
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 135;
+constexpr int kChecks = 185;
 
 int main(int argc, char* argv[])
 {
@@ -671,6 +681,153 @@ int main(int argc, char* argv[])
     CHECK(Probe::cell_focused(window, 0, 1, 1));
     CHECK(!Probe::cell_focused(window, 0, 0, 0));
     CHECK(Probe::page(window) == "Page 1 of 1");
+
+    // Typing into a new next-page section keeps the sheet. The break is a pad
+    // until the first character, and that character has to carry the mark.
+    writeit::Document fresh;
+    fresh.paragraphs.push_back(body("Hello"));
+    Probe::load(window, fresh);
+    settle();
+    Probe::caret(window, 5);
+    Probe::insert(window, writeit::SectionBreak::NextPage);
+    settle();
+    writeit::Document opened = Probe::doc(window);
+    CHECK(opened.paragraphs.size() == 2 && opened.paragraphs[1].runs.empty());
+    CHECK(opened.sections.size() == 1 &&
+          opened.sections[0].break_before == writeit::SectionBreak::NextPage);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    Probe::type(window, "A");
+    settle();
+    writeit::Document typed = Probe::doc(window);
+    const std::string typed_rtf = writeit::rtf_export(typed);
+    const int a_at = writeit::chars_before(typed.paragraphs, 1);
+    CHECK(story(typed.paragraphs) == "Hello\nA");
+    CHECK(typed.paragraphs.size() == 2 &&
+          typed.paragraphs[0].section_break == writeit::SectionBreak::None &&
+          typed.paragraphs[1].section_break == writeit::SectionBreak::NextPage);
+    CHECK(typed.paragraphs.size() == 2 && !typed.paragraphs[1].page_break);
+    CHECK(typed.sections.size() == 1 &&
+          typed.sections[0].break_before == writeit::SectionBreak::NextPage);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    CHECK(Probe::sheet(window, a_at));
+    CHECK(!Probe::sheet(window, 0));
+    CHECK(has_word(typed_rtf, "\\sect"));
+    CHECK(has_word(typed_rtf, "\\sbkpage"));
+    CHECK(!has_word(typed_rtf, "\\page"));
+
+    Probe::undo(window);
+    settle();
+    writeit::Document typed_back = Probe::doc(window);
+    CHECK(story(typed_back.paragraphs) == "Hello\n");
+    CHECK(typed_back.paragraphs.size() == 2 && typed_back.paragraphs[1].runs.empty() &&
+          typed_back.paragraphs[1].section_break == writeit::SectionBreak::NextPage);
+    CHECK(typed_back.sections.size() == 1 &&
+          typed_back.sections[0].break_before == writeit::SectionBreak::NextPage);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    CHECK(Probe::sheet(window, writeit::chars_before(typed_back.paragraphs, 1)));
+    Probe::redo(window);
+    settle();
+    writeit::Document typed_again = Probe::doc(window);
+    CHECK(story(typed_again.paragraphs) == "Hello\nA");
+    CHECK(typed_again.paragraphs.size() == 2 &&
+          typed_again.paragraphs[1].section_break == writeit::SectionBreak::NextPage);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+
+    // Enter at the end of the section adds a paragraph. It does not add a section.
+    Probe::type(window, "\nB");
+    settle();
+    writeit::Document entered = Probe::doc(window);
+    CHECK(entered.paragraphs.size() == 3 && story(entered.paragraphs) == "Hello\nA\nB");
+    CHECK(entered.paragraphs.size() == 3 &&
+          entered.paragraphs[1].section_break == writeit::SectionBreak::NextPage &&
+          entered.paragraphs[2].section_break == writeit::SectionBreak::None);
+    CHECK(entered.sections.size() == 1);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    CHECK(Probe::sheet(window, writeit::chars_before(entered.paragraphs, 1)));
+    CHECK(!Probe::sheet(window, writeit::chars_before(entered.paragraphs, 2)));
+
+    // Enter in the middle. The break stays on the first half.
+    Probe::load(window, fresh);
+    settle();
+    Probe::caret(window, 5);
+    Probe::insert(window, writeit::SectionBreak::NextPage);
+    settle();
+    Probe::type(window, "After");
+    settle();
+    Probe::caret(window, writeit::chars_before(Probe::doc(window).paragraphs, 1) + 2);
+    Probe::type(window, "\n");
+    settle();
+    writeit::Document halved = Probe::doc(window);
+    CHECK(halved.paragraphs.size() == 3 && story(halved.paragraphs) == "Hello\nAf\nter");
+    CHECK(halved.paragraphs.size() == 3 &&
+          halved.paragraphs[1].section_break == writeit::SectionBreak::NextPage &&
+          halved.paragraphs[2].section_break == writeit::SectionBreak::None);
+    CHECK(halved.sections.size() == 1);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    CHECK(Probe::sheet(window, writeit::chars_before(halved.paragraphs, 1)));
+    CHECK(!Probe::sheet(window, writeit::chars_before(halved.paragraphs, 2)));
+
+    // Enter at the start. The break stays on the text that moved down.
+    Probe::load(window, fresh);
+    settle();
+    Probe::caret(window, 5);
+    Probe::insert(window, writeit::SectionBreak::NextPage);
+    settle();
+    Probe::type(window, "Go");
+    settle();
+    Probe::caret(window, writeit::chars_before(Probe::doc(window).paragraphs, 1));
+    Probe::type(window, "\n");
+    settle();
+    writeit::Document above = Probe::doc(window);
+    CHECK(above.paragraphs.size() == 3 && story(above.paragraphs) == "Hello\n\nGo");
+    CHECK(above.paragraphs.size() == 3 &&
+          above.paragraphs[1].section_break == writeit::SectionBreak::None &&
+          above.paragraphs[2].section_break == writeit::SectionBreak::NextPage);
+    CHECK(above.sections.size() == 1);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    CHECK(!Probe::sheet(window, writeit::chars_before(above.paragraphs, 1)));
+    CHECK(Probe::sheet(window, writeit::chars_before(above.paragraphs, 2)));
+
+    // A continuous break stays a section and does not start a sheet.
+    Probe::load(window, fresh);
+    settle();
+    Probe::caret(window, 5);
+    Probe::insert(window, writeit::SectionBreak::Continuous);
+    settle();
+    CHECK(Probe::page(window) == "Page 1 of 1");
+    Probe::type(window, "C");
+    settle();
+    writeit::Document flowed_type = Probe::doc(window);
+    CHECK(story(flowed_type.paragraphs) == "Hello\nC");
+    CHECK(flowed_type.paragraphs.size() == 2 &&
+          flowed_type.paragraphs[1].section_break == writeit::SectionBreak::Continuous &&
+          !flowed_type.paragraphs[1].page_break);
+    CHECK(flowed_type.sections.size() == 1 &&
+          flowed_type.sections[0].break_before == writeit::SectionBreak::Continuous);
+    CHECK(!Probe::sheet(window, writeit::chars_before(flowed_type.paragraphs, 1)));
+    CHECK(Probe::page(window) == "Page 1 of 1");
+
+    // Typing at the start of a section that already has text keeps the break.
+    writeit::Document pair;
+    pair.paragraphs.push_back(body("Before"));
+    pair.paragraphs.push_back(body("After"));
+    const int after = writeit::chars_before(pair.paragraphs, 1);
+    Probe::load(window, pair);
+    settle();
+    Probe::caret(window, after);
+    Probe::insert(window, writeit::SectionBreak::NextPage);
+    settle();
+    Probe::caret(window, after);
+    Probe::type(window, "X");
+    settle();
+    writeit::Document prefixed = Probe::doc(window);
+    CHECK(story(prefixed.paragraphs) == "Before\nXAfter");
+    CHECK(prefixed.paragraphs.size() == 2 &&
+          prefixed.paragraphs[1].section_break == writeit::SectionBreak::NextPage);
+    CHECK(prefixed.sections.size() == 1 &&
+          prefixed.sections[0].break_before == writeit::SectionBreak::NextPage);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+    CHECK(Probe::sheet(window, writeit::chars_before(prefixed.paragraphs, 1)));
   }
   return suite_test::done("section-ui", kChecks);
 }
