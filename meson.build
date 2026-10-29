@@ -1,7 +1,7 @@
 project(
   'write-it',
   'cpp',
-  version: '2.6.2',
+  version: '3.0.0',
   license: 'Unlicense',
   meson_version: '>=0.57',
   default_options: [
@@ -461,6 +461,13 @@ write_it_page_tests = executable(
 )
 test('page', write_it_page_tests)
 
+write_it_section_tests = executable(
+  'write-it-section-tests',
+  'tests/test_section.cpp',
+  dependencies: [writeit_dep],
+)
+test('section', write_it_section_tests)
+
 # Page commands in the real window. Dialogs are not opened.
 write_it_page_ui_tests = executable(
   'write-it-page-ui-tests',
@@ -468,6 +475,14 @@ write_it_page_ui_tests = executable(
   dependencies: [writeit_dep],
 )
 test('page-ui', with_display, args: [write_it_page_ui_tests.full_path()], depends: write_it_page_ui_tests, timeout: 60, suite: 'ui')
+
+# Section breaks in the real window. The dialog is not opened.
+write_it_section_ui_tests = executable(
+  'write-it-section-ui-tests',
+  'tests/test_section_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('section-ui', with_display, args: [write_it_section_ui_tests.full_path()], depends: write_it_section_ui_tests, timeout: 60, is_parallel: false, suite: 'ui')
 
 write_it_rows_tests = executable(
   'write-it-rows-tests',

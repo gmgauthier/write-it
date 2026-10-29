@@ -161,6 +161,11 @@ constexpr int kMinCellTwips = 200;
 // and \qj; Justify is GTK's JUSTIFY_FILL.
 enum class Align { Left, Center, Right, Justify };
 
+// Where a paragraph starts a section after the first. Word 97's Break
+// dialog also offers even page, odd page, and a column break. Those are
+// read as NextPage and Continuous; the menu offers these two.
+enum class SectionBreak { None = 0, NextPage = 1, Continuous = 2 };
+
 // Word 97's line spacing. Single, 1.5 and Double ignore `value`. At least and
 // Exactly store twips (0 through kMaxIndent, which is 0 pt through 1584 pt).
 // Multiple stores a line count in 240ths of a line: 240 is one line, and 132
@@ -484,6 +489,10 @@ struct Paragraph {
   Cell cell;
   // A page break before this paragraph, RTF's \page.
   bool page_break = false;
+  // A section break before this paragraph. None is the first section, and
+  // the section 1.0 stored on the document. NextPage and Continuous start
+  // a later section. Not a page break: \page stays page_break.
+  SectionBreak section_break = SectionBreak::None;
 };
 
 constexpr unsigned kDirectLeft = 1;
@@ -497,6 +506,17 @@ constexpr unsigned kDirectLine = 64;
 constexpr unsigned kDirectBorders = 128;
 constexpr unsigned kDirectShading = 256;
 constexpr unsigned kDirectTabs = 512;
+
+// One section after the first. The first section is Document::page,
+// Document::header, and Document::footer, so a document with one section
+// still saves as 1.0 saved it. break_before matches the paragraph that
+// starts this section.
+struct Section {
+  SectionBreak break_before = SectionBreak::NextPage;
+  PageSetup page;
+  std::vector<Paragraph> header;
+  std::vector<Paragraph> footer;
+};
 
 struct Document {
   std::vector<Paragraph> paragraphs;
@@ -512,6 +532,9 @@ struct Document {
   // The header and footer stories. Empty is omitted from the file.
   std::vector<Paragraph> header;
   std::vector<Paragraph> footer;
+  // Sections after the first. Empty means the document is the one section
+  // page, header, and footer describe.
+  std::vector<Section> sections;
   // Footnotes, in the order their markers cite. notes[i] belongs to a run
   // whose note is i + 1.
   std::vector<std::vector<Paragraph>> notes;
@@ -526,6 +549,8 @@ bool same_look(const Run& a, const Run& b);
 bool same_mark(const Paragraph& a, const Paragraph& b);
 bool operator==(const PageSetup& a, const PageSetup& b);
 bool operator!=(const PageSetup& a, const PageSetup& b);
+bool operator==(const Section& a, const Section& b);
+bool operator!=(const Section& a, const Section& b);
 bool operator==(const Cell& a, const Cell& b);
 bool operator!=(const Cell& a, const Cell& b);
 bool operator==(const Indents& a, const Indents& b);
@@ -840,6 +865,17 @@ int note_marker_offset(const std::vector<Paragraph>& paragraphs, int note_index)
 // paragraph. A break at the end of the paragraph before a table inserts an
 // empty body paragraph in front of the table. The cell itself is not flagged.
 int break_page(Document& doc, int caret_offset);
+// Insert → Section Break at a body caret, counted the same way as
+// break_page(). The new section copies the previous section's page, columns,
+// header, and footer. NextPage does not set page_break. Returns the caret's
+// new offset, or -1 when the caret is in a table or that paragraph already
+// starts a section of the same kind. A caret at the start of the document
+// keeps an empty paragraph in the first section.
+int break_section(Document& doc, int caret_offset, SectionBreak kind);
+// The paragraphs' section breaks and Document::sections name the same
+// sections, in order. A break on the first paragraph, or on a cell, is
+// cleared. A break with no section copies the previous section's setup.
+void align_sections(Document& doc);
 // Gives one paragraph the style `to`. An attribute whose direct bit is unset
 // takes the style's value and the bit stays unset, even when the old value
 // differed from the paragraph's previous style. A set bit is left alone.

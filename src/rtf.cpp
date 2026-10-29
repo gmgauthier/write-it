@@ -623,6 +623,10 @@ class Reader {
     if (state_.story != Story::Body)
       leave_story(Story::Body);
     finish_paragraph(false);
+    if (saw_sect_) {
+      stamp_section();
+      remember_section();
+    }
     merge(doc);
     // A file from before styles: its headings take Heading 1-6.
     if (!saw_sheet_)
@@ -1133,10 +1137,12 @@ class Reader {
       return;
     }
     if (word == "paperw" && has_param) {
+      doc_page_.paper_width = param;
       page_.paper_width = param;
       return;
     }
     if (word == "paperh" && has_param) {
+      doc_page_.paper_height = param;
       page_.paper_height = param;
       return;
     }
@@ -1148,23 +1154,49 @@ class Reader {
       page_.paper_height = param;
       return;
     }
-    if ((word == "margl" || word == "marglsxn") && has_param) {
+    if (word == "margl" && has_param) {
+      doc_page_.margin_left = param;
       page_.margin_left = param;
       return;
     }
-    if ((word == "margr" || word == "margrsxn") && has_param) {
+    if (word == "marglsxn" && has_param) {
+      page_.margin_left = param;
+      return;
+    }
+    if (word == "margr" && has_param) {
+      doc_page_.margin_right = param;
       page_.margin_right = param;
       return;
     }
-    if ((word == "margt" || word == "margtsxn") && has_param) {
+    if (word == "margrsxn" && has_param) {
+      page_.margin_right = param;
+      return;
+    }
+    if (word == "margt" && has_param) {
+      doc_page_.margin_top = param;
       page_.margin_top = param;
       return;
     }
-    if ((word == "margb" || word == "margbsxn") && has_param) {
+    if (word == "margtsxn" && has_param) {
+      page_.margin_top = param;
+      return;
+    }
+    if (word == "margb" && has_param) {
+      doc_page_.margin_bottom = param;
+      page_.margin_bottom = param;
+      return;
+    }
+    if (word == "margbsxn" && has_param) {
       page_.margin_bottom = param;
       return;
     }
     if (word == "landscape") {
+      const bool on = !has_param || param != 0;
+      doc_page_.landscape = on;
+      page_.landscape = on;
+      return;
+    }
+    if (word == "lndscpsxn") {
       page_.landscape = !has_param || param != 0;
       return;
     }
@@ -1174,6 +1206,35 @@ class Reader {
     }
     if (word == "colsx" && has_param) {
       page_.column_gap = param;
+      return;
+    }
+    if (word == "sectd") {
+      if (state_.story != Story::Body)
+        return;
+      page_ = doc_page_;
+      page_.columns = 1;
+      page_.column_gap = default_page().column_gap;
+      current_break_ = SectionBreak::NextPage;
+      header_.clear();
+      footer_.clear();
+      header_marks_.clear();
+      footer_marks_.clear();
+      return;
+    }
+    if (word == "sbkpage" || word == "sbkeven" || word == "sbkodd") {
+      if (state_.story == Story::Body)
+        current_break_ = SectionBreak::NextPage;
+      return;
+    }
+    if (word == "sbknone" || word == "sbkcol") {
+      if (state_.story == Story::Body)
+        current_break_ = SectionBreak::Continuous;
+      return;
+    }
+    if (word == "sect") {
+      if (state_.story != Story::Body)
+        return;
+      begin_next_section();
       return;
     }
     if (word == "page") {
@@ -2459,6 +2520,53 @@ class Reader {
     return "Sans";
   }
 
+  void stamp_section()
+  {
+    SectionBreak kind = current_break_;
+    if (kind != SectionBreak::NextPage && kind != SectionBreak::Continuous)
+      kind = SectionBreak::NextPage;
+    if (section_start_ >= paragraphs_.size()) {
+      Paragraph blank;
+      blank.section_break = kind;
+      paragraphs_.push_back(std::move(blank));
+      marks_.push_back(ListMarks{});
+      section_start_ = paragraphs_.size() - 1;
+      return;
+    }
+    paragraphs_[section_start_].section_break = kind;
+  }
+
+  // Properties in force belong to the section this \sect ends. The next
+  // section inherits the page and starts again on a next-page break. The
+  // first section's own break is not stored: section 0 is the document.
+  void remember_section()
+  {
+    HeldSection held;
+    held.page = page_;
+    if (held.page.landscape && held.page.paper_width < held.page.paper_height)
+      std::swap(held.page.paper_width, held.page.paper_height);
+    held.header = std::move(header_);
+    held.footer = std::move(footer_);
+    held.header_marks = std::move(header_marks_);
+    held.footer_marks = std::move(footer_marks_);
+    header_.clear();
+    footer_.clear();
+    header_marks_.clear();
+    footer_marks_.clear();
+    held_.push_back(std::move(held));
+    current_break_ = SectionBreak::NextPage;
+    section_start_ = paragraphs_.size();
+  }
+
+  void begin_next_section()
+  {
+    finish_paragraph(false);
+    if (saw_sect_)
+      stamp_section();
+    remember_section();
+    saw_sect_ = true;
+  }
+
   void merge(Document& doc)
   {
     doc.paragraphs.clear();
@@ -2475,6 +2583,7 @@ class Reader {
       merged.shading = paragraph.shading;
       merged.tabs = paragraph.tabs;
       merged.page_break = paragraph.page_break;
+      merged.section_break = paragraph.section_break;
       merged.cell = paragraph.cell;
       merged.list = resolve(marks_[i]);
       // A list item with no indents of its own, as hand-written RTF often
@@ -2537,20 +2646,39 @@ class Reader {
       canonical_lists(out);
       return out;
     };
-    doc.header = take_story(header_, header_marks_);
-    doc.footer = take_story(footer_, footer_marks_);
+    if (held_.empty()) {
+      doc.header = take_story(header_, header_marks_);
+      doc.footer = take_story(footer_, footer_marks_);
+    } else {
+      doc.header = take_story(held_[0].header, held_[0].header_marks);
+      doc.footer = take_story(held_[0].footer, held_[0].footer_marks);
+      doc.sections.clear();
+      for (size_t s = 1; s < held_.size(); ++s) {
+        Section section;
+        section.page = held_[s].page;
+        section.header = take_story(held_[s].header, held_[s].header_marks);
+        section.footer = take_story(held_[s].footer, held_[s].footer_marks);
+        doc.sections.push_back(std::move(section));
+      }
+    }
     doc.notes.clear();
     for (size_t n = 0; n < notes_.size() && n < note_marks_.size(); ++n)
       doc.notes.push_back(take_story(notes_[n], note_marks_[n]));
-    if (page_.landscape && page_.paper_width < page_.paper_height)
-      std::swap(page_.paper_width, page_.paper_height);
-    doc.page = clamp_page(page_);
+    if (held_.empty()) {
+      if (page_.landscape && page_.paper_width < page_.paper_height)
+        std::swap(page_.paper_width, page_.paper_height);
+      doc.page = clamp_page(page_);
+    } else {
+      doc.page = clamp_page(held_[0].page);
+    }
     doc.default_tab = clamp_default_tab(deftab_);
     // Indents from the file have to leave a quarter inch of this page's
     // text area. The dialog already refuses a pair that does not.
+    if (!doc.sections.empty())
+      align_sections(doc);
     const int text = page_text_twips(doc.page);
-    auto fit = [text](Paragraph& paragraph) {
-      paragraph.indents = clamp_indents(paragraph.indents, text);
+    auto fit = [](Paragraph& paragraph, int width) {
+      paragraph.indents = clamp_indents(paragraph.indents, width);
       paragraph.spacing = clamp_spacing(paragraph.spacing);
       paragraph.borders = clamp_borders(paragraph.borders);
       paragraph.shading = clamp_shading(paragraph.shading);
@@ -2558,17 +2686,41 @@ class Reader {
       paragraph.cell.borders = clamp_borders(paragraph.cell.borders);
       paragraph.cell.shading = clamp_shading(paragraph.cell.shading);
       if (paragraph.list.has_own)
-        paragraph.list.own = clamp_indents(paragraph.list.own, text);
+        paragraph.list.own = clamp_indents(paragraph.list.own, width);
     };
-    for (Paragraph& paragraph : doc.paragraphs)
-      fit(paragraph);
-    for (Paragraph& paragraph : doc.header)
-      fit(paragraph);
-    for (Paragraph& paragraph : doc.footer)
-      fit(paragraph);
+    if (doc.sections.empty()) {
+      for (Paragraph& paragraph : doc.paragraphs)
+        fit(paragraph, text);
+      for (Paragraph& paragraph : doc.header)
+        fit(paragraph, text);
+      for (Paragraph& paragraph : doc.footer)
+        fit(paragraph, text);
+    } else {
+      std::vector<int> widths;
+      widths.push_back(text);
+      for (const Section& section : doc.sections)
+        widths.push_back(page_text_twips(section.page));
+      size_t section = 0;
+      for (Paragraph& paragraph : doc.paragraphs) {
+        if (paragraph.section_break != SectionBreak::None && section + 1 < widths.size())
+          ++section;
+        fit(paragraph, widths[section]);
+      }
+      for (Paragraph& paragraph : doc.header)
+        fit(paragraph, widths[0]);
+      for (Paragraph& paragraph : doc.footer)
+        fit(paragraph, widths[0]);
+      for (size_t s = 0; s < doc.sections.size(); ++s) {
+        const int width = widths[std::min(s + 1, widths.size() - 1)];
+        for (Paragraph& paragraph : doc.sections[s].header)
+          fit(paragraph, width);
+        for (Paragraph& paragraph : doc.sections[s].footer)
+          fit(paragraph, width);
+      }
+    }
     for (std::vector<Paragraph>& note : doc.notes)
       for (Paragraph& paragraph : note)
-        fit(paragraph);
+        fit(paragraph, text);
     for (Style& style : doc.styles) {
       style.indents = clamp_indents(style.indents, text);
       style.spacing = clamp_spacing(style.spacing);
@@ -2637,6 +2789,18 @@ class Reader {
   bool parked_char_ = false;
   bool saw_par_ = false;
   PageSetup page_;
+  PageSetup doc_page_;
+  SectionBreak current_break_ = SectionBreak::NextPage;
+  size_t section_start_ = 0;
+  bool saw_sect_ = false;
+  struct HeldSection {
+    PageSetup page;
+    std::vector<Paragraph> header;
+    std::vector<Paragraph> footer;
+    std::vector<ListMarks> header_marks;
+    std::vector<ListMarks> footer_marks;
+  };
+  std::vector<HeldSection> held_;
   std::vector<Paragraph> header_;
   std::vector<Paragraph> footer_;
   std::vector<ListMarks> header_marks_;
@@ -3017,8 +3181,19 @@ void write_cell_shading(std::ostringstream& out, const Shading& shading)
 
 }  // namespace
 
-std::string rtf_export(const Document& doc)
+std::string rtf_export(const Document& incoming)
 {
+  // A one-section file is written from the caller's document, so its bytes
+  // stay what 1.0 wrote. A later section is aligned first: the break and
+  // the section describe the same page.
+  Document aligned;
+  const Document* source = &incoming;
+  if (!incoming.sections.empty()) {
+    aligned = incoming;
+    align_sections(aligned);
+    source = &aligned;
+  }
+  const Document& doc = *source;
   std::vector<std::string> fonts;
   auto index_of = [&](const std::string& name) {
     const std::string key = name.empty() ? "Sans" : name;
@@ -3050,6 +3225,12 @@ std::string rtf_export(const Document& doc)
     index_paragraph(paragraph);
   for (const Paragraph& paragraph : doc.footer)
     index_paragraph(paragraph);
+  for (const Section& section : doc.sections) {
+    for (const Paragraph& paragraph : section.header)
+      index_paragraph(paragraph);
+    for (const Paragraph& paragraph : section.footer)
+      index_paragraph(paragraph);
+  }
   for (const std::vector<Paragraph>& note : doc.notes) {
     for (const Paragraph& paragraph : note)
       index_paragraph(paragraph);
@@ -3087,6 +3268,10 @@ std::string rtf_export(const Document& doc)
   };
   story_needs_sheet(doc.header);
   story_needs_sheet(doc.footer);
+  for (const Section& section : doc.sections) {
+    story_needs_sheet(section.header);
+    story_needs_sheet(section.footer);
+  }
   for (const std::vector<Paragraph>& note : doc.notes)
     story_needs_sheet(note);
   const std::vector<Style> sheet = any_style ? complete_sheet(given) : std::vector<Style>{};
@@ -3162,6 +3347,12 @@ std::string rtf_export(const Document& doc)
   };
   const std::vector<int> header_ls = collect_story(doc.header);
   const std::vector<int> footer_ls = collect_story(doc.footer);
+  std::vector<std::vector<int>> section_header_ls;
+  std::vector<std::vector<int>> section_footer_ls;
+  for (const Section& section : doc.sections) {
+    section_header_ls.push_back(collect_story(section.header));
+    section_footer_ls.push_back(collect_story(section.footer));
+  }
   std::vector<std::vector<int>> note_ls;
   note_ls.reserve(doc.notes.size());
   for (const std::vector<Paragraph>& note : doc.notes)
@@ -3226,6 +3417,10 @@ std::string rtf_export(const Document& doc)
   see_paragraphs(doc.paragraphs);
   see_paragraphs(doc.header);
   see_paragraphs(doc.footer);
+  for (const Section& section : doc.sections) {
+    see_paragraphs(section.header);
+    see_paragraphs(section.footer);
+  }
   for (const std::vector<Paragraph>& note : doc.notes)
     see_paragraphs(note);
   for (const Style& style : sheet) {
@@ -3334,7 +3529,7 @@ std::string rtf_export(const Document& doc)
     out << "}\n";
   }
   const PageSetup page = clamp_page(doc.page);
-  if (!page_metrics_default(page)) {
+  if (doc.sections.empty() && !page_metrics_default(page)) {
     out << "\\paperw" << page.paper_width << "\\paperh" << page.paper_height << "\\margl"
         << page.margin_left << "\\margr" << page.margin_right << "\\margt" << page.margin_top
         << "\\margb" << page.margin_bottom;
@@ -3345,7 +3540,7 @@ std::string rtf_export(const Document& doc)
   const int deftab = clamp_default_tab(doc.default_tab);
   if (deftab != kDefaultTab)
     out << "\\deftab" << deftab << "\n";
-  if (page.columns != 1)
+  if (doc.sections.empty() && page.columns != 1)
     out << "\\cols" << page.columns << "\\colsx" << page.column_gap << "\n";
 
   // Headers, footers, and footnote bodies. The body loop below keeps the
@@ -3469,14 +3664,49 @@ std::string rtf_export(const Document& doc)
       write_plain(paragraphs[i], i < story_ls.size() ? story_ls[i] : 0);
     out << "}";
   };
-  write_story("header", doc.header, header_ls);
-  write_story("footer", doc.footer, footer_ls);
+  auto emit_section = [&](const PageSetup& setup, SectionBreak kind, bool first,
+                          const std::vector<Paragraph>& header, const std::vector<int>& hls,
+                          const std::vector<Paragraph>& footer, const std::vector<int>& fls) {
+    const PageSetup clamped = clamp_page(setup);
+    out << "\\sectd";
+    if (first || kind == SectionBreak::Continuous)
+      out << "\\sbknone";
+    else
+      out << "\\sbkpage";
+    out << "\\pgwsxn" << clamped.paper_width << "\\pghsxn" << clamped.paper_height << "\\marglsxn"
+        << clamped.margin_left << "\\margrsxn" << clamped.margin_right << "\\margtsxn"
+        << clamped.margin_top << "\\margbsxn" << clamped.margin_bottom;
+    if (clamped.landscape)
+      out << "\\lndscpsxn";
+    out << "\\cols" << clamped.columns << "\\colsx" << clamped.column_gap << "\n";
+    write_story("header", header, hls);
+    write_story("footer", footer, fls);
+  };
+  if (doc.sections.empty()) {
+    write_story("header", doc.header, header_ls);
+    write_story("footer", doc.footer, footer_ls);
+  } else {
+    emit_section(doc.page, SectionBreak::Continuous, true, doc.header, header_ls, doc.footer,
+                 footer_ls);
+  }
 
   bool wrote = false;
+  size_t extra = 0;
   for (size_t index = 0; index < doc.paragraphs.size(); ++index) {
     const Paragraph& paragraph = doc.paragraphs[index];
     const ListFormat list = lists[index];
     wrote = true;
+    if (!doc.sections.empty() && index > 0 && paragraph.section_break != SectionBreak::None) {
+      out << "\\sect\n";
+      if (extra < doc.sections.size()) {
+        const Section& section = doc.sections[extra];
+        const std::vector<int>& hls = section_header_ls[extra];
+        const std::vector<int>& fls = section_footer_ls[extra];
+        emit_section(section.page, section.break_before, false, section.header, hls, section.footer,
+                     fls);
+      }
+      ++extra;
+    }
     if (paragraph.cell.table != 0) {
       const int id = paragraph.cell.table;
       const int row = paragraph.cell.row;

@@ -380,9 +380,15 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   // Notes, the header, and the footer are not in the body. A document that
   // holds a table or a picture used to rebuild the body for a note key. The
   // rebuild clears the page, and the pasteboard jumps to the top and back.
+  bool same_section_pages = before.sections.size() == after.sections.size();
+  for (size_t i = 0; same_section_pages && i < before.sections.size(); ++i) {
+    same_section_pages = before.sections[i].break_before == after.sections[i].break_before &&
+                         before.sections[i].page == after.sections[i].page;
+  }
   const bool stories_only = before.paragraphs == after.paragraphs &&
                             same_stored_paragraphs(before.paragraphs, after.paragraphs) &&
-                            before.styles == after.styles && before.page == after.page;
+                            before.styles == after.styles && before.page == after.page &&
+                            same_section_pages;
   // One step, recorded as the buffer is rebuilt: a command, not a keystroke,
   // so the rebuild's operations stand for the whole document this once.
   open_step();
@@ -515,7 +521,8 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
   // would only store the flag, and the sheet would not show until the file
   // was opened again. Rebuilding inserts the pad, as replace_buffer() does.
   if (after.paragraphs.back().cell.table == 0 && after.paragraphs.back().runs.empty() &&
-      after.paragraphs.back().page_break != before.paragraphs.back().page_break)
+      (after.paragraphs.back().page_break != before.paragraphs.back().page_break ||
+       after.paragraphs.back().section_break != before.paragraphs.back().section_break))
     return false;
   // The characters have to already be the buffer's. A table is one anchor
   // and a picture is one character; neither is the text of its runs. A cell
@@ -545,6 +552,8 @@ bool MainWindow::retag_paragraphs(const Document& before, const Document& after)
   for (size_t i = 0; i < after.paragraphs.size(); ++i) {
     const Paragraph& was = before.paragraphs[i];
     const Paragraph& now = after.paragraphs[i];
+    if (was.section_break != now.section_break)
+      return false;
     if ((was.cell.table == 0) != (now.cell.table == 0) || was.cell.table != now.cell.table)
       return false;
     if (now.cell.table != 0) {
