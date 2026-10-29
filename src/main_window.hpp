@@ -359,6 +359,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   long label_locates_ = 0;
   long label_layouts_ = 0;
   void replace_buffer(const Document& doc, int offset);
+  // Section 0 and each later section, with a stable id the buffer tag names.
+  void adopt_sections(const Document& doc);
+  // The caret's section becomes the page, the header, and the footer on
+  // screen. One section returns before it looks at a paragraph.
+  void follow_caret_section();
+  Glib::RefPtr<Gtk::TextTag> sect_tag(SectionBreak kind, int id);
+  bool sect_on(const Gtk::TextIter& iter, SectionBreak& kind, int& id) const;
   // The undo state differs from the one saved, opened or made new.
   bool dirty() const;
   void update_title();
@@ -515,6 +522,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool final_paragraph_empty() const;
   // Removes a page-break pad from any paragraph that also has real text.
   void drop_page_break_pads();
+  // The section mark is not part of the paragraph tag. Typing and Enter move
+  // it onto the paragraph that starts the section, and off the other half.
+  void keep_section_tag(int start, int end);
+  void clear_section_tags(int start, int end);
   // Gives each paragraph the user action touched one paragraph tag over all
   // of it; the rest are as the last action left them.
   void normalise_paragraphs();
@@ -632,6 +643,12 @@ class MainWindow : public Gtk::ApplicationWindow {
   void draw_print_page(const Glib::RefPtr<Gtk::PrintContext>& context, int page_nr);
   void on_columns();
   void on_page_break();
+  void on_section_break();
+  // Insert → Section Break, without the dialog. Next page or continuous.
+  void insert_section_break(SectionBreak kind);
+  // Page Setup and Columns write the caret's section. Section 0 is
+  // Document::page. A later section is Document::sections.
+  void assign_section_page(Document& doc, PageSetup page) const;
   void on_insert_table();
   void on_insert_row();
   void on_insert_column();
@@ -1035,6 +1052,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* picture_item_ = nullptr;
   Gtk::MenuItem* insert_table_item_ = nullptr;
   Gtk::MenuItem* page_break_item_ = nullptr;
+  Gtk::MenuItem* section_break_item_ = nullptr;
   Gtk::MenuItem* footnote_item_ = nullptr;
   Gtk::MenuItem* columns_item_ = nullptr;
   Gtk::MenuItem* table_insert_item_ = nullptr;
@@ -1334,6 +1352,20 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<TabStop> ruler_tabs_;
   std::vector<Paragraph> header_;
   std::vector<Paragraph> footer_;
+  // Slot 0 is the first section (page_setup_, header_, footer_). Each later
+  // slot has an id the sect tag stores, so deleting one break does not hand
+  // the next break the section that belonged to the one before it.
+  struct SectionSlot {
+    int id = 0;
+    PageSetup page;
+    std::vector<Paragraph> header;
+    std::vector<Paragraph> footer;
+  };
+  std::vector<SectionSlot> section_slots_;
+  size_t active_section_ = 0;
+  int next_section_id_ = 1;
+  // The paragraph start follow_caret_section() last resolved. -1 walks again.
+  int section_para_start_ = -1;
   std::vector<std::vector<Paragraph>> notes_;
   // Pictures in the body, keyed by the pixbuf the buffer is showing. The
   // value is the file's bytes; the pixbuf may be a scaled copy. Mutable so

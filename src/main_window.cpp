@@ -558,10 +558,13 @@ void MainWindow::build_menus()
   picture_item_ = add_item(*insert, "_Picture…", true);
   insert_table_item_ = add_item(*insert, "_Table…", true);
   page_break_item_ = add_item(*insert, "Page _Break", true);
+  section_break_item_ = add_item(*insert, "_Section Break…", true);
   footnote_item_ = add_item(*insert, "_Footnote", true);
   picture_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_picture));
   insert_table_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_insert_table));
   page_break_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_page_break));
+  section_break_item_->signal_activate().connect(
+      sigc::mem_fun(*this, &MainWindow::on_section_break));
   footnote_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_footnote));
 
   auto* format_menu = add_menu("F_ormat");

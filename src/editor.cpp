@@ -34,6 +34,38 @@ constexpr int kFindReplace = Gtk::RESPONSE_YES;
 // hold. capture() skips it. It is not part of the document or the file.
 constexpr gunichar kPageBreakPad = 0x200B;
 
+// "sect", the kind (1 next page, 2 continuous), and a stable section id.
+// A paragraph tag is not this: parse_para does not accept the name.
+bool parse_sect_name(const std::string& name, SectionBreak& kind, int& id)
+{
+  constexpr char sep = '\x1f';
+  const std::string prefix = std::string("sect") + sep;
+  if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0)
+    return false;
+  const size_t cut = name.find(sep, prefix.size());
+  if (cut == std::string::npos || cut + 1 >= name.size())
+    return false;
+  const std::string which = name.substr(prefix.size(), cut - prefix.size());
+  if (which == "1")
+    kind = SectionBreak::NextPage;
+  else if (which == "2")
+    kind = SectionBreak::Continuous;
+  else
+    return false;
+  int value = 0;
+  for (size_t i = cut + 1; i < name.size(); ++i) {
+    if (name[i] < '0' || name[i] > '9')
+      return false;
+    value = value * 10 + (name[i] - '0');
+    if (value > 100000000)
+      return false;
+  }
+  if (value <= 0)
+    return false;
+  id = value;
+  return true;
+}
+
 // The map wins when it already has bytes (a file picture, possibly scaled on
 // screen). A paste leaves a pixbuf with no entry; keep a PNG of that pixbuf.
 Image remember_shown(std::map<GdkPixbuf*, Image>& images, const Glib::RefPtr<Gdk::Pixbuf>& pix)
@@ -1752,6 +1784,8 @@ Document MainWindow::capture() const
     paragraph = Paragraph{};
     have_para = false;
   };
+  std::vector<int> break_ids;
+  std::vector<int> seen_ids;
   bool skip_sep = false;
   // Set only when the buffer's tail is a table anchor (and its separator).
   // A trailing newline in ordinary text still needs the final flush: that
@@ -1802,6 +1836,22 @@ Document MainWindow::capture() const
           have_para = true;
         }
       }
+      SectionBreak sect_kind = SectionBreak::None;
+      int sect_id = 0;
+      // The first paragraph is section 0. A copied tag with an id already
+      // seen is the same section, not a new one.
+      if (!doc.paragraphs.empty() && sect_on(iter, sect_kind, sect_id) && sect_id > 0) {
+        bool seen = false;
+        for (int id : seen_ids) {
+          if (id == sect_id)
+            seen = true;
+        }
+        if (!seen) {
+          seen_ids.push_back(sect_id);
+          paragraph.section_break = sect_kind;
+          break_ids.push_back(sect_id);
+        }
+      }
     }
     // The layout pad for an empty page-break paragraph. It is not text.
     if (ch == kPageBreakPad)
@@ -1847,12 +1897,54 @@ Document MainWindow::capture() const
   }
   if (doc.paragraphs.empty())
     doc.paragraphs.push_back(Paragraph{});
+  if (!doc.paragraphs.empty())
+    doc.paragraphs[0].section_break = SectionBreak::None;
   doc.styles = styles_;
-  doc.page = page_setup_;
   doc.default_tab = default_tab_;
-  doc.header = header_;
-  doc.footer = footer_;
   doc.notes = notes_;
+  std::vector<SectionSlot> slots = section_slots_;
+  if (slots.empty()) {
+    SectionSlot slot;
+    slot.page = page_setup_;
+    slot.header = header_;
+    slot.footer = footer_;
+    slots.push_back(std::move(slot));
+  } else if (active_section_ < slots.size()) {
+    slots[active_section_].page = page_setup_;
+    slots[active_section_].header = header_;
+    slots[active_section_].footer = footer_;
+  }
+  doc.page = slots[0].page;
+  doc.header = slots[0].header;
+  doc.footer = slots[0].footer;
+  Section carried;
+  carried.page = doc.page;
+  carried.header = doc.header;
+  carried.footer = doc.footer;
+  size_t id_at = 0;
+  for (const Paragraph& source : doc.paragraphs) {
+    if (source.section_break == SectionBreak::None)
+      continue;
+    Section section = carried;
+    const int id = id_at < break_ids.size() ? break_ids[id_at] : 0;
+    ++id_at;
+    const SectionSlot* match = nullptr;
+    for (const SectionSlot& slot : slots) {
+      if (id > 0 && slot.id == id) {
+        match = &slot;
+        break;
+      }
+    }
+    if (match != nullptr) {
+      section.page = match->page;
+      section.header = match->header;
+      section.footer = match->footer;
+    }
+    section.break_before = source.section_break;
+    section.page = clamp_page(section.page);
+    doc.sections.push_back(std::move(section));
+    carried = doc.sections.back();
+  }
   return doc;
 }
 
@@ -1882,6 +1974,16 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   header_ = doc.header;
   footer_ = doc.footer;
   notes_ = doc.notes;
+  adopt_sections(doc);
+  std::vector<int> sect_ids(doc.paragraphs.size(), 0);
+  size_t slot_at = 1;
+  for (size_t n = 1; n < doc.paragraphs.size(); ++n) {
+    if (doc.paragraphs[n].section_break == SectionBreak::None || doc.paragraphs[n].cell.table != 0)
+      continue;
+    if (slot_at < section_slots_.size())
+      sect_ids[n] = section_slots_[slot_at].id;
+    ++slot_at;
+  }
   image_pix_.clear();
   buffer_->set_text("");
   pending_para_set_ = false;
@@ -1959,10 +2061,18 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
       // Nothing else can hold the seam: a zero-length tag does not stick, and
       // applying it again on every layout never settles. The pad is one
       // character. capture() skips it, so the paragraph stays empty.
-      if (paragraph.page_break) {
+      if (paragraph.page_break || paragraph.section_break != SectionBreak::None) {
         Glib::ustring pad;
         pad.push_back(kPageBreakPad);
         buffer_->insert_with_tag(buffer_->end(), pad, para);
+      }
+    }
+    if (i < sect_ids.size() && sect_ids[i] > 0) {
+      const int para_to = buffer_->end().get_offset();
+      if (para_from < para_to) {
+        buffer_->apply_tag(sect_tag(paragraph.section_break, sect_ids[i]),
+                           buffer_->get_iter_at_offset(para_from),
+                           buffer_->get_iter_at_offset(para_to));
       }
     }
     apply_spacing_gap(para_from, buffer_->end().get_offset(), para_format(paragraph),
@@ -1982,6 +2092,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   // Spaced paragraph tags were added at the top of the table. Headings, the
   // draft gap, and the seams go back above them.
   raise_headings();
+  follow_caret_section();
   loading_ = false;
   list_lines_valid_ = false;
   refresh_stories();
@@ -2082,6 +2193,7 @@ void MainWindow::update_actions()
   sens(insert_table_item_, true);
   sens(table_insert_item_, true);
   sens(page_break_item_, true);
+  sens(section_break_item_, true);
   sens(footnote_item_, notes_.size() < static_cast<size_t>(kMaxNotes));
   const bool in_cell =
       buffer_ && (focused_sheet() || sheet_at_cursor() || para_at(cursor_offset()).cell.table != 0);
@@ -2303,6 +2415,7 @@ void MainWindow::on_mark_set(const Gtk::TextBuffer::iterator& /*location*/,
     return;
   sync_format_controls();
   update_actions();
+  follow_caret_section();
 }
 
 void MainWindow::note_insert(int start, int end)
@@ -2377,6 +2490,10 @@ void MainWindow::finish_pending()
     const Style* style = find_style(styles, landed.style);
     const int level = style && style->heading >= 1 && style->heading <= 6 ? style->heading : 0;
     set_heading(start, end, level);
+    // No newline, so this joined one paragraph. Text typed at the start of a
+    // section mark does not inherit it, and capture reads the mark on the
+    // paragraph's first character.
+    keep_section_tag(paragraph_start(start), paragraph_end(start));
   } else {
     head = first_end_para(copied_at(ends.front()), landing);
     set_para(head_from, ends.front() + 1, head);
@@ -4599,6 +4716,53 @@ bool MainWindow::final_paragraph_empty() const
   return true;
 }
 
+void MainWindow::keep_section_tag(int start, int end)
+{
+  // One section has no mark. A letter must not walk a paragraph to learn that.
+  if (!buffer_ || section_slots_.size() <= 1 || start >= end)
+    return;
+  SectionBreak kind = SectionBreak::None;
+  int id = 0;
+  bool found = false;
+  const int to = std::min(end, buffer_->get_char_count());
+  for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < to;
+       ++iter) {
+    if (sect_on(iter, kind, id) && id > 0) {
+      found = true;
+      break;
+    }
+  }
+  if (!found)
+    return;
+  buffer_->apply_tag(sect_tag(kind, id), buffer_->get_iter_at_offset(start),
+                     buffer_->get_iter_at_offset(to));
+}
+
+void MainWindow::clear_section_tags(int start, int end)
+{
+  if (!buffer_ || section_slots_.size() <= 1 || start >= end)
+    return;
+  const int to = std::min(end, buffer_->get_char_count());
+  std::vector<Glib::RefPtr<Gtk::TextTag>> tags;
+  for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < to;
+       ++iter) {
+    for (const auto& tag : iter.get_tags()) {
+      SectionBreak kind = SectionBreak::None;
+      int id = 0;
+      if (!parse_sect_name(tag_name(tag), kind, id))
+        continue;
+      if (std::find(tags.begin(), tags.end(), tag) == tags.end())
+        tags.push_back(tag);
+    }
+  }
+  if (tags.empty())
+    return;
+  const auto from = buffer_->get_iter_at_offset(start);
+  const auto stop = buffer_->get_iter_at_offset(to);
+  for (const auto& tag : tags)
+    buffer_->remove_tag(tag, from, stop);
+}
+
 void MainWindow::drop_page_break_pads()
 {
   // A pad beside a real character makes Backspace eat the pad first, and the
@@ -4624,6 +4788,10 @@ void MainWindow::drop_page_break_pads()
       else if (ch != '\n')
         real = true;
     }
+    // A new section's mark sits on the pad alone. Copy it onto the text
+    // before the pad goes, or capture no longer sees a section.
+    if (real && !here.empty())
+      keep_section_tag(start, end);
     if (real)
       pads.insert(pads.end(), here.begin(), here.end());
     else if (!here.empty())
@@ -4787,6 +4955,14 @@ void MainWindow::normalise_paragraphs()
     else
       keeper = paragraph_start(newline_at);
   }
+  // The two halves of this Enter. A newline in the paragraph above must not
+  // take the mark off the section that follows.
+  int sect_keeper = -1;
+  int sect_other = -1;
+  if (newline_at >= 0 && keeper >= 0) {
+    sect_keeper = paragraph_start(keeper);
+    sect_other = paragraph_start(newline_at) == newline_at ? newline_at : newline_at + 1;
+  }
   const bool keeper_break = keeper >= 0 && para_at(keeper).page_break;
   // Enter at the end of a sheet copies that break onto the new line. The
   // line's previous character is the sheet's own newline, so the landing
@@ -4846,6 +5022,12 @@ void MainWindow::normalise_paragraphs()
                             buffer_->get_iter_at_offset(end));
       buffer_->apply_tag(chosen, buffer_->get_iter_at_offset(begin),
                          buffer_->get_iter_at_offset(end));
+    }
+    if (sect_keeper >= 0 && begin < end) {
+      if (begin == sect_keeper)
+        keep_section_tag(begin, end);
+      else if (begin == sect_other)
+        clear_section_tags(begin, end);
     }
     carry = chosen;
     begin = end;
@@ -5157,7 +5339,15 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
       return;
     const Document before_doc = capture();
     Document after = before_doc;
-    std::vector<Paragraph>& target = story_target_ == 1 ? after.header : after.footer;
+    std::vector<Paragraph>* story_paragraphs = nullptr;
+    if (active_section_ == 0 || after.sections.empty())
+      story_paragraphs = story_target_ == 1 ? &after.header : &after.footer;
+    else if (active_section_ - 1 < after.sections.size())
+      story_paragraphs = story_target_ == 1 ? &after.sections[active_section_ - 1].header
+                                            : &after.sections[active_section_ - 1].footer;
+    if (story_paragraphs == nullptr)
+      return;
+    std::vector<Paragraph>& target = *story_paragraphs;
     std::vector<Paragraph> edited;
     for (size_t index : indexes) {
       if (index >= target.size())
@@ -6454,10 +6644,123 @@ int MainWindow::seam_extra_through(int offset) const
   return extra;
 }
 
+void MainWindow::adopt_sections(const Document& doc)
+{
+  section_slots_.clear();
+  SectionSlot first;
+  first.page = clamp_page(doc.page);
+  first.header = doc.header;
+  first.footer = doc.footer;
+  section_slots_.push_back(std::move(first));
+  for (const Section& section : doc.sections) {
+    SectionSlot slot;
+    slot.id = next_section_id_++;
+    if (slot.id <= 0)
+      slot.id = next_section_id_++;
+    slot.page = clamp_page(section.page);
+    slot.header = section.header;
+    slot.footer = section.footer;
+    section_slots_.push_back(std::move(slot));
+  }
+  active_section_ = 0;
+  section_para_start_ = -1;
+}
+
+Glib::RefPtr<Gtk::TextTag> MainWindow::sect_tag(SectionBreak kind, int id)
+{
+  const int code = kind == SectionBreak::Continuous ? 2 : 1;
+  const Glib::ustring name =
+      std::string("sect\x1f") + std::to_string(code) + "\x1f" + std::to_string(id);
+  auto table = buffer_->get_tag_table();
+  auto tag = table->lookup(name);
+  if (!tag) {
+    tag = Gtk::TextTag::create(name);
+    table->add(tag);
+  }
+  return tag;
+}
+
+bool MainWindow::sect_on(const Gtk::TextIter& iter, SectionBreak& kind, int& id) const
+{
+  kind = SectionBreak::None;
+  id = 0;
+  if (!buffer_)
+    return false;
+  for (const auto& tag : iter.get_tags()) {
+    if (parse_sect_name(tag_name(tag), kind, id))
+      return true;
+  }
+  return false;
+}
+
+void MainWindow::follow_caret_section()
+{
+  if (section_slots_.size() <= 1)
+    return;
+  if (!buffer_)
+    return;
+  const int offset = cursor_offset();
+  const int start = paragraph_start(offset);
+  if (start == section_para_start_)
+    return;
+  section_para_start_ = start;
+  size_t section = 0;
+  const int count = buffer_->get_char_count();
+  for (int at = 0; at <= start && at < count;) {
+    SectionBreak kind = SectionBreak::None;
+    int id = 0;
+    if (at > 0 && sect_on(buffer_->get_iter_at_offset(at), kind, id) && id > 0) {
+      for (size_t i = 1; i < section_slots_.size(); ++i) {
+        if (section_slots_[i].id == id) {
+          section = i;
+          break;
+        }
+      }
+    }
+    auto iter = buffer_->get_iter_at_offset(at);
+    const int next = next_paragraph_offset(iter);
+    if (next <= at)
+      break;
+    at = next;
+  }
+  if (section == active_section_ || section >= section_slots_.size())
+    return;
+  if (active_section_ < section_slots_.size()) {
+    section_slots_[active_section_].page = page_setup_;
+    section_slots_[active_section_].header = header_;
+    section_slots_[active_section_].footer = footer_;
+  }
+  active_section_ = section;
+  const SectionSlot& slot = section_slots_[section];
+  const bool page_differs = !(page_setup_ == slot.page);
+  page_setup_ = slot.page;
+  header_ = slot.header;
+  footer_ = slot.footer;
+  refresh_stories();
+  if (page_differs) {
+    styled_zoom_ = -1;
+    apply_page_size();
+  }
+}
+
 bool MainWindow::starts_sheet(int offset) const
 {
   const ParaFormat format = para_at(offset);
-  return format.page_break && format.cell.table == 0;
+  if (format.page_break && format.cell.table == 0)
+    return true;
+  if (section_slots_.size() <= 1 || format.cell.table != 0)
+    return false;
+  if (!buffer_)
+    return false;
+  const int count = buffer_->get_char_count();
+  if (count <= 0)
+    return false;
+  const int at = std::max(0, std::min(offset, count - 1));
+  SectionBreak kind = SectionBreak::None;
+  int id = 0;
+  if (!sect_on(buffer_->get_iter_at_offset(at), kind, id))
+    return false;
+  return kind == SectionBreak::NextPage;
 }
 
 bool MainWindow::has_page_break() const
