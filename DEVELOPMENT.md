@@ -173,7 +173,7 @@ Find and Replace are one modal dialog. Fields, in order: Find, Replace, a Match 
 | Page / Draft | Radio. Page is the default |
 | Header and Footer | Check. Off until a file has a header or a footer, which opens with it on. Not saved. Draft hides the areas and keeps the text |
 
-**Insert.** Picture…, Table…, Page Break, Footnote.
+**Insert.** Picture…, Table…, Page Break, Section Break…, Footnote.
 
 **Format.** Font…, Bold (Ctrl+B), Italic (Ctrl+I), Underline (Ctrl+U), Align Left, Center, Align Right, Justify, then Style…, Bullets, Numbering, Paragraph…, Columns…. Font… is family, size, bold, italic, underline, colour, strikethrough, superscript, and subscript. Superscript and subscript do not apply together. The colour list is Word 97's, including Automatic.
 
@@ -430,7 +430,9 @@ When the copied paragraph is a table cell, a drag in a cell also copies that cel
 | **3.0 M7 — Bookmarks** | A bookmark names a place. Insert it, and go to it. |
 | **3.0 M8 — Hyperlinks** | A hyperlink jumps to a bookmark in this document, or opens a path. |
 
-**3.0 M1 — Sections.** Insert → Break can start a new section, on the next page or continuous, as in Word 97. The section holds the page setup, the columns, and the header and footer that 1.0 stored for the whole document. A document with one section still saves as 1.0 saved it. RTF round-trips the break and the section's own setup.
+**3.0 M1 — Sections.** Insert → Section Break… starts a new section. The dialog is titled Break and offers Next page and Continuous, as in Word 97. Even-page and odd-page breaks in a file are read as next page, and a column break is read as continuous. The menu does not offer them. The section holds the page setup, the columns, and the header and footer that 1.0 stored for the whole document. A new section copies the previous section's page, columns, header, and footer. Page Setup and Columns write the section the caret is in. The header and the footer on screen follow the caret.
+
+A document with one section still saves as 1.0 saved it. A default one-section file has no `\sect`, `\sectd`, `\sbk`, `\pgwsxn`, `\lndscpsxn`, or `\paperw`. A file with more than one section writes `\sect` between the sections and each section's own setup, including `\cols` when that section has one column, so the section does not inherit the columns before it. A next-page section break starts a sheet. It is not a page break, and the file does not write `\page` for it. A continuous break does not start a sheet. A break inside a table is refused, and the status bar says "Cannot break inside a table." The screen and print use the caret's section paper, one size at a time. Mixed paper is stored and round-trips. It is not drawn as different sheet heights on one screen. RTF round-trips the break and the section's own setup.
 
 **3.0 M2 — Page numbers.** Insert → Page Numbers puts the number in the header or the footer, in the place Word 97 offers. The number on the sheet is the number that prints. A section can restart the count, or keep counting from the section before. The status bar's `Page n of m` stays the count of sheets. RTF round-trips the field.
 

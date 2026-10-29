@@ -1423,12 +1423,51 @@ bool operator!=(const Section& a, const Section& b)
   return !(a == b);
 }
 
-int break_section(Document&, int, SectionBreak)
+void align_sections(Document& doc)
 {
-  return -1;
+  if (doc.paragraphs.empty())
+    doc.paragraphs.emplace_back();
+  // Section 0 is Document::page. A break on the first paragraph would make
+  // that section empty, so the paragraph moves down behind a blank one.
+  if (doc.paragraphs[0].section_break != SectionBreak::None) {
+    Paragraph gap;
+    gap.style = doc.paragraphs[0].style;
+    doc.paragraphs.insert(doc.paragraphs.begin(), std::move(gap));
+  }
+  std::vector<Section> kept;
+  size_t section_at = 0;
+  for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+    Paragraph& paragraph = doc.paragraphs[i];
+    if (paragraph.section_break == SectionBreak::None)
+      continue;
+    const bool drop = paragraph.cell.table != 0;
+    Section section;
+    const bool have = section_at < doc.sections.size();
+    if (have)
+      section = doc.sections[section_at];
+    ++section_at;
+    if (drop) {
+      paragraph.section_break = SectionBreak::None;
+      continue;
+    }
+    if (!have) {
+      if (kept.empty()) {
+        section.page = doc.page;
+        section.header = doc.header;
+        section.footer = doc.footer;
+      } else {
+        section = kept.back();
+      }
+    }
+    if (paragraph.section_break != SectionBreak::NextPage &&
+        paragraph.section_break != SectionBreak::Continuous)
+      paragraph.section_break = SectionBreak::NextPage;
+    section.break_before = paragraph.section_break;
+    section.page = clamp_page(section.page);
+    kept.push_back(std::move(section));
+  }
+  doc.sections = std::move(kept);
 }
-
-void align_sections(Document&) {}
 
 int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap)
 {

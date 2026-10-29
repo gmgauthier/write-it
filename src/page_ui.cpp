@@ -2697,6 +2697,8 @@ void MainWindow::restore_cell_edit(const CellEdit& saved)
 void MainWindow::apply_document_page(PageSetup page)
 {
   page = clamp_page(page);
+  if (active_section_ < section_slots_.size())
+    section_slots_[active_section_].page = page;
   if (page_setup_ == page)
     return;
   page_setup_ = page;
@@ -2708,13 +2710,33 @@ void MainWindow::apply_document_page(PageSetup page)
 
 void MainWindow::install_stories(const Document& doc)
 {
-  if (!(page_setup_ == clamp_page(doc.page)))
-    apply_document_page(doc.page);
-  else
-    page_setup_ = clamp_page(doc.page);
-  header_ = doc.header;
-  footer_ = doc.footer;
+  const size_t want = doc.sections.size() + 1;
+  if (section_slots_.size() == want && !section_slots_.empty()) {
+    section_slots_[0].page = clamp_page(doc.page);
+    section_slots_[0].header = doc.header;
+    section_slots_[0].footer = doc.footer;
+    for (size_t i = 0; i < doc.sections.size(); ++i) {
+      section_slots_[i + 1].page = clamp_page(doc.sections[i].page);
+      section_slots_[i + 1].header = doc.sections[i].header;
+      section_slots_[i + 1].footer = doc.sections[i].footer;
+    }
+  } else {
+    adopt_sections(doc);
+  }
+  if (active_section_ >= section_slots_.size())
+    active_section_ = 0;
+  const SectionSlot& slot = section_slots_[active_section_];
   notes_ = doc.notes;
+  header_ = slot.header;
+  footer_ = slot.footer;
+  if (!(page_setup_ == slot.page)) {
+    page_setup_ = slot.page;
+    styled_zoom_ = -1;
+    apply_page_size();
+    ruler_.queue_draw();
+  } else {
+    page_setup_ = slot.page;
+  }
   refresh_stories();
 }
 
@@ -3712,10 +3734,15 @@ void MainWindow::on_story_end(std::vector<Paragraph>* story)
   std::vector<Paragraph> next;
   if (!blank_text(text))
     next = paragraphs_from_lines(text, typing_);
-  if (story == &header_)
-    after.header = next;
-  else
-    after.footer = next;
+  std::vector<Paragraph>* target = nullptr;
+  if (active_section_ == 0 || after.sections.empty())
+    target = story == &header_ ? &after.header : &after.footer;
+  else if (active_section_ - 1 < after.sections.size())
+    target = story == &header_ ? &after.sections[active_section_ - 1].header
+                               : &after.sections[active_section_ - 1].footer;
+  if (target == nullptr)
+    return;
+  *target = std::move(next);
   Gtk::Widget* focused = get_focus();
   if (blank_text(text)) {
     const bool was = loading_;
@@ -4047,7 +4074,7 @@ void MainWindow::on_page_setup()
     }
     Document before = capture();
     Document after = before;
-    after.page = next;
+    assign_section_page(after, next);
     commit_document(before, after);
     return;
   }
@@ -4119,7 +4146,7 @@ void MainWindow::on_columns()
     }
     Document before = capture();
     Document after = before;
-    after.page = next;
+    assign_section_page(after, next);
     commit_document(before, after);
     return;
   }
@@ -4240,6 +4267,123 @@ int break_page(Document& doc, int caret_offset)
   return caret;
 }
 
+int break_section(Document& doc, int caret_offset, SectionBreak kind)
+{
+  if (kind != SectionBreak::NextPage && kind != SectionBreak::Continuous)
+    return -1;
+  if (doc.paragraphs.empty())
+    doc.paragraphs.emplace_back();
+  if (caret_offset < 0)
+    caret_offset = 0;
+  size_t index = paragraph_at_offset(doc.paragraphs, caret_offset);
+  if (index >= doc.paragraphs.size())
+    index = doc.paragraphs.size() - 1;
+  // A section break has no meaning in a cell, including a caret past the
+  // table's anchor that the offset rules clamp into the last cell.
+  if (doc.paragraphs[index].cell.table != 0)
+    return -1;
+
+  const int origin = chars_before(doc.paragraphs, index);
+  int into = caret_offset - origin;
+  const int length = chars_of(doc.paragraphs[index]);
+  if (into < 0)
+    into = 0;
+  if (into > length)
+    into = length;
+
+  auto breaks_before = [&](size_t at) {
+    size_t count = 0;
+    const size_t end = std::min(at, doc.paragraphs.size());
+    for (size_t i = 0; i < end; ++i) {
+      if (doc.paragraphs[i].section_break != SectionBreak::None)
+        ++count;
+    }
+    return count;
+  };
+  auto insert_copy = [&](size_t at) {
+    Section section;
+    if (at == 0 || doc.sections.empty()) {
+      section.page = doc.page;
+      section.header = doc.header;
+      section.footer = doc.footer;
+    } else {
+      const size_t from = std::min(at - 1, doc.sections.size() - 1);
+      section.page = doc.sections[from].page;
+      section.header = doc.sections[from].header;
+      section.footer = doc.sections[from].footer;
+    }
+    section.break_before = kind;
+    section.page = clamp_page(section.page);
+    if (at > doc.sections.size())
+      at = doc.sections.size();
+    doc.sections.insert(doc.sections.begin() + static_cast<std::ptrdiff_t>(at), std::move(section));
+  };
+  auto start_section = [&](size_t at, bool already) {
+    doc.paragraphs[at].section_break = kind;
+    if (!already)
+      insert_copy(breaks_before(at));
+    align_sections(doc);
+    return chars_before(doc.paragraphs, at);
+  };
+
+  if (into == 0 && index == 0) {
+    if (doc.paragraphs[0].section_break == kind)
+      return -1;
+    const bool already = doc.paragraphs[0].section_break != SectionBreak::None;
+    const std::string style = doc.paragraphs[0].style;
+    Paragraph gap;
+    doc.paragraphs.insert(doc.paragraphs.begin(), std::move(gap));
+    apply_style(doc, 0, 0, style);
+    doc.paragraphs[0].page_break = false;
+    doc.paragraphs[0].section_break = SectionBreak::None;
+    doc.paragraphs[0].runs.clear();
+    doc.paragraphs[0].mark.reset();
+    return start_section(1, already);
+  }
+  if (into == 0) {
+    if (doc.paragraphs[index].section_break == kind)
+      return -1;
+    const bool already = doc.paragraphs[index].section_break != SectionBreak::None;
+    return start_section(index, already);
+  }
+  if (into == length && index + 1 == doc.paragraphs.size()) {
+    Paragraph next = doc.paragraphs[index];
+    next.runs.clear();
+    next.mark.reset();
+    next.page_break = false;
+    next.section_break = SectionBreak::None;
+    next.heading = 0;
+    doc.paragraphs.push_back(std::move(next));
+    const size_t added = doc.paragraphs.size() - 1;
+    const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+    apply_style(doc, added, added, style);
+    doc.paragraphs[added].page_break = false;
+    return start_section(added, false);
+  }
+  if (into == length && doc.paragraphs[index + 1].cell.table != 0) {
+    Paragraph gap;
+    const std::string style = next_style(style_sheet(doc), doc.paragraphs[index].style);
+    doc.paragraphs.insert(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                          std::move(gap));
+    apply_style(doc, index + 1, index + 1, style);
+    doc.paragraphs[index + 1].page_break = false;
+    return start_section(index + 1, false);
+  }
+  if (into == length) {
+    if (doc.paragraphs[index + 1].section_break == kind)
+      return -1;
+    const bool already = doc.paragraphs[index + 1].section_break != SectionBreak::None;
+    return start_section(index + 1, already);
+  }
+  Paragraph right;
+  split_at(doc.paragraphs[index], into, right);
+  right.page_break = false;
+  right.section_break = SectionBreak::None;
+  doc.paragraphs.insert(doc.paragraphs.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                        std::move(right));
+  return start_section(index + 1, false);
+}
+
 bool MainWindow::caret_in_table() const
 {
   if (!buffer_)
@@ -4275,6 +4419,74 @@ void MainWindow::on_page_break()
     return;
   }
   commit_document(before, after, caret);
+}
+
+void MainWindow::assign_section_page(Document& doc, PageSetup page) const
+{
+  page = clamp_page(page);
+  if (active_section_ == 0 || doc.sections.empty())
+    doc.page = page;
+  else if (active_section_ - 1 < doc.sections.size())
+    doc.sections[active_section_ - 1].page = page;
+}
+
+void MainWindow::insert_section_break(SectionBreak kind)
+{
+  if (!buffer_)
+    return;
+  if (caret_in_table()) {
+    message_.set_text("Cannot break inside a table.");
+    restore_edit_focus();
+    return;
+  }
+  if (message_.get_text() == "Cannot break inside a table.")
+    message_.set_text("");
+  Document before = capture();
+  if (before.paragraphs.empty())
+    before.paragraphs.emplace_back();
+  Document after = before;
+  const int caret = break_section(after, cursor_offset(), kind);
+  if (caret < 0) {
+    text_.grab_focus();
+    return;
+  }
+  commit_document(before, after, caret);
+}
+
+void MainWindow::on_section_break()
+{
+  if (!buffer_)
+    return;
+  if (caret_in_table()) {
+    message_.set_text("Cannot break inside a table.");
+    restore_edit_focus();
+    return;
+  }
+  Gtk::Dialog dialog("Break", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+  auto* next_page = Gtk::manage(new Gtk::RadioButton("Next page"));
+  auto* continuous = Gtk::manage(new Gtk::RadioButton("Continuous"));
+  Gtk::RadioButton::Group group = next_page->get_group();
+  continuous->set_group(group);
+  next_page->set_active(true);
+  auto* box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 6));
+  box->set_margin_top(12);
+  box->set_margin_bottom(12);
+  box->set_margin_start(12);
+  box->set_margin_end(12);
+  box->pack_start(*next_page, Gtk::PACK_SHRINK);
+  box->pack_start(*continuous, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*box, Gtk::PACK_SHRINK);
+  dialog.show_all_children();
+  if (dialog.run() != Gtk::RESPONSE_OK) {
+    text_.grab_focus();
+    return;
+  }
+  insert_section_break(continuous->get_active() ? SectionBreak::Continuous
+                                                : SectionBreak::NextPage);
 }
 
 void MainWindow::on_insert_table()

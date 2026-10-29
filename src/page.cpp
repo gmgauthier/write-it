@@ -195,6 +195,7 @@ void divide_paragraph(Paragraph& left, int at, Paragraph& right)
   right = left;
   right.runs.clear();
   right.page_break = false;
+  right.section_break = SectionBreak::None;
   right.mark.reset();
   if (at < 0)
     at = 0;
@@ -311,6 +312,7 @@ int replace_body(std::vector<Paragraph>& paragraphs, size_t from_at, int from_in
              paragraphs.begin() + static_cast<std::ptrdiff_t>(from_at));
 
   bool inherit_break = false;
+  SectionBreak inherit_section = SectionBreak::None;
   if (from_at < paragraphs.size() && paragraphs[from_at].cell.table == 0) {
     const int cut = clamped_into(paragraphs[from_at], from_into);
     if (cut > 0) {
@@ -320,12 +322,16 @@ int replace_body(std::vector<Paragraph>& paragraphs, size_t from_at, int from_in
       out.push_back(std::move(left));
     } else {
       inherit_break = paragraphs[from_at].page_break;
+      inherit_section = paragraphs[from_at].section_break;
     }
   }
 
   std::vector<Paragraph> placed = block;
   if (inherit_break && !placed.empty())
     placed[0].page_break = true;
+  if (inherit_section != SectionBreak::None && !placed.empty() && placed[0].cell.table == 0 &&
+      placed[0].section_break == SectionBreak::None)
+    placed[0].section_break = inherit_section;
   const size_t follow = out.size() + placed.size();
   out.insert(out.end(), placed.begin(), placed.end());
 
@@ -1089,6 +1095,7 @@ std::vector<Paragraph> table_slice_paragraphs(const TableSlice& slice)
         Paragraph body = paragraph;
         body.cell = Cell{};
         body.page_break = false;
+        body.section_break = SectionBreak::None;
         out.push_back(std::move(body));
         any = true;
       }

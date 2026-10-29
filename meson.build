@@ -476,6 +476,14 @@ write_it_page_ui_tests = executable(
 )
 test('page-ui', with_display, args: [write_it_page_ui_tests.full_path()], depends: write_it_page_ui_tests, timeout: 60, suite: 'ui')
 
+# Section breaks in the real window. The dialog is not opened.
+write_it_section_ui_tests = executable(
+  'write-it-section-ui-tests',
+  'tests/test_section_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('section-ui', with_display, args: [write_it_section_ui_tests.full_path()], depends: write_it_section_ui_tests, timeout: 60, is_parallel: false, suite: 'ui')
+
 write_it_rows_tests = executable(
   'write-it-rows-tests',
   'tests/test_rows.cpp',
