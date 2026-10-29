@@ -10,6 +10,8 @@ Reviewed 2026-10-21 against 2.4.0. The row and column specification is the secon
 
 Reviewed 2026-10-22 against 2.6.0. Row and column selection, row and column colour, and the format painter were checked against `DEVELOPMENT.md`. Three defects are in Closed, fixed in 2.6.1. The standing typing item stays open. Checked and left out: a letter still skips the page walk, the painter does not arm on a header, a footer, or a note, a column-edge drag does not paint, and a row or column colour does not set a cell's borders.
 
+Reviewed 2026-10-29 against 3.0.0. Sections were checked against the 3.0 M1 paragraph in `DEVELOPMENT.md`. Three defects are in Closed, fixed in 3.0.1. The standing typing item stays open. Checked and left out: mixed paper stays one sheet height, an even-page or odd-page break is read as next page, a column break is read as continuous, and the menu does not offer those. A letter still skips the page walk. A one-column section keeps the 720 twip gap. A one-section file still writes no section words.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -41,6 +43,33 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Deleting the paragraph above a section drops that section
+
+- Fixed in 3.0.1.
+- Severity: data-loss
+- Confidence: high
+- Where: `MainWindow::on_user_end` in `src/editor.cpp`. `capture()` keeps a section mark off the first paragraph.
+- Trigger: A next-page section follows a paragraph. Delete that paragraph, including the newline that ends it. Save.
+- Outcome: The mark stayed on the paragraph that was now first. The screen still started a sheet there. Save wrote no `\sect`, so the section was gone. The delete now leaves a blank first paragraph, and the break stays on the text that followed. Save writes `\sect` and `\sbkpage`, and no `\page`.
+
+### Deleting a section break brings that break back
+
+- Fixed in 3.0.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::drop_page_break_pads`, `MainWindow::finish_pending`, and `MainWindow::normalise_paragraphs` in `src/editor.cpp`.
+- Trigger: A next-page section follows a paragraph. Backspace at the start of that section, joining it to the paragraph above, or backspace from an empty section so the pad meets the paragraph above. Type a letter.
+- Outcome: The join removed the sheet, then the letter spread the leftover mark over the paragraph and the sheet returned. Backspace from an empty section copied the mark onto the paragraph above at once, and the page count gained a sheet. Save of a mark on the first paragraph wrote no `\sect` while the screen still started a sheet. The break now stays deleted. The next letter does not put the sheet back.
+
+### Undo of one section's page or header changes the section on screen
+
+- Fixed in 3.0.1.
+- Severity: data-loss
+- Confidence: high
+- Where: `MainWindow::commit_document` in `src/styles.cpp`. Page undo called `apply_document_page`, which writes the caret's section. Header undo wrote `header_` and `footer_`.
+- Trigger: Change the page setup or the header of a later section. Move the caret to an earlier section. Undo.
+- Outcome: The earlier section took the page or the header that the later section had before the edit, and the later section kept the change. Undo now restores the section that was edited. The section on screen stays as it is. Notes stay with the document. Undo while the caret is still in the edited section is unchanged.
 
 ### Enter or a deleted break in a cell rebinds the following paragraph's format
 

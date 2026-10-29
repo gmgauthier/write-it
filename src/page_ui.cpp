@@ -2694,11 +2694,16 @@ void MainWindow::restore_cell_edit(const CellEdit& saved)
   sync_format_controls();
 }
 
-void MainWindow::apply_document_page(PageSetup page)
+void MainWindow::apply_section_page(size_t section, PageSetup page)
 {
   page = clamp_page(page);
-  if (active_section_ < section_slots_.size())
-    section_slots_[active_section_].page = page;
+  if (section < section_slots_.size())
+    section_slots_[section].page = page;
+  else if (section != active_section_)
+    return;
+  // The caret is in another section. Its paper stays on the screen.
+  if (section != active_section_)
+    return;
   if (page_setup_ == page)
     return;
   page_setup_ = page;
@@ -2706,6 +2711,29 @@ void MainWindow::apply_document_page(PageSetup page)
   styled_zoom_ = -1;
   apply_page_size();
   ruler_.queue_draw();
+}
+
+void MainWindow::apply_document_page(PageSetup page)
+{
+  apply_section_page(active_section_, page);
+}
+
+void MainWindow::restore_section_stories(size_t section, std::vector<Paragraph> header,
+                                         std::vector<Paragraph> footer,
+                                         std::vector<std::vector<Paragraph>> notes)
+{
+  notes_ = std::move(notes);
+  if (section < section_slots_.size()) {
+    section_slots_[section].header = header;
+    section_slots_[section].footer = footer;
+  }
+  // One section's header is the document's. A later section's header stays
+  // in its slot while the caret is somewhere else.
+  if (section_slots_.size() <= 1 || section == active_section_) {
+    header_ = std::move(header);
+    footer_ = std::move(footer);
+  }
+  refresh_stories();
 }
 
 void MainWindow::install_stories(const Document& doc)

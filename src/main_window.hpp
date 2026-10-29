@@ -526,6 +526,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // it onto the paragraph that starts the section, and off the other half.
   void keep_section_tag(int start, int end);
   void clear_section_tags(int start, int end);
+  // A section mark left on the first character belongs on the paragraph
+  // below a blank one, as a break at the start of the document already does.
+  void hold_leading_section();
   // Gives each paragraph the user action touched one paragraph tag over all
   // of it; the rest are as the last action left them.
   void normalise_paragraphs();
@@ -589,7 +592,16 @@ class MainWindow : public Gtk::ApplicationWindow {
   void commit_document(const Document& before, const Document& after, int caret = -1,
                        bool typing = false);
   // Paper, header, footer, and notes. The buffer holds none of them.
+  // The page on screen changes only when `section` is the caret's section.
+  // A section that has been removed is left as it is.
+  void apply_section_page(size_t section, PageSetup page);
   void apply_document_page(PageSetup page);
+  // Header, footer, and notes of one section. Notes belong to the document.
+  // The header and footer on screen change only for the caret's section, or
+  // when the document has a single section.
+  void restore_section_stories(size_t section, std::vector<Paragraph> header,
+                               std::vector<Paragraph> footer,
+                               std::vector<std::vector<Paragraph>> notes);
   void install_stories(const Document& doc);
   void refresh_stories();
   // Put each footnote number beside the first line of that note. A label of
@@ -1217,6 +1229,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   int table_anchors_ = 0;
   // Offset of the first newline inserted by the open user action, or -1.
   int inserted_newline_at_ = -1;
+  // The open user action erased a newline. The section mark on the text that
+  // moved up is the break being deleted, and it must not spread.
+  bool erased_newline_ = false;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;

@@ -1080,6 +1080,10 @@ void MainWindow::build_editor()
             buffer_->get_slice(start, end, true).find('\n') != Glib::ustring::npos;
         if (structure)
           tabs_renumber_ = true;
+        // A deleted newline joins two paragraphs. Recorded before the text
+        // goes, and only for a real edit: loading and a pad drop are not one.
+        if (in_user_ && structure && !loading_ && !restoring_ && !dropping_pad_)
+          erased_newline_ = true;
         note_page_edit(start.get_line(), structure);
         const bool one_newline =
             structure && end.get_offset() == start.get_offset() + 1 && start.get_char() == '\n';
@@ -2358,6 +2362,7 @@ void MainWindow::on_user_begin()
   if (loading_ || restoring_ || dropping_pad_)
     return;
   inserted_newline_at_ = -1;
+  erased_newline_ = false;
   // A letter keeps the page height. A newline or a new paragraph format
   // clears this before the height is chosen.
   page_letter_ = true;
@@ -2375,6 +2380,9 @@ void MainWindow::on_user_end()
   drop_page_break_pads();
   finish_pending();
   normalise_paragraphs();
+  // Still inside the step, so Undo removes the blank line with the delete.
+  hold_leading_section();
+  erased_newline_ = false;
   if (pending_para_set_ && !final_paragraph_empty())
     pending_para_set_ = false;
   if (pending_mark_set_ && !final_paragraph_empty())
@@ -2492,8 +2500,10 @@ void MainWindow::finish_pending()
     set_heading(start, end, level);
     // No newline, so this joined one paragraph. Text typed at the start of a
     // section mark does not inherit it, and capture reads the mark on the
-    // paragraph's first character.
-    keep_section_tag(paragraph_start(start), paragraph_end(start));
+    // paragraph's first character. A deleted newline removed the break, so
+    // the mark must not spread back over the paragraph.
+    if (!erased_newline_)
+      keep_section_tag(paragraph_start(start), paragraph_end(start));
   } else {
     head = first_end_para(copied_at(ends.front()), landing);
     set_para(head_from, ends.front() + 1, head);
@@ -4716,6 +4726,24 @@ bool MainWindow::final_paragraph_empty() const
   return true;
 }
 
+void MainWindow::hold_leading_section()
+{
+  // One section has no mark. A letter must not walk to learn that.
+  if (!buffer_ || section_slots_.size() <= 1 || buffer_->get_char_count() == 0)
+    return;
+  SectionBreak kind = SectionBreak::None;
+  int id = 0;
+  const auto at = buffer_->get_iter_at_offset(0);
+  if (!sect_on(at, kind, id) || id <= 0)
+    return;
+  const auto para = para_tag_at(at);
+  section_para_start_ = -1;
+  buffer_->insert(buffer_->begin(), "\n");
+  if (para)
+    buffer_->apply_tag(para, buffer_->get_iter_at_offset(0), buffer_->get_iter_at_offset(1));
+  clear_section_tags(0, 1);
+}
+
 void MainWindow::keep_section_tag(int start, int end)
 {
   // One section has no mark. A letter must not walk a paragraph to learn that.
@@ -4789,8 +4817,9 @@ void MainWindow::drop_page_break_pads()
         real = true;
     }
     // A new section's mark sits on the pad alone. Copy it onto the text
-    // before the pad goes, or capture no longer sees a section.
-    if (real && !here.empty())
+    // before the pad goes, or capture no longer sees a section. A deleted
+    // newline is that section going away: the mark stays with the pad.
+    if (real && !here.empty() && !erased_newline_)
       keep_section_tag(start, end);
     if (real)
       pads.insert(pads.end(), here.begin(), here.end());
@@ -4931,6 +4960,9 @@ void MainWindow::normalise_paragraphs()
   // document.
   const int newline_at = inserted_newline_at_;
   inserted_newline_at_ = -1;
+  // A deleted break leaves its mark on the text that moved up. Enter is a
+  // different edit and keeps the mark on the half that already had it.
+  const bool joined = erased_newline_ && newline_at < 0;
   if (!touched_)
     return;
   touched_ = false;
@@ -5027,6 +5059,14 @@ void MainWindow::normalise_paragraphs()
       if (begin == sect_keeper)
         keep_section_tag(begin, end);
       else if (begin == sect_other)
+        clear_section_tags(begin, end);
+    } else if (joined && begin < end) {
+      // The first character did not start the section. The mark further
+      // along is the break that was deleted, and a later letter must not
+      // put it back on this paragraph.
+      SectionBreak kind = SectionBreak::None;
+      int id = 0;
+      if (!sect_on(buffer_->get_iter_at_offset(begin), kind, id) || id <= 0)
         clear_section_tags(begin, end);
     }
     carry = chosen;
