@@ -158,6 +158,29 @@ struct MainWindowProbe {
     buffer->insert_at_cursor(text);
     buffer->end_user_action();
   }
+
+  static void erase(MainWindow& window, int from, int to)
+  {
+    auto buffer = window.buffer_;
+    if (!buffer)
+      return;
+    if (from > to)
+      std::swap(from, to);
+    const int count = buffer->get_char_count();
+    from = std::max(0, from);
+    to = std::min(count, to);
+    if (from >= to)
+      return;
+    buffer->begin_user_action();
+    buffer->erase(buffer->get_iter_at_offset(from), buffer->get_iter_at_offset(to));
+    buffer->end_user_action();
+  }
+
+  // A burst of keys is one undo step. The next action has to stand alone.
+  static void split_typing(MainWindow& window)
+  {
+    window.last_typed_us_ = 0;
+  }
 };
 
 }  // namespace writeit
@@ -295,7 +318,7 @@ using Probe = writeit::MainWindowProbe;
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 185;
+constexpr int kChecks = 224;
 
 int main(int argc, char* argv[])
 {
@@ -828,6 +851,132 @@ int main(int argc, char* argv[])
           prefixed.sections[0].break_before == writeit::SectionBreak::NextPage);
     CHECK(Probe::page(window) == "Page 2 of 2");
     CHECK(Probe::sheet(window, writeit::chars_before(prefixed.paragraphs, 1)));
+
+    // Deleting the paragraph above a section used to leave the mark on what
+    // is now the first paragraph. Save then dropped the section.
+    writeit::Document lead;
+    lead.paragraphs.push_back(body("Before"));
+    lead.paragraphs.push_back(body("After"));
+    const int lead_at = writeit::chars_before(lead.paragraphs, 1);
+    CHECK(writeit::break_section(lead, lead_at, writeit::SectionBreak::NextPage) >= 0);
+    Probe::load(window, lead);
+    settle();
+    Probe::erase(window, 0, lead_at);
+    settle();
+    writeit::Document kept = Probe::doc(window);
+    const std::string kept_rtf = writeit::rtf_export(kept);
+    CHECK(story(kept.paragraphs) == "\nAfter");
+    CHECK(kept.paragraphs.size() == 2 &&
+          kept.paragraphs[0].section_break == writeit::SectionBreak::None &&
+          kept.paragraphs[1].section_break == writeit::SectionBreak::NextPage);
+    CHECK(kept.sections.size() == 1 &&
+          kept.sections[0].break_before == writeit::SectionBreak::NextPage);
+    CHECK(!Probe::sheet(window, 0));
+    CHECK(Probe::sheet(window, writeit::chars_before(kept.paragraphs, 1)));
+    CHECK(has_word(kept_rtf, "\\sect"));
+    CHECK(has_word(kept_rtf, "\\sbkpage"));
+    CHECK(!has_word(kept_rtf, "\\page"));
+
+    // Joining the section onto the paragraph above deletes the break. The
+    // next letter must not put the sheet back.
+    Probe::load(window, fresh);
+    settle();
+    Probe::caret(window, 5);
+    Probe::insert(window, writeit::SectionBreak::NextPage);
+    settle();
+    Probe::type(window, "After");
+    settle();
+    Probe::split_typing(window);
+    const int join_at = writeit::chars_before(Probe::doc(window).paragraphs, 1);
+    Probe::erase(window, join_at - 1, join_at);
+    settle();
+    writeit::Document joined = Probe::doc(window);
+    CHECK(story(joined.paragraphs) == "HelloAfter");
+    CHECK(joined.paragraphs.size() == 1 &&
+          joined.paragraphs[0].section_break == writeit::SectionBreak::None);
+    CHECK(joined.sections.empty());
+    CHECK(Probe::page(window) == "Page 1 of 1");
+    CHECK(!Probe::sheet(window, 0));
+    Probe::split_typing(window);
+    Probe::caret(window, 0);
+    Probe::type(window, "Z");
+    settle();
+    writeit::Document revived = Probe::doc(window);
+    CHECK(story(revived.paragraphs) == "ZHelloAfter");
+    CHECK(revived.sections.empty());
+    CHECK(revived.paragraphs.size() == 1 &&
+          revived.paragraphs[0].section_break == writeit::SectionBreak::None);
+    CHECK(Probe::page(window) == "Page 1 of 1");
+    CHECK(!Probe::sheet(window, 0));
+    CHECK(!has_word(writeit::rtf_export(revived), "\\sect"));
+    Probe::undo(window);
+    settle();
+    Probe::undo(window);
+    settle();
+    writeit::Document unjoined = Probe::doc(window);
+    CHECK(story(unjoined.paragraphs) == "Hello\nAfter");
+    CHECK(unjoined.paragraphs.size() == 2 &&
+          unjoined.paragraphs[1].section_break == writeit::SectionBreak::NextPage);
+    CHECK(unjoined.sections.size() == 1);
+    CHECK(Probe::page(window) == "Page 2 of 2");
+
+    // Backspace from an empty next-page section deletes that break too.
+    Probe::load(window, fresh);
+    settle();
+    Probe::caret(window, 5);
+    Probe::insert(window, writeit::SectionBreak::NextPage);
+    settle();
+    const int pad_at = writeit::chars_before(Probe::doc(window).paragraphs, 1);
+    Probe::erase(window, pad_at - 1, pad_at);
+    settle();
+    writeit::Document closed = Probe::doc(window);
+    CHECK(story(closed.paragraphs) == "Hello");
+    CHECK(closed.sections.empty());
+    CHECK(Probe::page(window) == "Page 1 of 1");
+    CHECK(!Probe::sheet(window, 0));
+    Probe::split_typing(window);
+    Probe::caret(window, 5);
+    Probe::type(window, "Z");
+    settle();
+    writeit::Document closed_typed = Probe::doc(window);
+    CHECK(story(closed_typed.paragraphs) == "HelloZ");
+    CHECK(closed_typed.sections.empty());
+    CHECK(Probe::page(window) == "Page 1 of 1");
+    CHECK(!Probe::sheet(window, 0));
+
+    // Undo of one section's page or header stays on that section.
+    Probe::load(window, mixed);
+    settle();
+    Probe::caret(window, after_at);
+    settle();
+    writeit::Document before_far = Probe::doc(window);
+    writeit::Document after_far = before_far;
+    writeit::PageSetup far_page = after_far.sections[0].page;
+    far_page.paper_width = 12240;
+    Probe::assign(window, after_far, far_page);
+    Probe::commit(window, before_far, after_far, after_at);
+    settle();
+    Probe::caret(window, 0);
+    settle();
+    Probe::undo(window);
+    settle();
+    writeit::Document far_back = Probe::doc(window);
+    CHECK(Probe::paper_width(window) == writeit::default_page().paper_width);
+    CHECK(far_back.page.paper_width == writeit::default_page().paper_width);
+    CHECK(far_back.sections.size() == 1 && far_back.sections[0].page.paper_width == 14000);
+    CHECK(Probe::header_text(window) == "H1");
+    Probe::caret(window, after_at);
+    settle();
+    Probe::set_header(window, "H2b");
+    settle();
+    Probe::caret(window, 0);
+    settle();
+    Probe::undo(window);
+    settle();
+    writeit::Document head_back = Probe::doc(window);
+    CHECK(Probe::header_text(window) == "H1");
+    CHECK(story(head_back.header) == "H1");
+    CHECK(head_back.sections.size() == 1 && story(head_back.sections[0].header) == "H2");
   }
   return suite_test::done("section-ui", kChecks);
 }

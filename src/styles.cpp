@@ -397,6 +397,9 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   const std::vector<Paragraph> old_header = header_;
   const std::vector<Paragraph> old_footer = footer_;
   const std::vector<std::vector<Paragraph>> old_notes = notes_;
+  // The section being edited. install_stories() can move the caret's section
+  // when the slot count changes. Undo belongs to the section that was edited.
+  const size_t edited_section = active_section_;
   bool replaced = false;
   {
     struct Suspend {
@@ -460,25 +463,21 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   }
   if (!(old_page == page_setup_)) {
     const PageSetup new_page = page_setup_;
-    undo_.record_custom([this, old_page] { apply_document_page(old_page); },
-                        [this, new_page] { apply_document_page(new_page); });
+    const size_t section = edited_section;
+    undo_.record_custom([this, old_page, section] { apply_section_page(section, old_page); },
+                        [this, new_page, section] { apply_section_page(section, new_page); });
   }
   if (old_header != header_ || old_footer != footer_ || old_notes != notes_) {
     const std::vector<Paragraph> new_header = header_;
     const std::vector<Paragraph> new_footer = footer_;
     const std::vector<std::vector<Paragraph>> new_notes = notes_;
+    const size_t section = edited_section;
     undo_.record_custom(
-        [this, old_header, old_footer, old_notes] {
-          header_ = old_header;
-          footer_ = old_footer;
-          notes_ = old_notes;
-          refresh_stories();
+        [this, old_header, old_footer, old_notes, section] {
+          restore_section_stories(section, old_header, old_footer, old_notes);
         },
-        [this, new_header, new_footer, new_notes] {
-          header_ = new_header;
-          footer_ = new_footer;
-          notes_ = new_notes;
-          refresh_stories();
+        [this, new_header, new_footer, new_notes, section] {
+          restore_section_stories(section, new_header, new_footer, new_notes);
         });
   }
   if (clamp_default_tab(before.default_tab) != clamp_default_tab(after.default_tab)) {
