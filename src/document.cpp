@@ -916,7 +916,8 @@ bool operator==(const Paragraph& a, const Paragraph& b)
   return a.heading == b.heading && a.style == b.style && a.indents == b.indents &&
          a.align == b.align && a.spacing == b.spacing && a.borders == b.borders &&
          a.shading == b.shading && a.tabs == b.tabs && a.list == b.list && a.cell == b.cell &&
-         a.page_break == b.page_break && same_runs(a.runs, b.runs) && same_mark(a, b);
+         a.page_break == b.page_break && a.section_break == b.section_break &&
+         same_runs(a.runs, b.runs) && same_mark(a, b);
 }
 
 namespace {
@@ -1397,7 +1398,7 @@ bool operator==(const Document& a, const Document& b)
         x.align != y.align || x.spacing != y.spacing || x.borders != y.borders ||
         x.shading != y.shading || x.tabs != y.tabs || x.list.kind != y.list.kind ||
         x.list.level != y.list.level || x.cell != y.cell || x.page_break != y.page_break ||
-        !same_runs(x.runs, y.runs) || !same_mark(x, y))
+        x.section_break != y.section_break || !same_runs(x.runs, y.runs) || !same_mark(x, y))
       return false;
     numbered = numbered || x.list.kind == ListKind::Number;
   }
@@ -1406,10 +1407,28 @@ bool operator==(const Document& a, const Document& b)
                    list_numbers(a.paragraphs) != list_numbers(b.paragraphs)))
     return false;
   if (!(a.page == b.page) || a.default_tab != b.default_tab || a.header != b.header ||
-      a.footer != b.footer || a.notes != b.notes)
+      a.footer != b.footer || a.sections != b.sections || a.notes != b.notes)
     return false;
   return style_sheet(a) == style_sheet(b);
 }
+
+bool operator==(const Section& a, const Section& b)
+{
+  return a.break_before == b.break_before && a.page == b.page && a.header == b.header &&
+         a.footer == b.footer;
+}
+
+bool operator!=(const Section& a, const Section& b)
+{
+  return !(a == b);
+}
+
+int break_section(Document&, int, SectionBreak)
+{
+  return -1;
+}
+
+void align_sections(Document&) {}
 
 int list_label_x(Align align, int hang_x, int text_x, int label_width, int space, int gap)
 {

@@ -461,6 +461,13 @@ write_it_page_tests = executable(
 )
 test('page', write_it_page_tests)
 
+write_it_section_tests = executable(
+  'write-it-section-tests',
+  'tests/test_section.cpp',
+  dependencies: [writeit_dep],
+)
+test('section', write_it_section_tests)
+
 # Page commands in the real window. Dialogs are not opened.
 write_it_page_ui_tests = executable(
   'write-it-page-ui-tests',
