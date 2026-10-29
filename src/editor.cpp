@@ -2490,6 +2490,10 @@ void MainWindow::finish_pending()
     const Style* style = find_style(styles, landed.style);
     const int level = style && style->heading >= 1 && style->heading <= 6 ? style->heading : 0;
     set_heading(start, end, level);
+    // No newline, so this joined one paragraph. Text typed at the start of a
+    // section mark does not inherit it, and capture reads the mark on the
+    // paragraph's first character.
+    keep_section_tag(paragraph_start(start), paragraph_end(start));
   } else {
     head = first_end_para(copied_at(ends.front()), landing);
     set_para(head_from, ends.front() + 1, head);
@@ -4712,6 +4716,53 @@ bool MainWindow::final_paragraph_empty() const
   return true;
 }
 
+void MainWindow::keep_section_tag(int start, int end)
+{
+  // One section has no mark. A letter must not walk a paragraph to learn that.
+  if (!buffer_ || section_slots_.size() <= 1 || start >= end)
+    return;
+  SectionBreak kind = SectionBreak::None;
+  int id = 0;
+  bool found = false;
+  const int to = std::min(end, buffer_->get_char_count());
+  for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < to;
+       ++iter) {
+    if (sect_on(iter, kind, id) && id > 0) {
+      found = true;
+      break;
+    }
+  }
+  if (!found)
+    return;
+  buffer_->apply_tag(sect_tag(kind, id), buffer_->get_iter_at_offset(start),
+                     buffer_->get_iter_at_offset(to));
+}
+
+void MainWindow::clear_section_tags(int start, int end)
+{
+  if (!buffer_ || section_slots_.size() <= 1 || start >= end)
+    return;
+  const int to = std::min(end, buffer_->get_char_count());
+  std::vector<Glib::RefPtr<Gtk::TextTag>> tags;
+  for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < to;
+       ++iter) {
+    for (const auto& tag : iter.get_tags()) {
+      SectionBreak kind = SectionBreak::None;
+      int id = 0;
+      if (!parse_sect_name(tag_name(tag), kind, id))
+        continue;
+      if (std::find(tags.begin(), tags.end(), tag) == tags.end())
+        tags.push_back(tag);
+    }
+  }
+  if (tags.empty())
+    return;
+  const auto from = buffer_->get_iter_at_offset(start);
+  const auto stop = buffer_->get_iter_at_offset(to);
+  for (const auto& tag : tags)
+    buffer_->remove_tag(tag, from, stop);
+}
+
 void MainWindow::drop_page_break_pads()
 {
   // A pad beside a real character makes Backspace eat the pad first, and the
@@ -4737,6 +4788,10 @@ void MainWindow::drop_page_break_pads()
       else if (ch != '\n')
         real = true;
     }
+    // A new section's mark sits on the pad alone. Copy it onto the text
+    // before the pad goes, or capture no longer sees a section.
+    if (real && !here.empty())
+      keep_section_tag(start, end);
     if (real)
       pads.insert(pads.end(), here.begin(), here.end());
     else if (!here.empty())
@@ -4900,6 +4955,14 @@ void MainWindow::normalise_paragraphs()
     else
       keeper = paragraph_start(newline_at);
   }
+  // The two halves of this Enter. A newline in the paragraph above must not
+  // take the mark off the section that follows.
+  int sect_keeper = -1;
+  int sect_other = -1;
+  if (newline_at >= 0 && keeper >= 0) {
+    sect_keeper = paragraph_start(keeper);
+    sect_other = paragraph_start(newline_at) == newline_at ? newline_at : newline_at + 1;
+  }
   const bool keeper_break = keeper >= 0 && para_at(keeper).page_break;
   // Enter at the end of a sheet copies that break onto the new line. The
   // line's previous character is the sheet's own newline, so the landing
@@ -4959,6 +5022,12 @@ void MainWindow::normalise_paragraphs()
                             buffer_->get_iter_at_offset(end));
       buffer_->apply_tag(chosen, buffer_->get_iter_at_offset(begin),
                          buffer_->get_iter_at_offset(end));
+    }
+    if (sect_keeper >= 0 && begin < end) {
+      if (begin == sect_keeper)
+        keep_section_tag(begin, end);
+      else if (begin == sect_other)
+        clear_section_tags(begin, end);
     }
     carry = chosen;
     begin = end;

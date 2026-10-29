@@ -522,6 +522,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool final_paragraph_empty() const;
   // Removes a page-break pad from any paragraph that also has real text.
   void drop_page_break_pads();
+  // The section mark is not part of the paragraph tag. Typing and Enter move
+  // it onto the paragraph that starts the section, and off the other half.
+  void keep_section_tag(int start, int end);
+  void clear_section_tags(int start, int end);
   // Gives each paragraph the user action touched one paragraph tag over all
   // of it; the rest are as the last action left them.
   void normalise_paragraphs();
