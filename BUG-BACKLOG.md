@@ -14,7 +14,7 @@ Reviewed 2026-10-29 against 3.0.0. Sections were checked against the 3.0 M1 para
 
 Reviewed 2026-10-30 against 3.0.1. Sections were checked again against the 3.0 M1 paragraph in `DEVELOPMENT.md`. Two defects are in Closed, fixed in 3.0.2. The standing typing item stays open. Checked and left out: undo of deleting the paragraph above a section puts that paragraph back, a newline inside a section is not a break, and deleting part of the paragraph above a section still deletes that section. Mixed paper stays one sheet height. A letter still skips the page walk.
 
-Reported 2026-10-30. Enter at the end of a line of two fonts opened the next line in the font the line started in. That defect is in Closed. The standing typing item stays open.
+Reported 2026-10-30. Enter at the end of a line of two fonts opened the next line in the font the line started in. That defect is in Closed, fixed in 3.0.3. The standing typing item stays open.
 
 ## Open
 
@@ -50,7 +50,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### Enter at the end of a mixed line resets the font
 
-- Fixed.
+- Fixed in 3.0.3.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::finish_pending` in `src/editor.cpp`. The newline that ends a line wears the line box's format, which is the first run when the sizes match. Enter left that newline as the next paragraph's mark.
