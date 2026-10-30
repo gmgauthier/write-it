@@ -2618,8 +2618,35 @@ void MainWindow::finish_pending()
     set_heading(ends.back() + 1, paragraph_end(ends.back() + 1),
                 tail_style ? tail_style->heading : 0);
   }
+  // Enter at the end of a paragraph. The line box keeps the largest size on
+  // the line, or the first run when the sizes match, and that format used to
+  // become the next paragraph's as well. A line that starts in one font and
+  // ends in another then opened the next line in the first font. The new
+  // paragraph takes the run the caret was in. A paragraph that already had a
+  // terminator keeps that character as the new mark. The last paragraph
+  // stores the run on the empty line. The line box above is left as it was.
+  const bool entered_at_end = end == start + 1 && applied_at(start) < 0 && start > 0 &&
+                              buffer_->get_iter_at_offset(start).get_char() == '\n' &&
+                              buffer_->get_iter_at_offset(start - 1).get_char() != '\n';
+  Run entered_carry{};
+  if (entered_at_end) {
+    entered_carry = format_of(buffer_->get_iter_at_offset(start - 1));
+    entered_carry.text.clear();
+    entered_carry.note = 0;
+    entered_carry.image.reset();
+  }
   clear_applied_fmt();
   tag_line_breaks(start, end);
+  if (!entered_at_end)
+    return;
+  const int count = buffer_->get_char_count();
+  if (start + 1 < count && buffer_->get_iter_at_offset(start + 1).get_char() == '\n') {
+    set_fmt(buffer_->get_iter_at_offset(start + 1), buffer_->get_iter_at_offset(start + 2),
+            format_tag(entered_carry));
+  } else if (start + 1 == count) {
+    pending_mark_ = entered_carry;
+    pending_mark_set_ = true;
+  }
 }
 
 Glib::RefPtr<Gtk::TextTag> MainWindow::first_end_para(
