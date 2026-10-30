@@ -1082,8 +1082,12 @@ void MainWindow::build_editor()
           tabs_renumber_ = true;
         // A deleted newline joins two paragraphs. Recorded before the text
         // goes, and only for a real edit: loading and a pad drop are not one.
-        if (in_user_ && structure && !loading_ && !restoring_ && !dropping_pad_)
+        if (in_user_ && structure && !loading_ && !restoring_ && !dropping_pad_) {
           erased_newline_ = true;
+          // The mark is still on the paragraph after the newline. Record the
+          // break this erase deletes before that text goes.
+          note_dropped_sections(start, end);
+        }
         note_page_edit(start.get_line(), structure);
         const bool one_newline =
             structure && end.get_offset() == start.get_offset() + 1 && start.get_char() == '\n';
@@ -2363,6 +2367,7 @@ void MainWindow::on_user_begin()
     return;
   inserted_newline_at_ = -1;
   erased_newline_ = false;
+  dropped_sections_.clear();
   // A letter keeps the page height. A newline or a new paragraph format
   // clears this before the height is chosen.
   page_letter_ = true;
@@ -2383,6 +2388,7 @@ void MainWindow::on_user_end()
   // Still inside the step, so Undo removes the blank line with the delete.
   hold_leading_section();
   erased_newline_ = false;
+  dropped_sections_.clear();
   if (pending_para_set_ && !final_paragraph_empty())
     pending_para_set_ = false;
   if (pending_mark_set_ && !final_paragraph_empty())
@@ -4766,6 +4772,76 @@ void MainWindow::keep_section_tag(int start, int end)
                      buffer_->get_iter_at_offset(to));
 }
 
+void MainWindow::note_dropped_sections(const Gtk::TextIter& start, const Gtk::TextIter& end)
+{
+  // One section has no mark. A backspace must not walk to learn that.
+  if (!buffer_ || section_slots_.size() <= 1)
+    return;
+  const int from = start.get_offset();
+  const int to = end.get_offset();
+  if (from >= to)
+    return;
+  for (auto iter = start; iter.compare(end) < 0; ++iter) {
+    if (iter.get_char() != '\n')
+      continue;
+    auto next = iter;
+    if (!next.forward_char())
+      continue;
+    SectionBreak kind = SectionBreak::None;
+    int id = 0;
+    if (!sect_on(next, kind, id) || id <= 0)
+      continue;
+    // The paragraph above the break. Deleting that whole paragraph keeps
+    // the section. Deleting only the break, or joining onto text that stays,
+    // removes it. An empty paragraph above is only the break.
+    bool body = false;
+    bool body_outside = false;
+    const int newline = iter.get_offset();
+    const int para = paragraph_start(newline);
+    for (int at = para; at < newline; ++at) {
+      const gunichar ch = buffer_->get_iter_at_offset(at).get_char();
+      if (ch == '\n' || ch == kPageBreakPad)
+        continue;
+      body = true;
+      if (at < from || at >= to)
+        body_outside = true;
+    }
+    if (body && !body_outside)
+      continue;
+    if (std::find(dropped_sections_.begin(), dropped_sections_.end(), id) ==
+        dropped_sections_.end())
+      dropped_sections_.push_back(id);
+  }
+}
+
+void MainWindow::remove_section_ids(int start, int end)
+{
+  if (!buffer_ || section_slots_.size() <= 1 || start >= end || dropped_sections_.empty())
+    return;
+  const int to = std::min(end, buffer_->get_char_count());
+  std::vector<Glib::RefPtr<Gtk::TextTag>> tags;
+  for (auto iter = buffer_->get_iter_at_offset(start); !iter.is_end() && iter.get_offset() < to;
+       ++iter) {
+    for (const auto& tag : iter.get_tags()) {
+      SectionBreak kind = SectionBreak::None;
+      int id = 0;
+      if (!parse_sect_name(tag_name(tag), kind, id))
+        continue;
+      if (std::find(dropped_sections_.begin(), dropped_sections_.end(), id) ==
+          dropped_sections_.end())
+        continue;
+      if (std::find(tags.begin(), tags.end(), tag) == tags.end())
+        tags.push_back(tag);
+    }
+  }
+  if (tags.empty())
+    return;
+  const auto from = buffer_->get_iter_at_offset(start);
+  const auto stop = buffer_->get_iter_at_offset(to);
+  for (const auto& tag : tags)
+    buffer_->remove_tag(tag, from, stop);
+}
+
 void MainWindow::clear_section_tags(int start, int end)
 {
   if (!buffer_ || section_slots_.size() <= 1 || start >= end)
@@ -5061,12 +5137,19 @@ void MainWindow::normalise_paragraphs()
       else if (begin == sect_other)
         clear_section_tags(begin, end);
     } else if (joined && begin < end) {
-      // The first character did not start the section. The mark further
-      // along is the break that was deleted, and a later letter must not
-      // put it back on this paragraph.
+      // A deleted break leaves its mark on the text that moved up. Drop that
+      // mark even when this paragraph already starts a section: that first
+      // mark is a different break and stays. Spread whatever mark remains,
+      // so deleting the text in front of it cannot uncover the one removed.
+      // No mark on the first character means the deleted break is the one
+      // that has to go, including a mark left further along the paragraph.
+      if (!dropped_sections_.empty())
+        remove_section_ids(begin, end);
       SectionBreak kind = SectionBreak::None;
       int id = 0;
-      if (!sect_on(buffer_->get_iter_at_offset(begin), kind, id) || id <= 0)
+      if (sect_on(buffer_->get_iter_at_offset(begin), kind, id) && id > 0)
+        keep_section_tag(begin, end);
+      else
         clear_section_tags(begin, end);
     }
     carry = chosen;

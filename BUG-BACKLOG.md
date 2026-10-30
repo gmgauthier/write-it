@@ -12,6 +12,8 @@ Reviewed 2026-10-22 against 2.6.0. Row and column selection, row and column colo
 
 Reviewed 2026-10-29 against 3.0.0. Sections were checked against the 3.0 M1 paragraph in `DEVELOPMENT.md`. Three defects are in Closed, fixed in 3.0.1. The standing typing item stays open. Checked and left out: mixed paper stays one sheet height, an even-page or odd-page break is read as next page, a column break is read as continuous, and the menu does not offer those. A letter still skips the page walk. A one-column section keeps the 720 twip gap. A one-section file still writes no section words.
 
+Reviewed 2026-10-30 against 3.0.1. Sections were checked again against the 3.0 M1 paragraph in `DEVELOPMENT.md`. Two defects are in Closed, fixed in 3.0.2. The standing typing item stays open. Checked and left out: undo of deleting the paragraph above a section puts that paragraph back, a newline inside a section is not a break, and deleting part of the paragraph above a section still deletes that section. Mixed paper stays one sheet height. A letter still skips the page walk.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -43,6 +45,24 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Backspace of the blank line in front of a section does nothing
+
+- Fixed in 3.0.2.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::hold_leading_section` and `MainWindow::normalise_paragraphs` in `src/editor.cpp`. A join cleared a section mark only when the paragraph's first character had none.
+- Trigger: A section starts at the beginning of the document, so a blank line sits in front of it. Backspace that line. The same line is what remains after the paragraph above a section is deleted. Backspace it, or delete it together with the first letter of the section. Type a letter.
+- Outcome: The blank line came back in the same keystroke, and the section stayed. A next-page break still started a sheet, and a continuous break stayed in the file. Save still wrote `\sect`. The break now stays deleted. The next letter does not put it back. Undo puts the blank line and the break back.
+
+### Joining a later section onto an earlier one brings the later section back
+
+- Fixed in 3.0.2.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::normalise_paragraphs` in `src/editor.cpp`. A join cleared section marks only when the paragraph's first character had none, so a second mark further along the paragraph stayed.
+- Trigger: Two next-page sections, the later one with its own paper and header. Delete only the newline in front of the later section. Delete the text of the earlier section, and type a letter.
+- Outcome: The join left the later mark on the text that moved up. The screen still showed the earlier section. Deleting the text in front of that mark made the later section the one that was saved: its paper and its header replaced the earlier section's. The later break now stays deleted. The earlier section's paper and header stay. Undo puts the later section back.
 
 ### Deleting the paragraph above a section drops that section
 

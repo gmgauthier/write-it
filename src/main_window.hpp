@@ -526,6 +526,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // it onto the paragraph that starts the section, and off the other half.
   void keep_section_tag(int start, int end);
   void clear_section_tags(int start, int end);
+  // Section ids whose break this erase is deleting. Cleared with the action.
+  void note_dropped_sections(const Gtk::TextIter& start, const Gtk::TextIter& end);
+  void remove_section_ids(int start, int end);
   // A section mark left on the first character belongs on the paragraph
   // below a blank one, as a break at the start of the document already does.
   void hold_leading_section();
@@ -1232,6 +1235,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The open user action erased a newline. The section mark on the text that
   // moved up is the break being deleted, and it must not spread.
   bool erased_newline_ = false;
+  // Section ids note_dropped_sections() recorded for this action. Empty when
+  // the document has one section, so a letter does not allocate.
+  std::vector<int> dropped_sections_;
   bool list_shifts_queued_ = false;
   bool shifting_ = false;
   sigc::connection list_shifts_idle_;
