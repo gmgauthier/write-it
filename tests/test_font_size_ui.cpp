@@ -83,6 +83,34 @@ struct MainWindowProbe {
   {
     return w.underline_item_;
   }
+  static Gtk::ComboBoxText& font_combo(MainWindow& w)
+  {
+    return w.font_combo_;
+  }
+  // The face the caret will type, as the font box offers it.
+  static void font_face(MainWindow& w, const std::string& name)
+  {
+    if (w.font_combo_.get_active_text() == name)
+      return;
+    w.font_combo_.set_active_text(name);
+    if (w.font_combo_.get_active_text() != name) {
+      w.font_combo_.append(name);
+      w.font_combo_.set_active_text(name);
+    }
+  }
+  // Enter as the text view takes it: the window's own key first, then the
+  // newline GTK inserts.
+  static void enter(MainWindow& w)
+  {
+    GdkEventKey event{};
+    event.type = GDK_KEY_PRESS;
+    event.keyval = GDK_KEY_Return;
+    if (w.on_text_key(&event))
+      return;
+    w.buffer_->begin_user_action();
+    w.buffer_->insert_interactive_at_cursor("\n");
+    w.buffer_->end_user_action();
+  }
 };
 
 }  // namespace writeit
@@ -137,6 +165,21 @@ void type(writeit::MainWindow& window, const char* text)
 std::string shown(writeit::MainWindow& window)
 {
   return MainWindowProbe::size_combo(window).get_active_text().raw();
+}
+
+std::string face_shown(writeit::MainWindow& window)
+{
+  return MainWindowProbe::font_combo(window).get_active_text().raw();
+}
+
+// Prints the face that was there, so a miss says which font won.
+bool face_at(writeit::MainWindow& window, int offset, const char* want, const char* where)
+{
+  const std::string got = MainWindowProbe::format_at(window, offset).font;
+  if (got == want)
+    return true;
+  std::cerr << where << ": font [" << got << "], wanted " << want << "\n";
+  return false;
 }
 
 int line_height(writeit::MainWindow& window, int offset)
@@ -350,7 +393,7 @@ struct Messages {
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 48;
+constexpr int kChecks = 69;
 
 int main(int argc, char* argv[])
 {
@@ -615,6 +658,154 @@ int main(int argc, char* argv[])
       CHECK(doc.paragraphs[1].mark && !doc.paragraphs[1].mark->bold &&
             doc.paragraphs[1].mark->italic);
     }
+
+    // Enter at the end of a line of two fonts keeps the font at the caret.
+    // The line starts in Sans and ends in Inconsolata. The new line is
+    // Inconsolata. It does not go back to the font the line started in.
+    auto clear_body = [&] {
+      buffer->select_range(buffer->begin(), buffer->end());
+      buffer->begin_user_action();
+      buffer->erase_selection(true, true);
+      buffer->end_user_action();
+      settle();
+      MainWindowProbe::text(window).grab_focus();
+    };
+    auto describe = [&](const char* where) {
+      const writeit::Document doc = MainWindowProbe::capture(window);
+      std::cerr << where << " story=[" << buffer->get_text().raw() << "] box=[" << face_shown(window)
+                << "]\n";
+      for (size_t i = 0; i < doc.paragraphs.size(); ++i) {
+        const writeit::Paragraph& paragraph = doc.paragraphs[i];
+        std::cerr << "  p" << i;
+        if (paragraph.mark)
+          std::cerr << " mark=" << paragraph.mark->font << "/" << paragraph.mark->size;
+        for (const writeit::Run& run : paragraph.runs)
+          std::cerr << " [" << run.text << " " << run.font << "/" << run.size << "]";
+        std::cerr << "\n";
+      }
+    };
+
+    // Typed: the second half is entered after the font changes, then Enter
+    // at the end of the document.
+    clear_body();
+    type(window, "This is a test ");
+    MainWindowProbe::font_face(window, "Inconsolata");
+    type(window, "this is a test");
+    CHECK(face_shown(window) == "Inconsolata");
+    CHECK(face_at(window, buffer->get_char_count() - 1, "Inconsolata", "typed-end"));
+    MainWindowProbe::enter(window);
+    settle();
+    if (face_shown(window) != "Inconsolata")
+      describe("after-enter-typed");
+    CHECK(face_shown(window) == "Inconsolata");
+    type(window, "Z");
+    if (!face_at(window, buffer->get_char_count() - 1, "Inconsolata", "typed-Z"))
+      describe("typed-Z");
+    CHECK(face_at(window, buffer->get_char_count() - 1, "Inconsolata", "typed-Z"));
+    {
+      const writeit::Document doc = MainWindowProbe::capture(window);
+      bool second = false;
+      bool first = false;
+      if (doc.paragraphs.size() >= 2) {
+        for (const writeit::Run& run : doc.paragraphs[0].runs) {
+          if (run.text.find("This is a test") != std::string::npos && run.font == "Sans")
+            first = true;
+          if (run.text.find("this is a test") != std::string::npos && run.font == "Inconsolata")
+            second = true;
+        }
+      }
+      CHECK(doc.paragraphs.size() == 2 && first && second);
+    }
+
+    // Selected: the second half is restyled, with another paragraph after
+    // the line, so the new line is an empty paragraph between them.
+    clear_body();
+    type(window, "This is a test this is a test\nNext");
+    {
+      const int split = 15;
+      buffer->select_range(buffer->get_iter_at_offset(split), buffer->get_iter_at_offset(29));
+      settle();
+      MainWindowProbe::font_face(window, "Inconsolata");
+      settle();
+      place(window, 29);
+      CHECK(face_shown(window) == "Inconsolata");
+      CHECK(face_at(window, 28, "Inconsolata", "selected-before"));
+      MainWindowProbe::enter(window);
+      settle();
+      if (face_shown(window) != "Inconsolata")
+        describe("after-enter-selected");
+      CHECK(face_shown(window) == "Inconsolata");
+      // The line above keeps the line box's font. The new line takes the
+      // font the caret was in.
+      CHECK(face_at(window, 29, "Sans", "line-box"));
+      CHECK(face_at(window, 30, "Inconsolata", "new-mark"));
+      {
+        const writeit::Document doc = MainWindowProbe::capture(window);
+        const bool mark = doc.paragraphs.size() >= 2 && doc.paragraphs[1].mark &&
+                          doc.paragraphs[1].mark->font == "Inconsolata" &&
+                          doc.paragraphs[1].mark->size == 20;
+        if (!mark)
+          describe("selected-mark");
+        CHECK(mark);
+      }
+      type(window, "Z");
+      {
+        const writeit::Document doc = MainWindowProbe::capture(window);
+        bool zee = false;
+        if (doc.paragraphs.size() >= 2) {
+          for (const writeit::Run& run : doc.paragraphs[1].runs) {
+            if (run.text == "Z" && run.font == "Inconsolata" && run.size == 20)
+              zee = true;
+          }
+        }
+        if (!zee)
+          describe("selected-Z");
+        CHECK(zee);
+      }
+      CHECK(face_at(window, 0, "Sans", "selected-start"));
+      MainWindowProbe::undo(window);
+      settle();
+      CHECK(buffer->get_text().raw() == "This is a test this is a test\nNext");
+      CHECK(face_at(window, 28, "Inconsolata", "undo-end"));
+    }
+
+    // The same split at the end of the document, with the second half
+    // restyled rather than typed in the new font.
+    clear_body();
+    type(window, "This is a test this is a test");
+    {
+      buffer->select_range(buffer->get_iter_at_offset(15), buffer->get_iter_at_offset(29));
+      settle();
+      MainWindowProbe::font_face(window, "Inconsolata");
+      settle();
+      place(window, 29);
+      CHECK(face_shown(window) == "Inconsolata");
+      MainWindowProbe::enter(window);
+      settle();
+      if (face_shown(window) != "Inconsolata")
+        describe("after-enter-last");
+      CHECK(face_shown(window) == "Inconsolata");
+      {
+        const writeit::Document doc = MainWindowProbe::capture(window);
+        const bool mark = doc.paragraphs.size() == 2 && doc.paragraphs[1].runs.empty() &&
+                          doc.paragraphs[1].mark && doc.paragraphs[1].mark->font == "Inconsolata";
+        if (!mark)
+          describe("last-mark");
+        CHECK(mark);
+      }
+      type(window, "Z");
+      CHECK(face_at(window, buffer->get_char_count() - 1, "Inconsolata", "last-Z"));
+    }
+
+    // One font on the line still carries onto the next line.
+    clear_body();
+    MainWindowProbe::font_face(window, "Inconsolata");
+    type(window, "only");
+    MainWindowProbe::enter(window);
+    settle();
+    CHECK(face_shown(window) == "Inconsolata");
+    type(window, "Q");
+    CHECK(face_at(window, buffer->get_char_count() - 1, "Inconsolata", "uniform-Q"));
 
     window.hide();
     settle();

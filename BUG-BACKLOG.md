@@ -14,6 +14,8 @@ Reviewed 2026-10-29 against 3.0.0. Sections were checked against the 3.0 M1 para
 
 Reviewed 2026-10-30 against 3.0.1. Sections were checked again against the 3.0 M1 paragraph in `DEVELOPMENT.md`. Two defects are in Closed, fixed in 3.0.2. The standing typing item stays open. Checked and left out: undo of deleting the paragraph above a section puts that paragraph back, a newline inside a section is not a break, and deleting part of the paragraph above a section still deletes that section. Mixed paper stays one sheet height. A letter still skips the page walk.
 
+Reported 2026-10-30. Enter at the end of a line of two fonts opened the next line in the font the line started in. That defect is in Closed, fixed in 3.0.3. The standing typing item stays open.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -45,6 +47,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Enter at the end of a mixed line resets the font
+
+- Fixed in 3.0.3.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::finish_pending` in `src/editor.cpp`. The newline that ends a line wears the line box's format, which is the first run when the sizes match. Enter left that newline as the next paragraph's mark.
+- Trigger: A line of two fonts, the caret at the end of the second. The first "this is a test" is Sans 10. The second is Inconsolata 10. Press Enter.
+- Outcome: The next line came out in Sans 10, the font at the start of the previous line. It now keeps the font at the caret, Inconsolata 10. The line above keeps its own line box. Undo removes the new line.
 
 ### Backspace of the blank line in front of a section does nothing
 
