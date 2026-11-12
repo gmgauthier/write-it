@@ -16,7 +16,7 @@ Reviewed 2026-10-30 against 3.0.1. Sections were checked again against the 3.0 M
 
 Reported 2026-10-30. Enter at the end of a line of two fonts opened the next line in the font the line started in. That defect is in Closed, fixed in 3.0.3. The standing typing item stays open.
 
-Reviewed 2026-11-12 against `write-it-test-document-1.rtf` and the page-number work. Two defects are in Closed. Checked and left out: the footnote groups sit on the marker's sheet (note 1 on sheet 1, notes 2 and 3 on sheet 2, note 4 on sheet 8). A caret in section 4 follows that section. Sections 2 and 3 store no page-number field. A new section copies the field; inserting a number later writes the caret's section only. The "4." in front of "Images work now" is the list label on the empty page-break paragraph.
+Reviewed 2026-11-12 against `write-it-test-document-1.rtf` and the page-number work. Two defects are in Closed, fixed in 3.1.0. Checked and left out: the footnote groups sit on the marker's sheet (note 1 on sheet 1, notes 2 and 3 on sheet 2, note 4 on sheet 8). A caret in section 4 follows that section. Sections 2 and 3 store no page-number field. A new section copies the field; inserting a number later writes the caret's section only. The "4." in front of "Images work now" is the list label on the empty page-break paragraph.
 
 ## Open
 
@@ -52,7 +52,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### Page numbers are painted on the wrong sheets
 
-- Fixed.
+- Fixed in 3.1.0.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::draw_page_numbers` in `src/editor.cpp`. A seam tag is named for the leftover height of the sheet above it. The tag table is not buffer order.
@@ -61,7 +61,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### Enter after a new page break starts another sheet
 
-- Fixed.
+- Fixed in 3.1.0.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::normalise_paragraphs` in `src/editor.cpp`. Enter at the start of an empty page break kept the break on the pad, which is the new line.
