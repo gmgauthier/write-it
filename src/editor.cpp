@@ -761,12 +761,12 @@ bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacin
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  const bool keep = !run.text.empty() || run.image || run.note != 0;
+  const bool keep = !run.text.empty() || run.image || run.note != 0 || run.page;
   if (!keep)
     return;
-  const bool mergeable = !run.image && run.note == 0 && !paragraph.runs.empty() &&
-                         !paragraph.runs.back().image && paragraph.runs.back().note == 0 &&
-                         same_format(paragraph.runs.back(), run);
+  const bool mergeable = !run.page && !run.image && run.note == 0 && !paragraph.runs.empty() &&
+                         !paragraph.runs.back().page && !paragraph.runs.back().image &&
+                         paragraph.runs.back().note == 0 && same_format(paragraph.runs.back(), run);
   if (mergeable)
     paragraph.runs.back().text += run.text;
   else
@@ -1925,10 +1925,12 @@ Document MainWindow::capture() const
   doc.page = slots[0].page;
   doc.header = slots[0].header;
   doc.footer = slots[0].footer;
+  doc.numbering = slots[0].numbering;
   Section carried;
   carried.page = doc.page;
   carried.header = doc.header;
   carried.footer = doc.footer;
+  carried.numbering = doc.numbering;
   size_t id_at = 0;
   for (const Paragraph& source : doc.paragraphs) {
     if (source.section_break == SectionBreak::None)
@@ -1947,6 +1949,10 @@ Document MainWindow::capture() const
       section.page = match->page;
       section.header = match->header;
       section.footer = match->footer;
+      section.numbering = match->numbering;
+    } else {
+      section.numbering.restart = false;
+      section.numbering.start = 1;
     }
     section.break_before = source.section_break;
     section.page = clamp_page(section.page);
@@ -5083,12 +5089,27 @@ void MainWindow::normalise_paragraphs()
   // stays on the paragraph that already started the sheet: the text, when
   // the newline was inserted at its start, otherwise the paragraph that
   // contains the newline. The other half does not start another sheet.
+  // An empty page break is the sheet itself. Enter there adds a line on
+  // that sheet. The break does not follow the caret onto the new line.
   int keeper = -1;
+  int blank_keep = -1;
+  int blank_drop = -1;
   if (newline_at >= 0) {
-    if (paragraph_start(newline_at) == newline_at)
-      keeper = newline_at + 1;
-    else
+    if (paragraph_start(newline_at) == newline_at) {
+      const int follow = newline_at + 1;
+      if (follow < count) {
+        const int follow_end = paragraph_end(follow);
+        const Glib::ustring slice = buffer_->get_slice(
+            buffer_->get_iter_at_offset(follow), buffer_->get_iter_at_offset(follow_end), true);
+        if (paragraph_is_blank_item(slice) && para_at(follow).page_break) {
+          blank_keep = newline_at;
+          blank_drop = follow;
+        }
+      }
+      keeper = blank_keep >= 0 ? blank_keep : follow;
+    } else {
       keeper = paragraph_start(newline_at);
+    }
   }
   // The two halves of this Enter. A newline in the paragraph above must not
   // take the mark off the section that follows.
@@ -5112,6 +5133,10 @@ void MainWindow::normalise_paragraphs()
   // A break with no character stays pending: that tail is the sheet.
   if (newline_at >= 0 && newline_at + 1 >= count && pending_para_set_ &&
       paragraph_start(newline_at) != newline_at)
+    pending_para_.page_break = false;
+  // The empty sheet's break lived in the pending mark as well as on the pad.
+  // Leaving it there puts the break on the new line capture() reads back.
+  if (blank_keep >= 0 && pending_para_set_)
     pending_para_.page_break = false;
   normalising_ = true;
   while (begin < count && begin <= last) {
@@ -5144,6 +5169,26 @@ void MainWindow::normalise_paragraphs()
       uniform = false;
     }
     if (chosen && ((keeper_break && begin != keeper) || (strip_new_end && begin == newline_at))) {
+      ParaFormat format;
+      if (parse_para(tag_name(chosen), format) && format.page_break) {
+        format.page_break = false;
+        chosen = para_tag(format);
+        uniform = false;
+      }
+    }
+    // The pad kept the break and the new line above it had none. The sheet
+    // starts where it did. The line Enter added does not.
+    if (blank_keep >= 0 && begin == blank_keep) {
+      ParaFormat format;
+      if (!chosen || !parse_para(tag_name(chosen), format))
+        format = ParaFormat{};
+      if (!format.page_break) {
+        format.page_break = true;
+        chosen = para_tag(format);
+        uniform = false;
+      }
+    }
+    if (blank_drop >= 0 && begin == blank_drop && chosen) {
       ParaFormat format;
       if (parse_para(tag_name(chosen), format) && format.page_break) {
         format.page_break = false;
@@ -6799,6 +6844,7 @@ void MainWindow::adopt_sections(const Document& doc)
   section_slots_.clear();
   SectionSlot first;
   first.page = clamp_page(doc.page);
+  first.numbering = canonical_page_numbering(doc.numbering);
   first.header = doc.header;
   first.footer = doc.footer;
   section_slots_.push_back(std::move(first));
@@ -6808,6 +6854,7 @@ void MainWindow::adopt_sections(const Document& doc)
     if (slot.id <= 0)
       slot.id = next_section_id_++;
     slot.page = clamp_page(section.page);
+    slot.numbering = canonical_page_numbering(section.numbering);
     slot.header = section.header;
     slot.footer = section.footer;
     section_slots_.push_back(std::move(slot));
@@ -8333,6 +8380,256 @@ void MainWindow::draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr)
   }
 }
 
+std::string MainWindow::caret_page_label() const
+{
+  if (page_number_marks_.empty())
+    return "1";
+  int sheet = seam_sheets_valid_ ? std::max(1, seam_caret_page_) : 1;
+  if (sheet > static_cast<int>(page_number_marks_.size()))
+    sheet = static_cast<int>(page_number_marks_.size());
+  const PageNumberMark& mark = page_number_marks_[static_cast<size_t>(sheet - 1)];
+  if (!mark.footer_label.empty())
+    return mark.footer_label;
+  if (!mark.header_label.empty())
+    return mark.header_label;
+  return "#";
+}
+
+void MainWindow::rebuild_page_numbers()
+{
+  page_field_on_ = false;
+  page_number_marks_.clear();
+  struct Field {
+    bool on = false;
+    PageSlot slot = PageSlot::Right;
+    std::string font = "Sans";
+    double size = 11;
+  };
+  auto field_of = [](const std::vector<Paragraph>& story) {
+    Field field;
+    for (const Paragraph& paragraph : story) {
+      for (const Run& run : paragraph.runs) {
+        if (!run.page)
+          continue;
+        field.on = true;
+        field.slot = run.page_slot;
+        field.font = run.font.empty() ? "Sans" : run.font;
+        field.size = run.size;
+        return field;
+      }
+    }
+    return field;
+  };
+  std::vector<PageNumbering> numbering;
+  std::vector<Field> headers;
+  std::vector<Field> footers;
+  auto push = [&](const PageNumbering& num, const std::vector<Paragraph>& header,
+                  const std::vector<Paragraph>& footer) {
+    numbering.push_back(canonical_page_numbering(num));
+    headers.push_back(field_of(header));
+    footers.push_back(field_of(footer));
+    if (headers.back().on || footers.back().on)
+      page_field_on_ = true;
+  };
+  if (section_slots_.empty())
+    push(PageNumbering{}, header_, footer_);
+  else
+    for (const SectionSlot& slot : section_slots_)
+      push(slot.numbering, slot.header, slot.footer);
+  if (!page_field_on_)
+    return;
+  std::vector<int> starts(numbering.size(), 0);
+  const int sheets = std::max(1, seam_sheets_valid_ ? seam_sheets_ : 1);
+  if (seam_lines_valid_ && buffer_ && section_slots_.size() > 1) {
+    const int count = buffer_->get_char_count();
+    for (const SeamLine& line : seam_lines_) {
+      if (line.start <= 0 || line.page <= 0 || count <= 0)
+        continue;
+      const int at = std::min(line.start, count - 1);
+      SectionBreak kind = SectionBreak::None;
+      int id = 0;
+      if (!sect_on(buffer_->get_iter_at_offset(at), kind, id) || id <= 0)
+        continue;
+      for (size_t i = 1; i < section_slots_.size() && i < starts.size(); ++i) {
+        if (section_slots_[i].id != id)
+          continue;
+        starts[i] = line.page - 1;
+        break;
+      }
+    }
+  }
+  const std::vector<PrintedPage> printed = printed_pages(sheets, starts, numbering);
+  page_number_marks_.resize(printed.size());
+  for (size_t sheet = 0; sheet < printed.size(); ++sheet) {
+    int sec = 0;
+    for (int i = 0; i < static_cast<int>(starts.size()); ++i) {
+      if (starts[static_cast<size_t>(i)] <= static_cast<int>(sheet))
+        sec = i;
+    }
+    PageNumberMark& mark = page_number_marks_[sheet];
+    mark.number = printed[sheet].number;
+    if (sec >= 0 && sec < static_cast<int>(headers.size()) &&
+        headers[static_cast<size_t>(sec)].on) {
+      const Field& field = headers[static_cast<size_t>(sec)];
+      mark.header_label = printed[sheet].label;
+      mark.header_slot = field.slot;
+      mark.header_font = field.font;
+      mark.header_size = field.size;
+    }
+    if (sec >= 0 && sec < static_cast<int>(footers.size()) &&
+        footers[static_cast<size_t>(sec)].on) {
+      const Field& field = footers[static_cast<size_t>(sec)];
+      mark.footer_label = printed[sheet].label;
+      mark.footer_slot = field.slot;
+      mark.footer_font = field.font;
+      mark.footer_size = field.size;
+    }
+  }
+}
+
+void MainWindow::sync_page_field_views()
+{
+  if (!page_field_on_ || loading_ || restoring_)
+    return;
+  if (header_view_.has_focus() || footer_view_.has_focus())
+    return;
+  const std::string label = caret_page_label();
+  auto refill = [&](Gtk::TextView& view, const std::vector<Paragraph>& story, std::string& shown) {
+    if (!story_has_page(story))
+      return;
+    const std::string text = story_field_text(story, label);
+    auto buffer = view.get_buffer();
+    if (!buffer || buffer->get_text().raw() != shown || shown == text)
+      return;
+    const bool was = loading_;
+    loading_ = true;
+    buffer->set_text(text);
+    shown = text;
+    loading_ = was;
+  };
+  refill(header_view_, header_, header_shown_);
+  refill(footer_view_, footer_, footer_shown_);
+}
+
+void MainWindow::draw_page_numbers(const Cairo::RefPtr<Cairo::Context>& cr)
+{
+  if (view_ != ViewMode::Page || !page_field_on_ || page_number_marks_.empty() || !buffer_)
+    return;
+  const ViewGeometry sheet = geometry();
+  const int width = text_.get_allocated_width();
+  const int margin_y = std::max(0, sheet.margin_y);
+  const int margin_bottom = std::max(0, sheet.margin_bottom);
+  const int margin_left = std::max(0, sheet.margin_left);
+  const int margin_right = std::max(0, sheet.margin_right);
+  const int count = static_cast<int>(page_number_marks_.size());
+  std::vector<int> header_y(static_cast<size_t>(count), -1);
+  std::vector<int> footer_y(static_cast<size_t>(count), -1);
+  header_y[0] = 2;
+  footer_y[static_cast<size_t>(count - 1)] =
+      std::max(2, text_.get_allocated_height() - margin_bottom + 2);
+  if (count > 1) {
+    // Each leftover height is its own tag. The tag table is not buffer order,
+    // and a number walked in that order lands on the wrong sheet.
+    struct SeamPlace {
+      int offset = 0;
+      Gtk::TextIter at;
+    };
+    std::vector<SeamPlace> places;
+    buffer_->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+      if (!is_page_seam(tag_name(tag)))
+        return;
+      Gtk::TextIter iter = buffer_->begin();
+      while (true) {
+        if (!iter.has_tag(tag) && !iter.forward_to_tag_toggle(tag))
+          break;
+        if (!iter.has_tag(tag))
+          break;
+        Gtk::TextIter range_end = iter;
+        if (!range_end.forward_to_tag_toggle(tag))
+          range_end = buffer_->end();
+        auto push = [&](const Gtk::TextIter& at) {
+          if (seam_at(at) <= 0)
+            return;
+          places.push_back(SeamPlace{at.get_offset(), at});
+        };
+        push(iter);
+        Gtk::TextIter match_start;
+        Gtk::TextIter match_end;
+        while (iter.forward_search("\n", Gtk::TEXT_SEARCH_TEXT_ONLY, match_start, match_end) &&
+               match_end.compare(range_end) < 0 && !match_end.is_end()) {
+          push(match_end);
+          iter = match_end;
+        }
+        iter = range_end;
+      }
+    });
+    std::sort(places.begin(), places.end(),
+              [](const SeamPlace& a, const SeamPlace& b) { return a.offset < b.offset; });
+    int next = 1;
+    int previous = -1;
+    auto take = [&](const Gtk::TextIter& at) {
+      if (next >= count)
+        return;
+      const int seam = seam_at(at);
+      if (seam <= 0)
+        return;
+      int top = 0;
+      int height = 0;
+      text_.get_line_yrange(at, top, height);
+      int window_x = 0;
+      int gray_window = 0;
+      const int gray_y = top + seam - sheet.gap - margin_y;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, gray_y, window_x, gray_window);
+      footer_y[static_cast<size_t>(next - 1)] = gray_window - margin_bottom + 2;
+      int header_window = 0;
+      text_.buffer_to_window_coords(Gtk::TEXT_WINDOW_WIDGET, 0, top + seam - margin_y + 2, window_x,
+                                    header_window);
+      header_y[static_cast<size_t>(next)] = header_window;
+      page_number_marks_[static_cast<size_t>(next - 1)].footer_seam = at.get_offset();
+      page_number_marks_[static_cast<size_t>(next)].header_seam = at.get_offset();
+      ++next;
+    };
+    for (const SeamPlace& place : places) {
+      if (place.offset == previous)
+        continue;
+      previous = place.offset;
+      take(place.at);
+    }
+  }
+  Gdk::Rectangle visible;
+  text_.get_visible_rect(visible);
+  const double zoom = zoom_factor();
+  auto paint = [&](const std::string& label, PageSlot slot, int number, const std::string& font,
+                   double size, int y) {
+    if (label.empty() || y < visible.get_y() - 40 || y > visible.get_y() + visible.get_height())
+      return;
+    auto layout = text_.create_pango_layout(label);
+    Pango::FontDescription desc;
+    desc.set_family(font.empty() ? "Sans" : font);
+    desc.set_size(static_cast<int>(std::max(1.0, size) * zoom * PANGO_SCALE));
+    layout->set_font_description(desc);
+    int layout_w = 0;
+    int layout_h = 0;
+    layout->get_pixel_size(layout_w, layout_h);
+    int x = margin_left;
+    const PageSide side = page_number_side(slot, number);
+    if (side == PageSide::Center)
+      x = std::max(0, (width - layout_w) / 2);
+    else if (side == PageSide::Right)
+      x = std::max(0, width - margin_right - layout_w);
+    cr->set_source_rgb(0, 0, 0);
+    cr->move_to(x, y);
+    layout->show_in_cairo_context(cr);
+  };
+  for (int i = 0; i < count; ++i) {
+    const PageNumberMark& mark = page_number_marks_[static_cast<size_t>(i)];
+    paint(mark.header_label, mark.header_slot, mark.number, mark.header_font, mark.header_size,
+          header_y[static_cast<size_t>(i)]);
+    paint(mark.footer_label, mark.footer_slot, mark.number, mark.footer_font, mark.footer_size,
+          footer_y[static_cast<size_t>(i)]);
+  }
+}
+
 void MainWindow::draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr)
 {
   if (!buffer_)
@@ -8928,6 +9225,7 @@ bool MainWindow::on_text_draw(const Cairo::RefPtr<Cairo::Context>& cr)
   // The gray between sheets. Painted after the text, so the text view's
   // white does not cover it. Nothing is typed in that band.
   draw_page_seams(cr);
+  draw_page_numbers(cr);
   // A border-only document still draws. Lists are painted after this.
   draw_paragraph_borders(cr);
   draw_tab_marks(text_, cr, false);

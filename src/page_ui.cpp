@@ -149,7 +149,7 @@ bool story_present(const std::vector<Paragraph>& story)
 {
   for (const Paragraph& paragraph : story) {
     for (const Run& run : paragraph.runs) {
-      if (run.image || run.note != 0 || !blank_text(run.text))
+      if (run.page || run.image || run.note != 0 || !blank_text(run.text))
         return true;
     }
   }
@@ -178,6 +178,7 @@ Run plain_run(const Run& typing, const std::string& text)
   run.text = text;
   run.note = 0;
   run.image.reset();
+  run.page = false;
   run.direct = 0;
   return run;
 }
@@ -271,14 +272,14 @@ void insert_run(Paragraph& paragraph, int at, const Run& incoming)
   for (const Run& run : paragraph.runs) {
     const int n = chars_of(run);
     if (placed || at >= seen + n) {
-      if (!run.text.empty() || run.image || run.note != 0)
+      if (!run.text.empty() || run.image || run.note != 0 || run.page)
         runs.push_back(run);
       seen += n;
       continue;
     }
-    if (at == seen || run.image) {
+    if (at == seen || run.image || run.page) {
       runs.push_back(incoming);
-      if (!run.text.empty() || run.image || run.note != 0)
+      if (!run.text.empty() || run.image || run.note != 0 || run.page)
         runs.push_back(run);
       placed = true;
       seen += n;
@@ -2741,10 +2742,12 @@ void MainWindow::install_stories(const Document& doc)
   const size_t want = doc.sections.size() + 1;
   if (section_slots_.size() == want && !section_slots_.empty()) {
     section_slots_[0].page = clamp_page(doc.page);
+    section_slots_[0].numbering = canonical_page_numbering(doc.numbering);
     section_slots_[0].header = doc.header;
     section_slots_[0].footer = doc.footer;
     for (size_t i = 0; i < doc.sections.size(); ++i) {
       section_slots_[i + 1].page = clamp_page(doc.sections[i].page);
+      section_slots_[i + 1].numbering = canonical_page_numbering(doc.sections[i].numbering);
       section_slots_[i + 1].header = doc.sections[i].header;
       section_slots_[i + 1].footer = doc.sections[i].footer;
     }
@@ -3160,6 +3163,7 @@ void MainWindow::on_story_draw(Gtk::TextView& view, const Cairo::RefPtr<Cairo::C
 
 void MainWindow::refresh_stories()
 {
+  rebuild_page_numbers();
   const bool has = story_present(header_) || story_present(footer_);
   if (has && !stories_chosen_ && !stories_on_ && header_footer_item_) {
     suppress_stories_ = true;
@@ -3181,9 +3185,10 @@ void MainWindow::refresh_stories()
     shown = text;
     loading_ = was;
   };
-  fill(header_view_, story_text(header_), header_shown_);
+  const std::string field_label = caret_page_label();
+  fill(header_view_, story_field_text(header_, field_label), header_shown_);
   tag_story_spacing(header_view_, header_);
-  fill(footer_view_, story_text(footer_), footer_shown_);
+  fill(footer_view_, story_field_text(footer_, field_label), footer_shown_);
   tag_story_spacing(footer_view_, footer_);
   // A rebuild can arrive with groups from the document that was just
   // replaced. Those indexes are not this one's notes. Show the whole column
@@ -3755,7 +3760,10 @@ void MainWindow::on_story_end(std::vector<Paragraph>* story)
   Gtk::TextView& view = story == &header_ ? header_view_ : footer_view_;
   std::string& shown = story == &header_ ? header_shown_ : footer_shown_;
   const std::string text = view.get_buffer()->get_text().raw();
-  if (text == story_text(*story))
+  // The bar shows the caret's number in place of the field. Comparing that
+  // with the story's plain text would commit on every caret move and drop
+  // the field. `shown` is the text this fill put there.
+  if (text == shown)
     return;
   Document before = capture();
   Document after = before;
@@ -4334,12 +4342,16 @@ int break_section(Document& doc, int caret_offset, SectionBreak kind)
       section.page = doc.page;
       section.header = doc.header;
       section.footer = doc.footer;
+      section.numbering = doc.numbering;
     } else {
       const size_t from = std::min(at - 1, doc.sections.size() - 1);
       section.page = doc.sections[from].page;
       section.header = doc.sections[from].header;
       section.footer = doc.sections[from].footer;
+      section.numbering = doc.sections[from].numbering;
     }
+    section.numbering.restart = false;
+    section.numbering.start = 1;
     section.break_before = kind;
     section.page = clamp_page(section.page);
     if (at > doc.sections.size())
@@ -4479,6 +4491,157 @@ void MainWindow::insert_section_break(SectionBreak kind)
     return;
   }
   commit_document(before, after, caret);
+}
+
+void strip_page_fields(std::vector<Paragraph>& story)
+{
+  std::vector<Paragraph> kept;
+  for (Paragraph& paragraph : story) {
+    const bool had_page = story_has_page({paragraph});
+    std::vector<Run> runs;
+    for (Run& run : paragraph.runs) {
+      if (!run.page)
+        runs.push_back(std::move(run));
+    }
+    if (runs.empty() && had_page)
+      continue;
+    paragraph.runs = std::move(runs);
+    kept.push_back(std::move(paragraph));
+  }
+  story = std::move(kept);
+}
+
+void MainWindow::insert_page_number(const PageNumberChoice& choice)
+{
+  if (!buffer_)
+    return;
+  Document before = capture();
+  if (before.paragraphs.empty())
+    before.paragraphs.emplace_back();
+  Document after = before;
+  std::vector<Paragraph>* header = nullptr;
+  std::vector<Paragraph>* footer = nullptr;
+  PageNumbering* numbering = nullptr;
+  if (active_section_ == 0 || after.sections.empty()) {
+    header = &after.header;
+    footer = &after.footer;
+    numbering = &after.numbering;
+  } else if (active_section_ - 1 < after.sections.size()) {
+    Section& section = after.sections[active_section_ - 1];
+    header = &section.header;
+    footer = &section.footer;
+    numbering = &section.numbering;
+  }
+  if (header == nullptr || footer == nullptr || numbering == nullptr)
+    return;
+  strip_page_fields(*header);
+  strip_page_fields(*footer);
+  *numbering = canonical_page_numbering(choice.numbering);
+  Paragraph field;
+  field.align = page_slot_align(choice.slot);
+  Run run;
+  run.page = true;
+  run.page_slot = choice.slot;
+  field.runs.push_back(std::move(run));
+  if (choice.in_header)
+    header->push_back(std::move(field));
+  else
+    footer->push_back(std::move(field));
+  commit_document(before, after, -1);
+}
+
+void MainWindow::on_page_numbers()
+{
+  if (!buffer_)
+    return;
+  Gtk::Dialog dialog("Page Numbers", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+
+  auto* top = Gtk::manage(new Gtk::RadioButton("Top of page (Header)"));
+  auto* bottom = Gtk::manage(new Gtk::RadioButton("Bottom of page (Footer)"));
+  Gtk::RadioButton::Group position_group = top->get_group();
+  bottom->set_group(position_group);
+  bottom->set_active(true);
+
+  auto* alignment = Gtk::manage(new Gtk::ComboBoxText());
+  alignment->append("Left");
+  alignment->append("Center");
+  alignment->append("Right");
+  alignment->append("Inside");
+  alignment->append("Outside");
+  alignment->set_active(2);
+
+  auto* numeral = Gtk::manage(new Gtk::ComboBoxText());
+  numeral->append("1, 2, 3");
+  numeral->append("a, b, c");
+  numeral->append("A, B, C");
+  numeral->append("i, ii, iii");
+  numeral->append("I, II, III");
+  numeral->set_active(0);
+
+  auto* show_first = Gtk::manage(new Gtk::CheckButton("Show number on first page"));
+  show_first->set_active(true);
+
+  auto* continue_from = Gtk::manage(new Gtk::RadioButton("Continue from previous section"));
+  auto* start_at = Gtk::manage(new Gtk::RadioButton("Start at"));
+  Gtk::RadioButton::Group count_group = continue_from->get_group();
+  start_at->set_group(count_group);
+  continue_from->set_active(true);
+  auto* start =
+      Gtk::manage(new Gtk::SpinButton(Gtk::Adjustment::create(1, 0, kMaxPageStart, 1, 10), 1, 0));
+  start->set_numeric(true);
+  start->set_sensitive(false);
+  start_at->signal_toggled().connect(
+      [start_at, start] { start->set_sensitive(start_at->get_active()); });
+
+  auto* grid = Gtk::manage(new Gtk::Grid());
+  grid->set_row_spacing(8);
+  grid->set_column_spacing(12);
+  grid->set_margin_top(12);
+  grid->set_margin_bottom(12);
+  grid->set_margin_start(12);
+  grid->set_margin_end(12);
+  grid->attach(*Gtk::manage(new Gtk::Label("Position")), 0, 0, 1, 1);
+  auto* position = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 4));
+  position->pack_start(*top, Gtk::PACK_SHRINK);
+  position->pack_start(*bottom, Gtk::PACK_SHRINK);
+  grid->attach(*position, 1, 0, 1, 1);
+  grid->attach(*field_label("_Alignment:", *alignment), 0, 1, 1, 1);
+  grid->attach(*alignment, 1, 1, 1, 1);
+  grid->attach(*field_label("_Number format:", *numeral), 0, 2, 1, 1);
+  grid->attach(*numeral, 1, 2, 1, 1);
+  grid->attach(*show_first, 1, 3, 1, 1);
+  auto* count = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 8));
+  count->pack_start(*start_at, Gtk::PACK_SHRINK);
+  count->pack_start(*start, Gtk::PACK_SHRINK);
+  auto* scheme = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 4));
+  scheme->pack_start(*continue_from, Gtk::PACK_SHRINK);
+  scheme->pack_start(*count, Gtk::PACK_SHRINK);
+  grid->attach(*scheme, 0, 4, 2, 1);
+  dialog.get_content_area()->pack_start(*grid, Gtk::PACK_SHRINK);
+  dialog.show_all_children();
+  if (dialog.run() != Gtk::RESPONSE_OK) {
+    text_.grab_focus();
+    return;
+  }
+  PageNumberChoice choice;
+  choice.in_header = top->get_active();
+  static const PageSlot kSlots[] = {PageSlot::Left, PageSlot::Center, PageSlot::Right,
+                                    PageSlot::Inside, PageSlot::Outside};
+  const int slot = alignment->get_active_row_number();
+  choice.slot = slot >= 0 && slot < 5 ? kSlots[slot] : PageSlot::Right;
+  static const PageNumeral kNumerals[] = {PageNumeral::Arabic, PageNumeral::LowerLetter,
+                                          PageNumeral::UpperLetter, PageNumeral::LowerRoman,
+                                          PageNumeral::UpperRoman};
+  const int form = numeral->get_active_row_number();
+  choice.numbering.numeral = form >= 0 && form < 5 ? kNumerals[form] : PageNumeral::Arabic;
+  choice.numbering.show_first = show_first->get_active();
+  choice.numbering.restart = start_at->get_active();
+  choice.numbering.start = choice.numbering.restart ? start->get_value_as_int() : 1;
+  insert_page_number(choice);
 }
 
 void MainWindow::on_section_break()

@@ -16,6 +16,8 @@ Reviewed 2026-10-30 against 3.0.1. Sections were checked again against the 3.0 M
 
 Reported 2026-10-30. Enter at the end of a line of two fonts opened the next line in the font the line started in. That defect is in Closed, fixed in 3.0.3. The standing typing item stays open.
 
+Reviewed 2026-11-12 against `write-it-test-document-1.rtf` and the page-number work. Two defects are in Closed. Checked and left out: the footnote groups sit on the marker's sheet (note 1 on sheet 1, notes 2 and 3 on sheet 2, note 4 on sheet 8). A caret in section 4 follows that section. Sections 2 and 3 store no page-number field. A new section copies the field; inserting a number later writes the caret's section only. The "4." in front of "Images work now" is the list label on the empty page-break paragraph.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -47,6 +49,24 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Page numbers are painted on the wrong sheets
+
+- Fixed.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::draw_page_numbers` in `src/editor.cpp`. A seam tag is named for the leftover height of the sheet above it. The tag table is not buffer order.
+- Trigger: A footer page number, and at least two sheets whose leftover heights differ. Open `write-it-test-document-1.rtf`.
+- Outcome: The digits were sequential, and then drawn against seams in tag-table order, so a later sheet's number landed on an earlier sheet. Each number is now drawn on its own sheet, in buffer order.
+
+### Enter after a new page break starts another sheet
+
+- Fixed.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::normalise_paragraphs` in `src/editor.cpp`. Enter at the start of an empty page break kept the break on the pad, which is the new line.
+- Trigger: Insert → Page Break, then Return. The same Return after the first one has ended the list, when the break was added at the end of a numbered item. It showed up on the first double Return after a break that had just been created.
+- Outcome: Each Return moved the break onto the new line, so the caret kept landing on a fresh sheet. The break now stays where it was. Return adds a line on that sheet. A later Return does not start another one.
 
 ### Enter at the end of a mixed line resets the font
 

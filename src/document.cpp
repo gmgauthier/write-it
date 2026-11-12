@@ -56,10 +56,11 @@ void add_run(Paragraph& paragraph, Run run)
 {
   // A picture has no text, and neither it nor a footnote marker merges into
   // the run beside it.
-  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0;
+  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0 || run.page;
   if (!held)
     return;
-  const bool sticky = !run.image.has_value() && run.note == 0 && !paragraph.runs.empty() &&
+  const bool sticky = !run.page && !run.image.has_value() && run.note == 0 &&
+                      !paragraph.runs.empty() && !paragraph.runs.back().page &&
                       !paragraph.runs.back().image.has_value() && paragraph.runs.back().note == 0 &&
                       same_format(paragraph.runs.back(), run);
   if (sticky)
@@ -572,6 +573,10 @@ bool same_image(const std::optional<Image>& a, const std::optional<Image>& b)
 
 bool same_look(const Run& a, const Run& b)
 {
+  if (a.page != b.page)
+    return false;
+  if (a.page && a.page_slot != b.page_slot)
+    return false;
   return a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
          a.underline == b.underline && a.color == b.color && a.highlight == b.highlight &&
          a.strike == b.strike && a.script == b.script && a.note == b.note &&
@@ -606,11 +611,11 @@ static bool same_runs(const std::vector<Run>& a, const std::vector<Run>& b)
   auto looks = [](const std::vector<Run>& runs) {
     std::vector<Run> out;
     for (const Run& run : runs) {
-      if (run.text.empty() && !run.image.has_value() && run.note == 0)
+      if (run.text.empty() && !run.image.has_value() && run.note == 0 && !run.page)
         continue;
-      const bool sticky = !run.image.has_value() && run.note == 0 && !out.empty() &&
-                          !out.back().image.has_value() && out.back().note == 0 &&
-                          same_look(out.back(), run);
+      const bool sticky = !run.page && !run.image.has_value() && run.note == 0 && !out.empty() &&
+                          !out.back().page && !out.back().image.has_value() &&
+                          out.back().note == 0 && same_look(out.back(), run);
       if (sticky)
         out.back().text += run.text;
       else
@@ -890,7 +895,7 @@ void line_spacing_raw(const Spacing& spacing, int& sl, int& slmult)
 int basis_half_points(const Paragraph& paragraph)
 {
   for (const Run& run : paragraph.runs) {
-    if (!run.text.empty() || run.note != 0 || run.image)
+    if (!run.text.empty() || run.note != 0 || run.image || run.page)
       return half_points_of(run.size);
   }
   if (paragraph.mark)
@@ -926,10 +931,10 @@ std::vector<Run> stored_runs(const std::vector<Run>& runs)
 {
   std::vector<Run> out;
   for (const Run& run : runs) {
-    if (run.text.empty() && !run.image.has_value() && run.note == 0)
+    if (run.text.empty() && !run.image.has_value() && run.note == 0 && !run.page)
       continue;
-    const bool sticky = !run.image.has_value() && run.note == 0 && !out.empty() &&
-                        !out.back().image.has_value() && out.back().note == 0 &&
+    const bool sticky = !run.page && !run.image.has_value() && run.note == 0 && !out.empty() &&
+                        !out.back().page && !out.back().image.has_value() && out.back().note == 0 &&
                         same_format(out.back(), run);
     if (sticky)
       out.back().text += run.text;
@@ -1406,16 +1411,29 @@ bool operator==(const Document& a, const Document& b)
   if (numbered && (list_ids(a.paragraphs) != list_ids(b.paragraphs) ||
                    list_numbers(a.paragraphs) != list_numbers(b.paragraphs)))
     return false;
-  if (!(a.page == b.page) || a.default_tab != b.default_tab || a.header != b.header ||
-      a.footer != b.footer || a.sections != b.sections || a.notes != b.notes)
+  if (!(a.page == b.page) || !(a.numbering == b.numbering) || a.default_tab != b.default_tab ||
+      a.header != b.header || a.footer != b.footer || a.sections != b.sections ||
+      a.notes != b.notes)
     return false;
   return style_sheet(a) == style_sheet(b);
 }
 
+bool operator==(const PageNumbering& a, const PageNumbering& b)
+{
+  if (a.restart != b.restart || a.numeral != b.numeral || a.show_first != b.show_first)
+    return false;
+  return !a.restart || a.start == b.start;
+}
+
+bool operator!=(const PageNumbering& a, const PageNumbering& b)
+{
+  return !(a == b);
+}
+
 bool operator==(const Section& a, const Section& b)
 {
-  return a.break_before == b.break_before && a.page == b.page && a.header == b.header &&
-         a.footer == b.footer;
+  return a.break_before == b.break_before && a.page == b.page && a.numbering == b.numbering &&
+         a.header == b.header && a.footer == b.footer;
 }
 
 bool operator!=(const Section& a, const Section& b)
@@ -1455,9 +1473,13 @@ void align_sections(Document& doc)
         section.page = doc.page;
         section.header = doc.header;
         section.footer = doc.footer;
+        section.numbering = doc.numbering;
       } else {
         section = kept.back();
       }
+      // A break with no stored section continues. Word does not copy restart.
+      section.numbering.restart = false;
+      section.numbering.start = 1;
     }
     if (paragraph.section_break != SectionBreak::NextPage &&
         paragraph.section_break != SectionBreak::Continuous)
@@ -2525,6 +2547,154 @@ std::string story_plain_text(const std::vector<Paragraph>& story)
     out += paragraph_plain(story[i]);
   }
   return out;
+}
+
+int clamp_page_start(int start)
+{
+  if (start < 0)
+    return 0;
+  if (start > kMaxPageStart)
+    return kMaxPageStart;
+  return start;
+}
+
+PageNumbering canonical_page_numbering(PageNumbering numbering)
+{
+  numbering.start = clamp_page_start(numbering.start);
+  if (!numbering.restart)
+    numbering.start = 1;
+  return numbering;
+}
+
+std::string format_page_number(int number, PageNumeral numeral)
+{
+  if (number <= 0 || numeral == PageNumeral::Arabic)
+    return std::to_string(number);
+  if (numeral == PageNumeral::LowerLetter || numeral == PageNumeral::UpperLetter) {
+    std::string out;
+    int n = number;
+    while (n > 0) {
+      n -= 1;
+      out.push_back(static_cast<char>('a' + (n % 26)));
+      n /= 26;
+    }
+    std::reverse(out.begin(), out.end());
+    if (numeral == PageNumeral::UpperLetter) {
+      for (char& c : out)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return out;
+  }
+  static const int kValue[] = {1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1};
+  static const char* kRoman[] = {"m",  "cm", "d",  "cd", "c",  "xc", "l",
+                                 "xl", "x",  "ix", "v",  "iv", "i"};
+  std::string out;
+  int n = number;
+  for (size_t i = 0; i < 13; ++i) {
+    while (n >= kValue[i]) {
+      out += kRoman[i];
+      n -= kValue[i];
+    }
+  }
+  if (numeral == PageNumeral::UpperRoman) {
+    for (char& c : out)
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  }
+  return out;
+}
+
+std::vector<PrintedPage> printed_pages(int sheets, const std::vector<int>& section_starts,
+                                       const std::vector<PageNumbering>& numbering)
+{
+  std::vector<PrintedPage> out;
+  if (sheets <= 0)
+    return out;
+  int printed = 0;
+  for (int sheet = 0; sheet < sheets; ++sheet) {
+    int sec = 0;
+    for (int i = 0; i < static_cast<int>(section_starts.size()); ++i) {
+      if (section_starts[static_cast<size_t>(i)] <= sheet)
+        sec = i;
+    }
+    PageNumbering num;
+    if (sec >= 0 && sec < static_cast<int>(numbering.size()))
+      num = canonical_page_numbering(numbering[static_cast<size_t>(sec)]);
+    const int origin = sec >= 0 && sec < static_cast<int>(section_starts.size())
+                           ? section_starts[static_cast<size_t>(sec)]
+                           : 0;
+    const bool at_start = sheet == origin;
+    if (at_start && num.restart)
+      printed = num.start;
+    else if (sheet == 0)
+      printed = 1;
+    else
+      ++printed;
+    PrintedPage page;
+    page.number = printed;
+    if (!(at_start && !num.show_first))
+      page.label = format_page_number(printed, num.numeral);
+    out.push_back(page);
+  }
+  return out;
+}
+
+Align page_slot_align(PageSlot slot)
+{
+  if (slot == PageSlot::Center)
+    return Align::Center;
+  if (slot == PageSlot::Right || slot == PageSlot::Outside)
+    return Align::Right;
+  return Align::Left;
+}
+
+PageSide page_number_side(PageSlot slot, int number)
+{
+  const bool odd = (number & 1) != 0;
+  if (slot == PageSlot::Center)
+    return PageSide::Center;
+  if (slot == PageSlot::Left)
+    return PageSide::Left;
+  if (slot == PageSlot::Right)
+    return PageSide::Right;
+  if (slot == PageSlot::Inside)
+    return odd ? PageSide::Left : PageSide::Right;
+  return odd ? PageSide::Right : PageSide::Left;
+}
+
+std::string story_field_text(const std::vector<Paragraph>& story, const std::string& label)
+{
+  if (story.empty())
+    return {};
+  const std::string field = label.empty() ? "#" : label;
+  std::string out;
+  for (size_t i = 0; i < story.size(); ++i) {
+    if (i)
+      out.push_back('\n');
+    std::string text;
+    for (const Run& run : story[i].runs) {
+      if (run.image)
+        continue;
+      if (run.page)
+        text += field;
+      else
+        text += run.text;
+    }
+    if (text.empty())
+      text = " ";
+    out += text;
+  }
+  return out;
+}
+
+bool story_has_page(const std::vector<Paragraph>& story)
+{
+  for (const Paragraph& paragraph : story) {
+    for (const Run& run : paragraph.runs) {
+      if (run.page)
+        return true;
+    }
+  }
+  return false;
 }
 
 namespace {

@@ -235,6 +235,59 @@ uint32_t cp1252(unsigned char byte)
   return byte;
 }
 
+bool field_instruction_is_page(const std::string& text)
+{
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(text[i])) != 'p')
+      continue;
+    if (i > 0 && std::isalpha(static_cast<unsigned char>(text[i - 1])) != 0)
+      continue;
+    const char* word = "page";
+    bool match = true;
+    for (size_t k = 0; word[k] != '\0'; ++k) {
+      if (i + k >= text.size() ||
+          std::tolower(static_cast<unsigned char>(text[i + k])) != word[k]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match)
+      continue;
+    const size_t end = i + 4;
+    if (end < text.size() && std::isalpha(static_cast<unsigned char>(text[end])) != 0)
+      continue;
+    return true;
+  }
+  return false;
+}
+
+PageSlot slot_from_place(int param)
+{
+  switch (param) {
+    case 0:
+      return PageSlot::Left;
+    case 1:
+      return PageSlot::Center;
+    case 2:
+      return PageSlot::Right;
+    case 3:
+      return PageSlot::Inside;
+    case 4:
+      return PageSlot::Outside;
+    default:
+      return PageSlot::Right;
+  }
+}
+
+PageSlot slot_from_align(Align align)
+{
+  if (align == Align::Center)
+    return PageSlot::Center;
+  if (align == Align::Right)
+    return PageSlot::Right;
+  return PageSlot::Left;
+}
+
 bool skip_destination(const std::string& word)
 {
   // pict, header, footer, footnote, and shppict are read. The first-page,
@@ -253,10 +306,11 @@ bool skip_destination(const std::string& word)
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0;
+  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0 || run.page;
   if (!held)
     return;
-  const bool sticky = !run.image.has_value() && run.note == 0 && !paragraph.runs.empty() &&
+  const bool sticky = !run.page && !run.image.has_value() && run.note == 0 &&
+                      !paragraph.runs.empty() && !paragraph.runs.back().page &&
                       !paragraph.runs.back().image.has_value() && paragraph.runs.back().note == 0 &&
                       same_format(paragraph.runs.back(), run);
   if (sticky)
@@ -460,6 +514,9 @@ struct State {
   // \chftn is the automatic reference. The digits already in the sentence
   // are not that reference.
   bool auto_note = false;
+  // {\*\fldinst ...}: the instruction text is kept, and the word is not a
+  // skipped destination. The star would otherwise ignore the group.
+  bool reading_inst = false;
 };
 
 // One {\s...} entry of the style sheet as read: only what it sets.
@@ -655,6 +712,10 @@ class Reader {
       commit_font();
       return;
     }
+    if (state_.reading_inst) {
+      field_inst_.push_back(c);
+      return;
+    }
     if (!sink_open())
       return;
     uint32_t cp = static_cast<unsigned char>(c);
@@ -704,8 +765,26 @@ class Reader {
     if (!std::isalpha(static_cast<unsigned char>(text_[i_]))) {
       const char symbol = text_[i_];
       ++i_;
-      // After {\* the next word still names the destination.
+      // After {\* the next word still names the destination. {\*\fldinst
+      // is the PAGE field's instruction, so that one group is read.
       if (state_.pending_dest && symbol == '*') {
+        size_t at = i_;
+        while (at < text_.size() && (text_[at] == ' ' || text_[at] == '\n' || text_[at] == '\r'))
+          ++at;
+        if (at < text_.size() && text_[at] == '\\') {
+          size_t w = at + 1;
+          while (w < text_.size() && std::isalpha(static_cast<unsigned char>(text_[w])))
+            ++w;
+          if (text_.compare(at + 1, w - (at + 1), "fldinst") == 0) {
+            state_.pending_dest = false;
+            state_.reading_inst = true;
+            field_inst_.clear();
+            i_ = w;
+            if (i_ < text_.size() && text_[i_] == ' ')
+              ++i_;
+            return;
+          }
+        }
         state_.ignore = true;
         if (state_.in_fonttbl)
           state_.font_skip = true;
@@ -746,6 +825,9 @@ class Reader {
 
   void apply(const std::string& word, bool has_param, int param)
   {
+    // The field instruction is text. A word inside it is not a property.
+    if (state_.reading_inst)
+      return;
     if (state_.pending_dest) {
       state_.pending_dest = false;
       if (word == "fonttbl") {
@@ -800,6 +882,12 @@ class Reader {
         } else {
           state_.ignore = true;
         }
+        return;
+      }
+      if (word == "field") {
+        field_depth_ = stack_.size();
+        field_page_ = false;
+        field_inst_.clear();
         return;
       }
       if (word == "colortbl") {
@@ -917,6 +1005,7 @@ class Reader {
       // \pard drops the character format carried from the paragraph before.
       // A control word after it can set a format for this paragraph.
       char_seen_ = false;
+      place_set_ = false;
       return;
     }
     if (word == "s") {
@@ -1215,10 +1304,77 @@ class Reader {
       page_.columns = 1;
       page_.column_gap = default_page().column_gap;
       current_break_ = SectionBreak::NextPage;
+      numbering_ = PageNumbering{};
+      place_set_ = false;
       header_.clear();
       footer_.clear();
       header_marks_.clear();
       footer_marks_.clear();
+      return;
+    }
+    if (word == "pgnrestart") {
+      if (state_.story == Story::Body)
+        numbering_.restart = !has_param || param != 0;
+      return;
+    }
+    if (word == "pgncont") {
+      if (state_.story == Story::Body) {
+        numbering_.restart = false;
+        numbering_.start = 1;
+      }
+      return;
+    }
+    if (word == "pgnstarts" && has_param) {
+      if (state_.story == Story::Body) {
+        numbering_.start = clamp_page_start(param);
+        numbering_.restart = true;
+      }
+      return;
+    }
+    if (word == "pgndec") {
+      if (state_.story == Story::Body)
+        numbering_.numeral = PageNumeral::Arabic;
+      return;
+    }
+    if (word == "pgnlcrm") {
+      if (state_.story == Story::Body)
+        numbering_.numeral = PageNumeral::LowerRoman;
+      return;
+    }
+    if (word == "pgnucrm") {
+      if (state_.story == Story::Body)
+        numbering_.numeral = PageNumeral::UpperRoman;
+      return;
+    }
+    if (word == "pgnlcltr") {
+      if (state_.story == Story::Body)
+        numbering_.numeral = PageNumeral::LowerLetter;
+      return;
+    }
+    if (word == "pgnucltr") {
+      if (state_.story == Story::Body)
+        numbering_.numeral = PageNumeral::UpperLetter;
+      return;
+    }
+    if (word == "titlepg") {
+      if (state_.story == Story::Body)
+        numbering_.show_first = has_param && param == 0;
+      return;
+    }
+    if (word == "pgplace" && has_param) {
+      place_set_ = true;
+      place_ = slot_from_place(param);
+      for (auto run = paragraph_.runs.rbegin(); run != paragraph_.runs.rend(); ++run) {
+        if (!run->page)
+          continue;
+        run->page_slot = place_;
+        break;
+      }
+      return;
+    }
+    if (word == "chpgn") {
+      if (state_.story == Story::Header || state_.story == Story::Footer)
+        add_page_run();
       return;
     }
     if (word == "sbkpage" || word == "sbkeven" || word == "sbkodd") {
@@ -1533,6 +1689,15 @@ class Reader {
     if (closing.in_override && !state_.in_override && override_.has_id && override_.ls > 0 &&
         (overrides_.size() < kMaxListDefs || overrides_.count(override_.ls) != 0))
       overrides_[override_.ls] = override_;
+    if (closing.reading_inst && !state_.reading_inst && field_instruction_is_page(field_inst_))
+      field_page_ = true;
+    if (field_depth_ > 0 && stack_.size() + 1 == field_depth_) {
+      if (field_page_ && (state_.story == Story::Header || state_.story == Story::Footer))
+        add_page_run();
+      field_page_ = false;
+      field_depth_ = 0;
+      field_inst_.clear();
+    }
   }
 
   // \ls through the override and list tables, then Word 97's \pn. An \ls
@@ -1607,6 +1772,17 @@ class Reader {
     run.strike = state_.strike;
     run.script = state_.script;
     return run;
+  }
+
+  void add_page_run()
+  {
+    Run run = char_run();
+    run.text.clear();
+    run.note = 0;
+    run.image.reset();
+    run.page = true;
+    run.page_slot = place_set_ ? place_ : slot_from_align(state_.align);
+    add_run(paragraph_, std::move(run));
   }
 
   // \cfN. No colour table: 0 is automatic and 1–16 are Word's palette.
@@ -2549,6 +2725,7 @@ class Reader {
     held.footer = std::move(footer_);
     held.header_marks = std::move(header_marks_);
     held.footer_marks = std::move(footer_marks_);
+    held.numbering = canonical_page_numbering(numbering_);
     header_.clear();
     footer_.clear();
     header_marks_.clear();
@@ -2649,13 +2826,16 @@ class Reader {
     if (held_.empty()) {
       doc.header = take_story(header_, header_marks_);
       doc.footer = take_story(footer_, footer_marks_);
+      doc.numbering = canonical_page_numbering(numbering_);
     } else {
       doc.header = take_story(held_[0].header, held_[0].header_marks);
       doc.footer = take_story(held_[0].footer, held_[0].footer_marks);
+      doc.numbering = held_[0].numbering;
       doc.sections.clear();
       for (size_t s = 1; s < held_.size(); ++s) {
         Section section;
         section.page = held_[s].page;
+        section.numbering = held_[s].numbering;
         section.header = take_story(held_[s].header, held_[s].header_marks);
         section.footer = take_story(held_[s].footer, held_[s].footer_marks);
         doc.sections.push_back(std::move(section));
@@ -2790,11 +2970,18 @@ class Reader {
   bool saw_par_ = false;
   PageSetup page_;
   PageSetup doc_page_;
+  PageNumbering numbering_;
+  bool place_set_ = false;
+  PageSlot place_ = PageSlot::Right;
+  bool field_page_ = false;
+  size_t field_depth_ = 0;
+  std::string field_inst_;
   SectionBreak current_break_ = SectionBreak::NextPage;
   size_t section_start_ = 0;
   bool saw_sect_ = false;
   struct HeldSection {
     PageSetup page;
+    PageNumbering numbering;
     std::vector<Paragraph> header;
     std::vector<Paragraph> footer;
     std::vector<ListMarks> header_marks;
@@ -3208,7 +3395,7 @@ std::string rtf_export(const Document& incoming)
   // paragraph with text takes its format from its runs.
   auto mark_of = [](const Paragraph& paragraph) -> const Run* {
     for (const Run& run : paragraph.runs) {
-      if (!run.text.empty() || run.image.has_value() || run.note != 0)
+      if (!run.text.empty() || run.image.has_value() || run.note != 0 || run.page)
         return nullptr;
     }
     return paragraph.mark ? &*paragraph.mark : nullptr;
@@ -3561,6 +3748,10 @@ std::string rtf_export(const Document& incoming)
         }
         continue;
       }
+      if (run.page) {
+        out << "\\pgplace" << static_cast<int>(run.page_slot) << "\\chpgn";
+        continue;
+      }
       if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
         const std::string label = run.text.empty() ? std::to_string(run.note) : run.text;
         if (uses_face)
@@ -3638,7 +3829,7 @@ std::string rtf_export(const Document& incoming)
     write_outline(paragraph, plain_style);
     const bool had_run = [&] {
       for (const Run& run : paragraph.runs)
-        if (!run.text.empty() || run.image || run.note != 0)
+        if (!run.text.empty() || run.image || run.note != 0 || run.page)
           return true;
       return false;
     }();
@@ -3664,9 +3855,29 @@ std::string rtf_export(const Document& incoming)
       write_plain(paragraphs[i], i < story_ls.size() ? story_ls[i] : 0);
     out << "}";
   };
+  auto write_numbering = [&](const PageNumbering& numbering) {
+    const PageNumbering n = canonical_page_numbering(numbering);
+    const bool plain = !n.restart && n.numeral == PageNumeral::Arabic && n.show_first;
+    if (plain)
+      return;
+    if (n.restart)
+      out << "\\pgnrestart\\pgnstarts" << n.start;
+    if (n.numeral == PageNumeral::LowerRoman)
+      out << "\\pgnlcrm";
+    else if (n.numeral == PageNumeral::UpperRoman)
+      out << "\\pgnucrm";
+    else if (n.numeral == PageNumeral::LowerLetter)
+      out << "\\pgnlcltr";
+    else if (n.numeral == PageNumeral::UpperLetter)
+      out << "\\pgnucltr";
+    if (!n.show_first)
+      out << "\\titlepg";
+    out << "\n";
+  };
   auto emit_section = [&](const PageSetup& setup, SectionBreak kind, bool first,
-                          const std::vector<Paragraph>& header, const std::vector<int>& hls,
-                          const std::vector<Paragraph>& footer, const std::vector<int>& fls) {
+                          const PageNumbering& numbering, const std::vector<Paragraph>& header,
+                          const std::vector<int>& hls, const std::vector<Paragraph>& footer,
+                          const std::vector<int>& fls) {
     const PageSetup clamped = clamp_page(setup);
     out << "\\sectd";
     if (first || kind == SectionBreak::Continuous)
@@ -3679,15 +3890,17 @@ std::string rtf_export(const Document& incoming)
     if (clamped.landscape)
       out << "\\lndscpsxn";
     out << "\\cols" << clamped.columns << "\\colsx" << clamped.column_gap << "\n";
+    write_numbering(numbering);
     write_story("header", header, hls);
     write_story("footer", footer, fls);
   };
   if (doc.sections.empty()) {
+    write_numbering(doc.numbering);
     write_story("header", doc.header, header_ls);
     write_story("footer", doc.footer, footer_ls);
   } else {
-    emit_section(doc.page, SectionBreak::Continuous, true, doc.header, header_ls, doc.footer,
-                 footer_ls);
+    emit_section(doc.page, SectionBreak::Continuous, true, doc.numbering, doc.header, header_ls,
+                 doc.footer, footer_ls);
   }
 
   bool wrote = false;
@@ -3702,8 +3915,8 @@ std::string rtf_export(const Document& incoming)
         const Section& section = doc.sections[extra];
         const std::vector<int>& hls = section_header_ls[extra];
         const std::vector<int>& fls = section_footer_ls[extra];
-        emit_section(section.page, section.break_before, false, section.header, hls, section.footer,
-                     fls);
+        emit_section(section.page, section.break_before, false, section.numbering, section.header,
+                     hls, section.footer, fls);
       }
       ++extra;
     }
@@ -3768,7 +3981,7 @@ std::string rtf_export(const Document& incoming)
       emit_runs(paragraph);
       bool cell_text = false;
       for (const Run& run : paragraph.runs) {
-        if (!run.text.empty() || run.image || run.note != 0)
+        if (!run.text.empty() || run.image || run.note != 0 || run.page)
           cell_text = true;
       }
       if (!cell_text) {
@@ -3913,6 +4126,12 @@ std::string rtf_export(const Document& incoming)
           out << " " << pict_bytes(run.image->data) << "}";
           continue;
         }
+      }
+      if (run.page) {
+        if (format(run))
+          out << " ";
+        out << "\\pgplace" << static_cast<int>(run.page_slot) << "\\chpgn";
+        continue;
       }
       if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
         if (format(run, true))

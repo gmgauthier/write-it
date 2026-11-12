@@ -260,6 +260,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   // drops it, and the file never stores it.
   void update_page_seams();
   void draw_page_seams(const Cairo::RefPtr<Cairo::Context>& cr);
+  void draw_page_numbers(const Cairo::RefPtr<Cairo::Context>& cr);
+  void rebuild_page_numbers();
+  void sync_page_field_views();
+  std::string caret_page_label() const;
   void draw_paragraph_borders(const Cairo::RefPtr<Cairo::Context>& cr);
   void draw_cell_paragraph_borders(Gtk::TextView& view, const Cairo::RefPtr<Cairo::Context>& cr);
   // Leaders in a tab's gap, and a bar stop's line. A document with no custom
@@ -661,6 +665,10 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_section_break();
   // Insert → Section Break, without the dialog. Next page or continuous.
   void insert_section_break(SectionBreak kind);
+  void on_page_numbers();
+  // Insert → Page Numbers, without the dialog. The field replaces one already
+  // in the caret's section, in the header and the footer.
+  void insert_page_number(const PageNumberChoice& choice);
   // Page Setup and Columns write the caret's section. Section 0 is
   // Document::page. A later section is Document::sections.
   void assign_section_page(Document& doc, PageSetup page) const;
@@ -1069,6 +1077,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::MenuItem* page_break_item_ = nullptr;
   Gtk::MenuItem* section_break_item_ = nullptr;
   Gtk::MenuItem* footnote_item_ = nullptr;
+  Gtk::MenuItem* page_numbers_item_ = nullptr;
   Gtk::MenuItem* columns_item_ = nullptr;
   Gtk::MenuItem* table_insert_item_ = nullptr;
   Gtk::MenuItem* table_row_item_ = nullptr;
@@ -1208,6 +1217,26 @@ class MainWindow : public Gtk::ApplicationWindow {
   int seam_sheets_ = 1;
   int seam_caret_page_ = 1;
   bool seam_sheets_valid_ = false;
+  // One entry per sheet. Empty labels are not drawn. Rebuilt when the seams
+  // are, and when a story changes. A letter that does not move its line
+  // leaves this alone.
+  struct PageNumberMark {
+    std::string header_label;
+    std::string footer_label;
+    PageSlot header_slot = PageSlot::Right;
+    PageSlot footer_slot = PageSlot::Right;
+    int number = 1;
+    std::string header_font = "Sans";
+    double header_size = 11;
+    std::string footer_font = "Sans";
+    double footer_size = 11;
+    // Buffer offset of the seam this number is painted against. -1 is the
+    // top of the first sheet or the foot of the last, which have no seam.
+    int header_seam = -1;
+    int footer_seam = -1;
+  };
+  std::vector<PageNumberMark> page_number_marks_;
+  bool page_field_on_ = false;
   enum class SeamEdit { None, Line, Split, Join, Full };
   SeamEdit seam_edit_ = SeamEdit::Full;
   int seam_edit_line_ = -1;
@@ -1379,6 +1408,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   struct SectionSlot {
     int id = 0;
     PageSetup page;
+    PageNumbering numbering;
     std::vector<Paragraph> header;
     std::vector<Paragraph> footer;
   };

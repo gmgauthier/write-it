@@ -468,6 +468,21 @@ write_it_section_tests = executable(
 )
 test('section', write_it_section_tests)
 
+write_it_page_number_tests = executable(
+  'write-it-page-number-tests',
+  'tests/test_page_number.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-number', write_it_page_number_tests)
+
+# Page numbers in the real window. The dialog is not opened.
+write_it_page_number_ui_tests = executable(
+  'write-it-page-number-ui-tests',
+  'tests/test_page_number_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('page-number-ui', with_display, args: [write_it_page_number_ui_tests.full_path()], depends: write_it_page_number_ui_tests, timeout: 60, is_parallel: false, suite: 'ui')
+
 # Page commands in the real window. Dialogs are not opened.
 write_it_page_ui_tests = executable(
   'write-it-page-ui-tests',

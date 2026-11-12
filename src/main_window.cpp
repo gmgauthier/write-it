@@ -560,12 +560,14 @@ void MainWindow::build_menus()
   page_break_item_ = add_item(*insert, "Page _Break", true);
   section_break_item_ = add_item(*insert, "_Section Break…", true);
   footnote_item_ = add_item(*insert, "_Footnote", true);
+  page_numbers_item_ = add_item(*insert, "Page _Numbers…", true);
   picture_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_picture));
   insert_table_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_insert_table));
   page_break_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_page_break));
   section_break_item_->signal_activate().connect(
       sigc::mem_fun(*this, &MainWindow::on_section_break));
   footnote_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_footnote));
+  page_numbers_item_->signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_page_numbers));
 
   auto* format_menu = add_menu("F_ormat");
   font_item_ = add_item(*format_menu, "_Font…", true);
@@ -1579,6 +1581,10 @@ void MainWindow::update_page_status()
   if (page_label_.get_text() != label)
     page_label_.set_text(label);
   remember_page_cache();
+  if (!page_field_on_)
+    return;
+  rebuild_page_numbers();
+  sync_page_field_views();
 }
 
 void MainWindow::set_zoom(int zoom)
