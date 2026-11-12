@@ -192,8 +192,13 @@ void formats()
   CHECK(writeit::format_page_number(1, writeit::PageNumeral::LowerLetter) == "a");
   CHECK(writeit::format_page_number(26, writeit::PageNumeral::LowerLetter) == "z");
   CHECK(writeit::format_page_number(27, writeit::PageNumeral::LowerLetter) == "aa");
+  // Word 97 repeats the letter. 28 is bb, not the spreadsheet column ab.
+  CHECK(writeit::format_page_number(28, writeit::PageNumeral::LowerLetter) == "bb");
+  CHECK(writeit::format_page_number(52, writeit::PageNumeral::LowerLetter) == "zz");
+  CHECK(writeit::format_page_number(53, writeit::PageNumeral::LowerLetter) == "aaa");
   CHECK(writeit::format_page_number(0, writeit::PageNumeral::LowerLetter) == "0");
   CHECK(writeit::format_page_number(27, writeit::PageNumeral::UpperLetter) == "AA");
+  CHECK(writeit::format_page_number(28, writeit::PageNumeral::UpperLetter) == "BB");
   CHECK(writeit::format_page_number(1, writeit::PageNumeral::LowerRoman) == "i");
   CHECK(writeit::format_page_number(4, writeit::PageNumeral::LowerRoman) == "iv");
   CHECK(writeit::format_page_number(9, writeit::PageNumeral::LowerRoman) == "ix");
@@ -249,6 +254,23 @@ void counts()
   first.restart = true;
   first.start = 4;
   CHECK(labels(writeit::printed_pages(2, {0}, {first})) == "4,5");
+
+  // A later section that begins on the same sheet and does not restart
+  // leaves that sheet with the section that opened it.
+  writeit::PageNumbering at_ten = first;
+  at_ten.start = 10;
+  writeit::PageNumbering shared;
+  CHECK(labels(writeit::printed_pages(1, {0, 0}, {at_ten, shared})) == "10");
+  CHECK(labels(writeit::printed_pages(2, {0, 0}, {at_ten, shared})) == "10,11");
+  writeit::PageNumbering shared_roman = shared;
+  shared_roman.numeral = writeit::PageNumeral::LowerRoman;
+  CHECK(labels(writeit::printed_pages(2, {0, 0}, {at_ten, shared_roman})) == "10,xi");
+  writeit::PageNumbering hidden_ten = at_ten;
+  hidden_ten.show_first = false;
+  CHECK(labels(writeit::printed_pages(2, {0, 0}, {hidden_ten, shared})) == "#,11");
+  writeit::PageNumbering next_one = first;
+  next_one.start = 1;
+  CHECK(labels(writeit::printed_pages(3, {0, 0, 2}, {at_ten, shared, next_one})) == "10,11,1");
 }
 
 void sides()
@@ -298,14 +320,78 @@ void field_text()
   story.push_back(field);
   CHECK(writeit::story_field_text(story, "1") == "Title\n1");
   CHECK(writeit::story_field_text(story, "") == "Title\n#");
+  // The bar shows the field's result. A one-character stand-in shifts the
+  // paragraph that follows once the number passes 9.
+  CHECK(writeit::story_paragraph_text(field, "10") == "10");
+  CHECK(writeit::story_paragraph_text(field, "") == "#");
   CHECK(writeit::story_has_page(story));
   CHECK(!writeit::story_has_page({title}));
+}
+
+void choice_from()
+{
+  // No field keeps Footer and Right, and still shows this section's count.
+  writeit::PageNumbering roman;
+  roman.restart = true;
+  roman.start = 4;
+  roman.numeral = writeit::PageNumeral::LowerRoman;
+  roman.show_first = false;
+  const writeit::PageNumberChoice none = writeit::page_number_choice_from({}, {}, roman);
+  CHECK(!none.in_header);
+  CHECK(none.slot == writeit::PageSlot::Right);
+  CHECK(none.numbering.numeral == writeit::PageNumeral::LowerRoman);
+  CHECK(none.numbering.restart);
+  CHECK(none.numbering.start == 4);
+  CHECK(!none.numbering.show_first);
+
+  writeit::Paragraph footer;
+  footer.runs.push_back(page_run(writeit::PageSlot::Center));
+  const writeit::PageNumberChoice from_footer = writeit::page_number_choice_from({}, {footer}, {});
+  CHECK(!from_footer.in_header);
+  CHECK(from_footer.slot == writeit::PageSlot::Center);
+
+  writeit::Paragraph header;
+  header.runs.push_back(page_run(writeit::PageSlot::Inside));
+  const writeit::PageNumberChoice from_header = writeit::page_number_choice_from({header}, {}, {});
+  CHECK(from_header.in_header);
+  CHECK(from_header.slot == writeit::PageSlot::Inside);
+  CHECK(!from_header.numbering.restart);
+  CHECK(from_header.numbering.start == 1);
+
+  // A field in both stories is the footer, which is what the page draws last.
+  const writeit::PageNumberChoice both = writeit::page_number_choice_from({header}, {footer}, {});
+  CHECK(!both.in_header);
+  CHECK(both.slot == writeit::PageSlot::Center);
+}
+
+void normal_font_round_trip()
+{
+  // Insert stores Normal's face on the run. The file has to bring that face
+  // back, or the number is drawn in Sans 11.
+  writeit::Document doc;
+  doc.styles = writeit::builtin_styles("Times", 12);
+  doc.paragraphs.push_back(body("Hello"));
+  writeit::Paragraph field;
+  field.align = writeit::Align::Right;
+  writeit::Run run = page_run(writeit::PageSlot::Right);
+  run.font = "Times";
+  run.size = 12;
+  field.runs.push_back(run);
+  doc.footer.push_back(field);
+  const std::string rtf = writeit::rtf_export(doc);
+  CHECK(has(rtf, "\\pgplace2\\chpgn"));
+  CHECK(same_document(doc, "times page"));
+  writeit::Document again;
+  CHECK(writeit::rtf_import(rtf, again));
+  const writeit::Run* imported = field_in(again.footer);
+  CHECK(imported != nullptr && imported->font == "Times");
+  CHECK(imported != nullptr && imported->size == 12);
 }
 
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 96;
+constexpr int kChecks = 126;
 
 int main()
 {
@@ -319,5 +405,7 @@ int main()
   sides();
   new_section_continues();
   field_text();
+  choice_from();
+  normal_font_round_trip();
   return suite_test::done("page-number", kChecks);
 }

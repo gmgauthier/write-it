@@ -2571,14 +2571,10 @@ std::string format_page_number(int number, PageNumeral numeral)
   if (number <= 0 || numeral == PageNumeral::Arabic)
     return std::to_string(number);
   if (numeral == PageNumeral::LowerLetter || numeral == PageNumeral::UpperLetter) {
-    std::string out;
-    int n = number;
-    while (n > 0) {
-      n -= 1;
-      out.push_back(static_cast<char>('a' + (n % 26)));
-      n /= 26;
-    }
-    std::reverse(out.begin(), out.end());
+    // Word 97 repeats one letter: a..z, aa, bb, cc, ... zz, aaa. 28 is bb.
+    const int index = (number - 1) % 26;
+    const int reps = (number - 1) / 26 + 1;
+    std::string out(static_cast<size_t>(reps), static_cast<char>('a' + index));
     if (numeral == PageNumeral::UpperLetter) {
       for (char& c : out)
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -2603,6 +2599,27 @@ std::string format_page_number(int number, PageNumeral numeral)
   return out;
 }
 
+int section_for_sheet(int sheet, const std::vector<int>& section_starts,
+                      const std::vector<PageNumbering>& numbering)
+{
+  int sec = 0;
+  for (int i = 0; i < static_cast<int>(section_starts.size()); ++i) {
+    const int origin = section_starts[static_cast<size_t>(i)];
+    if (origin > sheet)
+      continue;
+    if (origin < sheet) {
+      sec = i;
+      continue;
+    }
+    const bool shares = i > 0 && origin == section_starts[static_cast<size_t>(i - 1)];
+    const bool restarts =
+        i < static_cast<int>(numbering.size()) && numbering[static_cast<size_t>(i)].restart;
+    if (!shares || restarts)
+      sec = i;
+  }
+  return sec;
+}
+
 std::vector<PrintedPage> printed_pages(int sheets, const std::vector<int>& section_starts,
                                        const std::vector<PageNumbering>& numbering)
 {
@@ -2611,11 +2628,7 @@ std::vector<PrintedPage> printed_pages(int sheets, const std::vector<int>& secti
     return out;
   int printed = 0;
   for (int sheet = 0; sheet < sheets; ++sheet) {
-    int sec = 0;
-    for (int i = 0; i < static_cast<int>(section_starts.size()); ++i) {
-      if (section_starts[static_cast<size_t>(i)] <= sheet)
-        sec = i;
-    }
+    const int sec = section_for_sheet(sheet, section_starts, numbering);
     PageNumbering num;
     if (sec >= 0 && sec < static_cast<int>(numbering.size()))
       num = canonical_page_numbering(numbering[static_cast<size_t>(sec)]);
@@ -2661,29 +2674,65 @@ PageSide page_number_side(PageSlot slot, int number)
   return odd ? PageSide::Right : PageSide::Left;
 }
 
+std::string story_paragraph_text(const Paragraph& paragraph, const std::string& label)
+{
+  const std::string field = label.empty() ? "#" : label;
+  std::string text;
+  for (const Run& run : paragraph.runs) {
+    if (run.image)
+      continue;
+    if (run.page)
+      text += field;
+    else
+      text += run.text;
+  }
+  if (text.empty())
+    text = " ";
+  return text;
+}
+
 std::string story_field_text(const std::vector<Paragraph>& story, const std::string& label)
 {
   if (story.empty())
     return {};
-  const std::string field = label.empty() ? "#" : label;
   std::string out;
   for (size_t i = 0; i < story.size(); ++i) {
     if (i)
       out.push_back('\n');
-    std::string text;
-    for (const Run& run : story[i].runs) {
-      if (run.image)
-        continue;
-      if (run.page)
-        text += field;
-      else
-        text += run.text;
-    }
-    if (text.empty())
-      text = " ";
-    out += text;
+    out += story_paragraph_text(story[i], label);
   }
   return out;
+}
+
+namespace {
+
+const Run* page_field_run(const std::vector<Paragraph>& story)
+{
+  for (const Paragraph& paragraph : story) {
+    for (const Run& run : paragraph.runs) {
+      if (run.page)
+        return &run;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+PageNumberChoice page_number_choice_from(const std::vector<Paragraph>& header,
+                                         const std::vector<Paragraph>& footer,
+                                         PageNumbering numbering)
+{
+  PageNumberChoice choice;
+  choice.numbering = canonical_page_numbering(numbering);
+  if (const Run* field = page_field_run(footer)) {
+    choice.in_header = false;
+    choice.slot = field->page_slot;
+  } else if (const Run* field = page_field_run(header)) {
+    choice.in_header = true;
+    choice.slot = field->page_slot;
+  }
+  return choice;
 }
 
 bool story_has_page(const std::vector<Paragraph>& story)

@@ -3749,6 +3749,13 @@ std::string rtf_export(const Document& incoming)
         continue;
       }
       if (run.page) {
+        // \pard does not put Normal's face on a field that writes none, so
+        // the number would come back as Sans 11. The face is written here.
+        out << "\\f" << index_of(run.font) << "\\fs" << half_points_of(run.size)
+            << (run.bold ? "\\b" : "\\b0") << (run.italic ? "\\i" : "\\i0")
+            << (run.underline ? "\\ul" : "\\ulnone");
+        if (uses_face)
+          out << face_words(run, false);
         out << "\\pgplace" << static_cast<int>(run.page_slot) << "\\chpgn";
         continue;
       }

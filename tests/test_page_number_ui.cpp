@@ -49,6 +49,16 @@ struct MainWindowProbe {
     return buffer ? buffer->get_text().raw() : std::string();
   }
 
+  static Gtk::TextView& header_view(MainWindow& window)
+  {
+    return window.header_view_;
+  }
+
+  static Gtk::TextView& footer_view(MainWindow& window)
+  {
+    return window.footer_view_;
+  }
+
   static std::string header_text(MainWindow& window)
   {
     return story_text(window.header_view_);
@@ -246,10 +256,51 @@ bool has(const std::string& text, const std::string& part)
 
 using Probe = writeit::MainWindowProbe;
 
+// The justification GTK lays out the paragraph at `offset` with: the one set
+// by a tag on its first character, or the view's own (left).
+Gtk::Justification justification_at(Gtk::TextView& view, int offset)
+{
+  auto buffer = view.get_buffer();
+  Gtk::TextIter iter = buffer->get_iter_at_offset(offset);
+  iter.set_line_offset(0);
+  Gtk::Justification justification = view.get_justification();
+  for (const auto& tag : iter.get_tags()) {
+    if (tag->property_justification_set())
+      justification = tag->property_justification();
+  }
+  return justification;
+}
+
+// The first character wearing a spacing tag. -1 when the story has none.
+int gap_at(Gtk::TextView& view)
+{
+  auto buffer = view.get_buffer();
+  const int count = buffer->get_char_count();
+  for (int i = 0; i < count; ++i) {
+    for (const auto& tag : buffer->get_iter_at_offset(i).get_tags()) {
+      const auto name = tag->property_name().get_value();
+      if (name.compare(0, 3, "gap") == 0)
+        return i;
+    }
+  }
+  return -1;
+}
+
+writeit::Paragraph page_field(writeit::PageSlot slot)
+{
+  writeit::Paragraph paragraph;
+  writeit::Run run;
+  run.page = true;
+  run.page_slot = slot;
+  paragraph.runs.push_back(run);
+  paragraph.align = writeit::page_slot_align(slot);
+  return paragraph;
+}
+
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 96;
+constexpr int kChecks = 112;
 
 int main(int argc, char* argv[])
 {
@@ -312,6 +363,7 @@ int main(int argc, char* argv[])
     CHECK(doc.numbering.show_first);
     CHECK(Probe::page(window) == "Page 1 of 1");
     CHECK(Probe::footer_text(window) == "1");
+    CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_RIGHT);
     CHECK(Probe::header_text(window).empty());
     CHECK(Probe::sheet_number(window) == 1);
     CHECK(Probe::sheet_footer(window) == "1");
@@ -353,6 +405,7 @@ int main(int argc, char* argv[])
     CHECK(!doc.header.empty() && doc.header.back().align == writeit::Align::Center);
     CHECK(!field_in(doc.footer));
     CHECK(Probe::header_text(window) == "1");
+    CHECK(justification_at(Probe::header_view(window), 0) == Gtk::JUSTIFY_CENTER);
     CHECK(Probe::footer_text(window).empty());
     CHECK(Probe::sheet_header(window) == "1");
     CHECK(Probe::sheet_footer(window).empty());
@@ -449,6 +502,99 @@ int main(int argc, char* argv[])
     }
     CHECK(painted.back().footer_label == "4");
     CHECK(Probe::page(window) == "Page 1 of 4");
+
+    // The number is Normal's face, not the Sans 11 a run starts as.
+    writeit::Document times;
+    times.styles = writeit::builtin_styles("Times", 12);
+    times.paragraphs.push_back(body("Hello"));
+    Probe::load(window, times);
+    settle();
+    writeit::PageNumberChoice times_choice;
+    Probe::insert(window, times_choice);
+    settle();
+    doc = Probe::doc(window);
+    const writeit::Run* times_footer = field_in(doc.footer);
+    CHECK(times_footer && times_footer->font == "Times");
+    CHECK(times_footer && times_footer->size == 12);
+    CHECK(!Probe::marks(window).empty());
+    CHECK(Probe::marks(window).front().footer_font == "Times");
+    CHECK(Probe::marks(window).front().footer_size == 12);
+
+    // "10" is two characters. The paragraph after the field starts at 3.
+    writeit::Document spaced;
+    spaced.paragraphs.push_back(body("Hello"));
+    spaced.numbering.restart = true;
+    spaced.numbering.start = 10;
+    spaced.footer.push_back(page_field(writeit::PageSlot::Right));
+    writeit::Paragraph after = body("After");
+    after.spacing.before = 240;
+    spaced.footer.push_back(after);
+    Probe::load(window, spaced);
+    settle();
+    CHECK(Probe::footer_text(window) == "10\nAfter");
+    CHECK(gap_at(Probe::footer_view(window)) == 3);
+
+    // A continuous section on the sheet it shares keeps the count that
+    // opened the sheet. Restart at 10 must not become 1.
+    writeit::Document shared;
+    shared.paragraphs.push_back(body("Alpha"));
+    writeit::Paragraph beta = body("Beta");
+    beta.section_break = writeit::SectionBreak::Continuous;
+    shared.paragraphs.push_back(beta);
+    shared.numbering.restart = true;
+    shared.numbering.start = 10;
+    shared.footer.push_back(page_field(writeit::PageSlot::Right));
+    writeit::Section continued;
+    continued.break_before = writeit::SectionBreak::Continuous;
+    continued.footer.push_back(page_field(writeit::PageSlot::Right));
+    shared.sections.push_back(continued);
+    Probe::load(window, shared);
+    settle();
+    settle();
+    CHECK(Probe::marks(window).size() == 1);
+    CHECK(Probe::sheet_footer(window) == "10");
+
+    // A next-page section that restarts numbers its own sheet, and leaves
+    // the sheet before it on the count that opened it.
+    writeit::Document next_page;
+    next_page.paragraphs.push_back(body("Alpha"));
+    writeit::Paragraph gamma = body("Gamma");
+    gamma.section_break = writeit::SectionBreak::NextPage;
+    next_page.paragraphs.push_back(gamma);
+    next_page.numbering.restart = true;
+    next_page.numbering.start = 10;
+    next_page.footer.push_back(page_field(writeit::PageSlot::Right));
+    writeit::Section next;
+    next.break_before = writeit::SectionBreak::NextPage;
+    next.numbering.restart = true;
+    next.numbering.start = 1;
+    next.footer.push_back(page_field(writeit::PageSlot::Right));
+    next_page.sections.push_back(next);
+    Probe::load(window, next_page);
+    settle();
+    settle();
+    CHECK(Probe::marks(window).size() == 2);
+    CHECK(Probe::marks(window)[0].footer_label == "10");
+    CHECK(Probe::marks(window)[1].footer_label == "1");
+
+    // Inside follows the printed number: even is the right, odd is the left.
+    writeit::Document inside;
+    inside.paragraphs.push_back(body("Hello"));
+    inside.numbering.restart = true;
+    inside.numbering.start = 2;
+    Probe::load(window, inside);
+    settle();
+    writeit::PageNumberChoice inside_choice;
+    inside_choice.slot = writeit::PageSlot::Inside;
+    inside_choice.numbering.restart = true;
+    inside_choice.numbering.start = 2;
+    Probe::insert(window, inside_choice);
+    settle();
+    CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_RIGHT);
+    inside_choice.numbering.start = 1;
+    Probe::insert(window, inside_choice);
+    settle();
+    CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_LEFT);
   }
   return suite_test::done("page-number-ui", kChecks);
 }
