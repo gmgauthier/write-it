@@ -8461,11 +8461,7 @@ void MainWindow::rebuild_page_numbers()
   const std::vector<PrintedPage> printed = printed_pages(sheets, starts, numbering);
   page_number_marks_.resize(printed.size());
   for (size_t sheet = 0; sheet < printed.size(); ++sheet) {
-    int sec = 0;
-    for (int i = 0; i < static_cast<int>(starts.size()); ++i) {
-      if (starts[static_cast<size_t>(i)] <= static_cast<int>(sheet))
-        sec = i;
-    }
+    const int sec = section_for_sheet(static_cast<int>(sheet), starts, numbering);
     PageNumberMark& mark = page_number_marks_[sheet];
     mark.number = printed[sheet].number;
     if (sec >= 0 && sec < static_cast<int>(headers.size()) &&

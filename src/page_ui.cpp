@@ -2996,7 +2996,8 @@ void MainWindow::apply_story_tabs(Gtk::TextView& view, int offset, int len,
                     buffer->get_iter_at_offset(offset + len));
 }
 
-void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs)
+void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
+                                   const std::string& field_label, int page_number)
 {
   auto buffer = view.get_buffer();
   if (!buffer)
@@ -3009,6 +3010,14 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
   if (!old.empty())
     for (const auto& tag : old)
       buffer->remove_tag(tag, buffer->begin(), buffer->end());
+  std::vector<Glib::RefPtr<Gtk::TextTag>> old_just;
+  buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
+    const auto name = tag->property_name().get_value();
+    if (name.compare(0, 5, "just\x1f") == 0)
+      old_just.push_back(tag);
+  });
+  for (const auto& tag : old_just)
+    buffer->remove_tag(tag, buffer->begin(), buffer->end());
   std::vector<Glib::RefPtr<Gtk::TextTag>> old_tabs;
   buffer->get_tag_table()->foreach ([&](const Glib::RefPtr<Gtk::TextTag>& tag) {
     const auto name = tag->property_name().get_value();
@@ -3021,7 +3030,6 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
   int offset = 0;
   for (size_t i = 0; i < paragraphs.size(); ++i) {
     const Paragraph& paragraph = paragraphs[i];
-    const int len = static_cast<int>(Glib::ustring(paragraph_plain(paragraph)).length());
     int heading = paragraph.heading;
     std::string font = "Sans";
     if (const Style* style = find_style(styles_, paragraph.style)) {
@@ -3031,6 +3039,10 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
         font = style->format.font;
     }
     const bool want = !(paragraph.spacing == Spacing{}) || (heading >= 1 && heading <= 6);
+    // The bar shows the field's result, which is wider than the stored run
+    // once the number passes 9. Spacing has to cover that text.
+    const std::string shown = story_paragraph_text(paragraph, field_label);
+    const int len = static_cast<int>(Glib::ustring(shown).length());
     if (len > 0 && offset + len <= buffer->get_char_count()) {
       if (want) {
         const std::string name = std::string("gap") + '\x1f' + std::to_string(heading) + '\x1f' +
@@ -3051,6 +3063,35 @@ void MainWindow::tag_story_spacing(Gtk::TextView& view, const std::vector<Paragr
       }
       apply_shade_tag(buffer, offset, len, paragraph.shading);
       apply_story_tabs(view, offset, len, paragraph);
+      Align shown_align = paragraph.align;
+      for (const Run& run : paragraph.runs) {
+        if (!run.page)
+          continue;
+        const PageSide side = page_number_side(run.page_slot, page_number);
+        if (side == PageSide::Center)
+          shown_align = Align::Center;
+        else if (side == PageSide::Right)
+          shown_align = Align::Right;
+        else
+          shown_align = Align::Left;
+        break;
+      }
+      if (shown_align != Align::Left) {
+        const Gtk::Justification justification = shown_align == Align::Center  ? Gtk::JUSTIFY_CENTER
+                                                 : shown_align == Align::Right ? Gtk::JUSTIFY_RIGHT
+                                                                               : Gtk::JUSTIFY_FILL;
+        const std::string name =
+            std::string("just") + '\x1f' + std::to_string(static_cast<int>(justification));
+        auto table = buffer->get_tag_table();
+        auto tag = table->lookup(name);
+        if (!tag) {
+          tag = Gtk::TextTag::create(name);
+          tag->property_justification() = justification;
+          table->add(tag);
+        }
+        buffer->apply_tag(tag, buffer->get_iter_at_offset(offset),
+                          buffer->get_iter_at_offset(offset + len));
+      }
     }
     offset += len;
     if (i + 1 < paragraphs.size())
@@ -3186,10 +3227,17 @@ void MainWindow::refresh_stories()
     loading_ = was;
   };
   const std::string field_label = caret_page_label();
+  int page_number = 1;
+  if (!page_number_marks_.empty()) {
+    int sheet = seam_sheets_valid_ ? std::max(1, seam_caret_page_) : 1;
+    if (sheet > static_cast<int>(page_number_marks_.size()))
+      sheet = static_cast<int>(page_number_marks_.size());
+    page_number = page_number_marks_[static_cast<size_t>(sheet - 1)].number;
+  }
   fill(header_view_, story_field_text(header_, field_label), header_shown_);
-  tag_story_spacing(header_view_, header_);
+  tag_story_spacing(header_view_, header_, field_label, page_number);
   fill(footer_view_, story_field_text(footer_, field_label), footer_shown_);
-  tag_story_spacing(footer_view_, footer_);
+  tag_story_spacing(footer_view_, footer_, field_label, page_number);
   // A rebuild can arrive with groups from the document that was just
   // replaced. Those indexes are not this one's notes. Show the whole column
   // until the next seam pass splits it again.
@@ -4542,6 +4590,14 @@ void MainWindow::insert_page_number(const PageNumberChoice& choice)
   Run run;
   run.page = true;
   run.page_slot = choice.slot;
+  // The number is drawn in the document's font. Sans 11 is only the fallback
+  // when the sheet has no Normal.
+  if (const Style* normal = find_style(styles_, kNormalStyle)) {
+    if (!normal->format.font.empty())
+      run.font = normal->format.font;
+    if (normal->format.size >= 1)
+      run.size = normal->format.size;
+  }
   field.runs.push_back(std::move(run));
   if (choice.in_header)
     header->push_back(std::move(field));
@@ -4597,6 +4653,38 @@ void MainWindow::on_page_numbers()
   start_at->signal_toggled().connect(
       [start_at, start] { start->set_sensitive(start_at->get_active()); });
 
+  // Word 97 opens on the section's own number. OK then keeps it.
+  const PageNumbering live = active_section_ < section_slots_.size()
+                                 ? section_slots_[active_section_].numbering
+                                 : PageNumbering{};
+  const PageNumberChoice current = page_number_choice_from(header_, footer_, live);
+  if (current.in_header)
+    top->set_active(true);
+  else
+    bottom->set_active(true);
+  static const PageSlot kSlots[] = {PageSlot::Left, PageSlot::Center, PageSlot::Right,
+                                    PageSlot::Inside, PageSlot::Outside};
+  int slot_row = 2;
+  for (int i = 0; i < 5; ++i) {
+    if (kSlots[i] == current.slot)
+      slot_row = i;
+  }
+  alignment->set_active(slot_row);
+  static const PageNumeral kNumerals[] = {PageNumeral::Arabic, PageNumeral::LowerLetter,
+                                          PageNumeral::UpperLetter, PageNumeral::LowerRoman,
+                                          PageNumeral::UpperRoman};
+  int form_row = 0;
+  for (int i = 0; i < 5; ++i) {
+    if (kNumerals[i] == current.numbering.numeral)
+      form_row = i;
+  }
+  numeral->set_active(form_row);
+  show_first->set_active(current.numbering.show_first);
+  if (current.numbering.restart)
+    start_at->set_active(true);
+  start->set_value(current.numbering.start);
+  start->set_sensitive(current.numbering.restart);
+
   auto* grid = Gtk::manage(new Gtk::Grid());
   grid->set_row_spacing(8);
   grid->set_column_spacing(12);
@@ -4629,13 +4717,8 @@ void MainWindow::on_page_numbers()
   }
   PageNumberChoice choice;
   choice.in_header = top->get_active();
-  static const PageSlot kSlots[] = {PageSlot::Left, PageSlot::Center, PageSlot::Right,
-                                    PageSlot::Inside, PageSlot::Outside};
   const int slot = alignment->get_active_row_number();
   choice.slot = slot >= 0 && slot < 5 ? kSlots[slot] : PageSlot::Right;
-  static const PageNumeral kNumerals[] = {PageNumeral::Arabic, PageNumeral::LowerLetter,
-                                          PageNumeral::UpperLetter, PageNumeral::LowerRoman,
-                                          PageNumeral::UpperRoman};
   const int form = numeral->get_active_row_number();
   choice.numbering.numeral = form >= 0 && form < 5 ? kNumerals[form] : PageNumeral::Arabic;
   choice.numbering.show_first = show_first->get_active();

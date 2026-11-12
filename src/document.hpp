@@ -965,18 +965,31 @@ bool rtf_import(const std::string& text, Document& doc);
 std::string rtf_export(const Document& doc);
 
 // A page number's digits, letters, or roman numerals. 0 and below are digits.
+// Letters repeat, as in Word 97: 27 is aa, 28 is bb, 52 is zz, 53 is aaa.
 std::string format_page_number(int number, PageNumeral numeral);
 // start clamped to 0..kMaxPageStart. Continue stores 1.
 int clamp_page_start(int start);
 PageNumbering canonical_page_numbering(PageNumbering numbering);
 // section_starts[0] is 0. A later entry is the sheet that section begins on.
-// Two sections may begin on one sheet; the later one wins when it restarts.
+// Two sections may begin on one sheet. The later one numbers that sheet only
+// when it restarts. One that continues leaves the sheet with the section
+// that opened it, and numbers the sheets after that.
+int section_for_sheet(int sheet, const std::vector<int>& section_starts,
+                      const std::vector<PageNumbering>& numbering);
 std::vector<PrintedPage> printed_pages(int sheets, const std::vector<int>& section_starts,
                                        const std::vector<PageNumbering>& numbering);
+// What Insert → Page Numbers shows for this section. No field is the
+// default place, Footer and Right. The count is the section's own.
+PageNumberChoice page_number_choice_from(const std::vector<Paragraph>& header,
+                                         const std::vector<Paragraph>& footer,
+                                         PageNumbering numbering);
 // Left and Inside are left. Right and Outside are right. Center is center.
 Align page_slot_align(PageSlot slot);
 // Inside and Outside follow the printed number, not the sheet index.
 PageSide page_number_side(PageSlot slot, int number);
+// One paragraph as the header bar shows it. A page field contributes `label`,
+// or "#" when that label is empty. An empty paragraph is one space.
+std::string story_paragraph_text(const Paragraph& paragraph, const std::string& label);
 // The story as the header bar shows it. A page field contributes `label`,
 // or "#" when that label is empty, so the field stays visible.
 std::string story_field_text(const std::vector<Paragraph>& story, const std::string& label);

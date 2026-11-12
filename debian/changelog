@@ -1,3 +1,9 @@
+write-it (3.1.1-1) unstable; urgency=medium
+
+  * A letter page number repeats like Word, the Page Numbers dialog keeps the section's settings, a continuous section keeps the count, and the header bar uses the number's place, spacing, and font.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Thu, 12 Nov 2026 23:36:44 +0000
+
 write-it (3.1.0-1) unstable; urgency=medium
 
   * A page number in the header or footer prints that sheet's number, and a section can restart the count.

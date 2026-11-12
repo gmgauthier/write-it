@@ -18,6 +18,8 @@ Reported 2026-10-30. Enter at the end of a line of two fonts opened the next lin
 
 Reviewed 2026-11-12 against `write-it-test-document-1.rtf` and the page-number work. Two defects are in Closed, fixed in 3.1.0. Checked and left out: the footnote groups sit on the marker's sheet (note 1 on sheet 1, notes 2 and 3 on sheet 2, note 4 on sheet 8). A caret in section 4 follows that section. Sections 2 and 3 store no page-number field. A new section copies the field; inserting a number later writes the caret's section only. The "4." in front of "Images work now" is the list label on the empty page-break paragraph.
 
+Reviewed 2026-11-12 against 3.1.0. Page numbers were checked against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Six defects are in Closed, fixed in 3.1.1. The standing typing item stays open. Checked and left out: list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.). A page-number field stays in the section that holds it. A letter still skips the page walk. Footnote groups stay on the marker's sheet. Mixed paper stays one sheet height. 0 prints as a digit. The status bar stays the sheet count.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -49,6 +51,60 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### Alphabetic page numbers after z are spreadsheet columns
+
+- Fixed in 3.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `format_page_number` in `src/document.cpp`.
+- Trigger: A page number format of a, b, c or A, B, C, on page 28 or later.
+- Outcome: 28 was "ab", the spreadsheet column. Word 97 repeats the letter, so 28 is "bb", 52 is "zz", and 53 is "aaa". List labels past z stay the bijective sequence.
+
+### Page Numbers opens on the defaults
+
+- Fixed in 3.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::on_page_numbers` in `src/page_ui.cpp`.
+- Trigger: Insert → Page Numbers on a section that already has a number. The footer is centered, the format is i, ii, iii, and the count starts at 4. Click OK without changing anything.
+- Outcome: OK wrote Footer, Right, 1, 2, 3, and Continue, and moved a header field into the footer. The dialog now opens on that section's place, format, and start. OK keeps them.
+
+### The header and footer bar lays every paragraph on the left
+
+- Fixed in 3.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::tag_story_spacing` in `src/page_ui.cpp`.
+- Trigger: A page number aligned Right, Center, Inside, or Outside, with View → Header and Footer on.
+- Outcome: The bar showed the digits on the left. Right and Center now sit where the number is placed. Inside is the left of an odd number and the right of an even one. Outside is the other side.
+
+### A page number wider than one character shifts the next paragraph
+
+- Fixed in 3.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::tag_story_spacing` in `src/page_ui.cpp`. The bar measured the stored run, which has no text, so the field counted as one space.
+- Trigger: A footer page number of 10 or wider, and a paragraph after it with space before.
+- Outcome: The space before started one character early. It now starts after the digits the bar shows.
+
+### A page number is drawn and saved as Sans 11
+
+- Fixed in 3.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::insert_page_number` in `src/page_ui.cpp`, and the header and footer writer in `src/rtf.cpp`.
+- Trigger: Normal is Times 12. Insert → Page Numbers, then save and open the file.
+- Outcome: The number was drawn and saved as Sans 11. It now uses Normal's face and size, and the file brings that face back.
+
+### A continuous section steals the sheet it shares
+
+- Fixed in 3.1.1.
+- Severity: incorrect
+- Confidence: high
+- Where: `printed_pages` and `section_for_sheet` in `src/document.cpp`. `MainWindow::rebuild_page_numbers` in `src/editor.cpp` uses the same rule.
+- Trigger: A section that starts at 10, then a continuous section on that same sheet that continues the count.
+- Outcome: The shared sheet was numbered 1. The sheet now keeps the count that opened it. A later section that restarts still numbers the sheet it shares. A next-page section that restarts numbers only its own sheet.
 
 ### Page numbers are painted on the wrong sheets
 

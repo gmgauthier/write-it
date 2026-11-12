@@ -565,7 +565,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   bool needs_spacing_gap(const ParaFormat& format, int heading) const;
   Glib::RefPtr<Gtk::TextTag> spacing_gap_tag(const ParaFormat& format, int heading);
   void apply_spacing_gap(int start, int end, const ParaFormat& format, int heading);
-  void tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs);
+  void tag_story_spacing(Gtk::TextView& view, const std::vector<Paragraph>& paragraphs,
+                         const std::string& field_label, int page_number);
   void tag_note_spacing(Gtk::TextView& view, const std::vector<std::vector<Paragraph>>& notes);
   void retitle_note_in(const Glib::RefPtr<Gtk::TextBuffer>& buffer, const std::vector<int>& remap);
   void retitle_note_markers(const std::vector<int>& remap, bool body, bool cells);
