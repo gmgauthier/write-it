@@ -480,6 +480,32 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
           restore_section_stories(section, new_header, new_footer, new_notes);
         });
   }
+  // The story step puts the header and footer back. The count lives on the
+  // section. A restart that keeps the same field would otherwise stay.
+  // A rebuilt body already restores the count with the document.
+  if (!replaced) {
+    auto numbering_at = [](const Document& doc, size_t section) {
+      if (section == 0 || doc.sections.empty())
+        return canonical_page_numbering(doc.numbering);
+      if (section - 1 < doc.sections.size())
+        return canonical_page_numbering(doc.sections[section - 1].numbering);
+      return PageNumbering{};
+    };
+    const PageNumbering old_numbering = numbering_at(before, edited_section);
+    const PageNumbering new_numbering = numbering_at(after, edited_section);
+    if (!(old_numbering == new_numbering)) {
+      const size_t section = edited_section;
+      auto apply_numbering = [this](size_t section, PageNumbering numbering) {
+        numbering = canonical_page_numbering(numbering);
+        if (section < section_slots_.size())
+          section_slots_[section].numbering = numbering;
+        refresh_stories();
+      };
+      undo_.record_custom(
+          [apply_numbering, section, old_numbering] { apply_numbering(section, old_numbering); },
+          [apply_numbering, section, new_numbering] { apply_numbering(section, new_numbering); });
+    }
+  }
   if (clamp_default_tab(before.default_tab) != clamp_default_tab(after.default_tab)) {
     const int old_tab = clamp_default_tab(before.default_tab);
     const int new_tab = clamp_default_tab(after.default_tab);

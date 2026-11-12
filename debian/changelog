@@ -1,3 +1,9 @@
+write-it (3.1.0-1) unstable; urgency=medium
+
+  * A page number in the header or footer prints that sheet's number, and a section can restart the count.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Thu, 12 Nov 2026 22:22:36 +0000
+
 write-it (3.0.3-1) unstable; urgency=medium
 
   * Enter at the end of a line of two fonts keeps the font at the caret.

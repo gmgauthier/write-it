@@ -14,6 +14,7 @@
 #include <glibmm/miscutils.h>
 #include <gtkmm.h>
 
+#include <gdk/gdkkeysyms.h>
 #include <iostream>
 #include <string>
 
@@ -53,6 +54,23 @@ struct MainWindowProbe {
   static std::string page(MainWindow& window)
   {
     return window.page_label_.get_text();
+  }
+
+  static void page_break(MainWindow& window)
+  {
+    window.on_page_break();
+  }
+
+  static void enter_key(MainWindow& window)
+  {
+    GdkEventKey event{};
+    event.type = GDK_KEY_PRESS;
+    event.keyval = GDK_KEY_Return;
+    if (window.on_text_key(&event))
+      return;
+    window.buffer_->begin_user_action();
+    window.buffer_->insert_interactive_at_cursor("\n");
+    window.buffer_->end_user_action();
   }
 
   static int seams(MainWindow& window)
@@ -181,10 +199,21 @@ void enter_after_following_break(writeit::MainWindow& window)
   CHECK(breaks_of(MainWindowProbe::doc(window)) == 1);
 
   enter(window);
-  CHECK(breaks_of(MainWindowProbe::doc(window)) == 1);
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(breaks_of(after) == 1);
+    CHECK(after.paragraphs.size() == 3);
+    CHECK(after.paragraphs[1].page_break);
+    CHECK(!after.paragraphs[2].page_break);
+  }
 
   enter(window);
-  CHECK(breaks_of(MainWindowProbe::doc(window)) == 1);
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(breaks_of(after) == 1);
+    CHECK(after.paragraphs[1].page_break);
+    CHECK(!after.paragraphs.back().page_break);
+  }
 
   MainWindowProbe::caret(window, MainWindowProbe::buffer(window)->get_char_count());
   enter(window);
@@ -192,8 +221,105 @@ void enter_after_following_break(writeit::MainWindow& window)
 
   enter(window);
   CHECK(breaks_of(MainWindowProbe::doc(window)) == 1);
+  CHECK(!MainWindowProbe::doc(window).paragraphs.back().page_break);
   CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
   CHECK(MainWindowProbe::seams(window) == 1);
+}
+
+// Insert → Page Break, then Return. The new sheet stays put. Return adds a
+// line on it and does not start another sheet.
+void enter_after_new_break(writeit::MainWindow& window)
+{
+  Document doc;
+  doc.paragraphs = {text_para("Hello", false)};
+  MainWindowProbe::load(window, doc, 5);
+  settle();
+  MainWindowProbe::page_break(window);
+  settle();
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(after.paragraphs.size() == 2);
+    CHECK(!after.paragraphs[0].page_break);
+    CHECK(after.paragraphs[1].page_break);
+    CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+  }
+
+  MainWindowProbe::enter_key(window);
+  settle();
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(breaks_of(after) == 1);
+    CHECK(after.paragraphs.size() == 3);
+    CHECK(after.paragraphs[1].page_break);
+    CHECK(!after.paragraphs[2].page_break);
+    CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+  }
+
+  MainWindowProbe::enter_key(window);
+  settle();
+  MainWindowProbe::enter_key(window);
+  settle();
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(breaks_of(after) == 1);
+    CHECK(after.paragraphs.size() == 5);
+    CHECK(after.paragraphs[1].page_break);
+    for (size_t i = 2; i < after.paragraphs.size(); ++i)
+      CHECK(!after.paragraphs[i].page_break);
+    CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+    CHECK(MainWindowProbe::seams(window) == 1);
+  }
+}
+
+// The same Return on the empty item a page break just added to a numbered
+// list. The first Return ends the list. The next one must not start a sheet.
+void enter_after_new_list_break(writeit::MainWindow& window)
+{
+  Document doc;
+  Paragraph one = text_para("One", false);
+  one.list.kind = writeit::ListKind::Number;
+  one.list.list = 1;
+  Paragraph two = text_para("Two", false);
+  two.list.kind = writeit::ListKind::Number;
+  two.list.list = 1;
+  Paragraph three = text_para("Three", false);
+  three.list.kind = writeit::ListKind::Number;
+  three.list.list = 1;
+  doc.paragraphs = {one, two, three};
+  MainWindowProbe::load(window, doc, 3 + 1 + 3 + 1 + 5);
+  settle();
+  MainWindowProbe::page_break(window);
+  settle();
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(after.paragraphs.size() == 4);
+    CHECK(after.paragraphs[3].page_break);
+    CHECK(after.paragraphs[3].list.kind == writeit::ListKind::Number);
+  }
+
+  MainWindowProbe::enter_key(window);
+  settle();
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(after.paragraphs.size() == 4);
+    CHECK(breaks_of(after) == 1);
+    CHECK(after.paragraphs[3].page_break);
+    CHECK(after.paragraphs[3].list.kind == writeit::ListKind::None);
+  }
+
+  MainWindowProbe::enter_key(window);
+  settle();
+  MainWindowProbe::enter_key(window);
+  settle();
+  {
+    const Document after = MainWindowProbe::doc(window);
+    CHECK(breaks_of(after) == 1);
+    CHECK(after.paragraphs.size() == 6);
+    CHECK(after.paragraphs[3].page_break);
+    CHECK(!after.paragraphs[4].page_break);
+    CHECK(!after.paragraphs[5].page_break);
+    CHECK(MainWindowProbe::page(window) == "Page 2 of 2");
+  }
 }
 
 void enter_without_break(writeit::MainWindow& window)
@@ -210,7 +336,7 @@ void enter_without_break(writeit::MainWindow& window)
 
 }  // namespace
 
-constexpr int kChecks = 24;
+constexpr int kChecks = 60;
 
 int main(int argc, char* argv[])
 {
@@ -231,6 +357,8 @@ int main(int argc, char* argv[])
     enter_after_broken_hello(window);
     enter_after_following_break(window);
     enter_without_break(window);
+    enter_after_new_break(window);
+    enter_after_new_list_break(window);
     window.hide();
     settle();
   }

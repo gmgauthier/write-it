@@ -73,6 +73,14 @@ Ink ink_clamp(int index);
 // #RRGGBB of ink_rgb().
 std::string ink_hex(Ink ink);
 
+// Where a page number sits on the sheet. Inside is the left of an odd
+// printed number and the right of an even one. Outside is the other side.
+// 0 is even. The codes are RTF's \pgplaceN.
+enum class PageSlot { Left = 0, Center = 1, Right = 2, Inside = 3, Outside = 4 };
+
+// The side a slot takes for one printed number. Center stays in the middle.
+enum class PageSide { Left, Center, Right };
+
 struct Run {
   std::string text;
   std::string font = "Sans";
@@ -93,6 +101,11 @@ struct Run {
   // A picture in the run. Its text is empty. Two pictures are never merged,
   // even when the bytes match.
   std::optional<Image> image;
+  // A page-number field. Its text is empty. The sheet draws the number, and
+  // page_slot says where. A run that is not a field ignores page_slot, so an
+  // older document still compares equal.
+  bool page = false;
+  PageSlot page_slot = PageSlot::Right;
   // What was set directly rather than by the paragraph's style (kDirect*
   // bits). A style applied or edited leaves these alone. Not saved: a file
   // holds only values, and a reader takes what differs from the style as
@@ -165,6 +178,35 @@ enum class Align { Left, Center, Right, Justify };
 // dialog also offers even page, odd page, and a column break. Those are
 // read as NextPage and Continuous; the menu offers these two.
 enum class SectionBreak { None = 0, NextPage = 1, Continuous = 2 };
+
+// Word 97's page-number formats. Arabic is 1, 2, 3 and is omitted from RTF.
+enum class PageNumeral { Arabic, LowerLetter, UpperLetter, LowerRoman, UpperRoman };
+
+// The largest start Word stores. 0 is a number. Continue ignores it.
+constexpr int kMaxPageStart = 32767;
+
+// How a section numbers its sheets. restart false keeps counting from the
+// section before, and start is then 1. show_first false hides the number on
+// that section's first sheet and still uses the number.
+struct PageNumbering {
+  bool restart = false;
+  int start = 1;
+  PageNumeral numeral = PageNumeral::Arabic;
+  bool show_first = true;
+};
+
+// Insert → Page Numbers. in_header false is the footer, Word's default.
+struct PageNumberChoice {
+  bool in_header = false;
+  PageSlot slot = PageSlot::Right;
+  PageNumbering numbering;
+};
+
+// One sheet's printed number. label is empty when that sheet hides it.
+struct PrintedPage {
+  int number = 1;
+  std::string label;
+};
 
 // Word 97's line spacing. Single, 1.5 and Double ignore `value`. At least and
 // Exactly store twips (0 through kMaxIndent, which is 0 pt through 1584 pt).
@@ -514,6 +556,7 @@ constexpr unsigned kDirectTabs = 512;
 struct Section {
   SectionBreak break_before = SectionBreak::NextPage;
   PageSetup page;
+  PageNumbering numbering;
   std::vector<Paragraph> header;
   std::vector<Paragraph> footer;
 };
@@ -535,6 +578,8 @@ struct Document {
   // Sections after the first. Empty means the document is the one section
   // page, header, and footer describe.
   std::vector<Section> sections;
+  // How section 0 numbers its sheets. The default is omitted from the file.
+  PageNumbering numbering;
   // Footnotes, in the order their markers cite. notes[i] belongs to a run
   // whose note is i + 1.
   std::vector<std::vector<Paragraph>> notes;
@@ -547,6 +592,8 @@ bool same_look(const Run& a, const Run& b);
 // Two paragraphs' own formats (Paragraph::mark), which only empty paragraphs
 // have, compared as same_look(): true when either has text.
 bool same_mark(const Paragraph& a, const Paragraph& b);
+bool operator==(const PageNumbering& a, const PageNumbering& b);
+bool operator!=(const PageNumbering& a, const PageNumbering& b);
 bool operator==(const PageSetup& a, const PageSetup& b);
 bool operator!=(const PageSetup& a, const PageSetup& b);
 bool operator==(const Section& a, const Section& b);
@@ -916,6 +963,24 @@ std::string markdown_export(const Document& doc);
 // character format this slice understands.
 bool rtf_import(const std::string& text, Document& doc);
 std::string rtf_export(const Document& doc);
+
+// A page number's digits, letters, or roman numerals. 0 and below are digits.
+std::string format_page_number(int number, PageNumeral numeral);
+// start clamped to 0..kMaxPageStart. Continue stores 1.
+int clamp_page_start(int start);
+PageNumbering canonical_page_numbering(PageNumbering numbering);
+// section_starts[0] is 0. A later entry is the sheet that section begins on.
+// Two sections may begin on one sheet; the later one wins when it restarts.
+std::vector<PrintedPage> printed_pages(int sheets, const std::vector<int>& section_starts,
+                                       const std::vector<PageNumbering>& numbering);
+// Left and Inside are left. Right and Outside are right. Center is center.
+Align page_slot_align(PageSlot slot);
+// Inside and Outside follow the printed number, not the sheet index.
+PageSide page_number_side(PageSlot slot, int number);
+// The story as the header bar shows it. A page field contributes `label`,
+// or "#" when that label is empty, so the field stays visible.
+std::string story_field_text(const std::vector<Paragraph>& story, const std::string& label);
+bool story_has_page(const std::vector<Paragraph>& story);
 
 // "png", "jpeg", or "" when the bytes are neither.
 std::string image_type_of(const std::string& data);
