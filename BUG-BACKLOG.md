@@ -18,7 +18,7 @@ Reported 2026-10-30. Enter at the end of a line of two fonts opened the next lin
 
 Reviewed 2026-11-12 against `write-it-test-document-1.rtf` and the page-number work. Two defects are in Closed, fixed in 3.1.0. Checked and left out: the footnote groups sit on the marker's sheet (note 1 on sheet 1, notes 2 and 3 on sheet 2, note 4 on sheet 8). A caret in section 4 follows that section. Sections 2 and 3 store no page-number field. A new section copies the field; inserting a number later writes the caret's section only. The "4." in front of "Images work now" is the list label on the empty page-break paragraph.
 
-Reviewed 2026-11-12 against 3.1.0. Page numbers were checked against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Six defects are in Closed. The standing typing item stays open. Checked and left out: list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.). A page-number field stays in the section that holds it. A letter still skips the page walk. Footnote groups stay on the marker's sheet. Mixed paper stays one sheet height. 0 prints as a digit. The status bar stays the sheet count.
+Reviewed 2026-11-12 against 3.1.0. Page numbers were checked against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Six defects are in Closed, fixed in 3.1.1. The standing typing item stays open. Checked and left out: list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.). A page-number field stays in the section that holds it. A letter still skips the page walk. Footnote groups stay on the marker's sheet. Mixed paper stays one sheet height. 0 prints as a digit. The status bar stays the sheet count.
 
 ## Open
 
@@ -54,7 +54,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### Alphabetic page numbers after z are spreadsheet columns
 
-- Fixed.
+- Fixed in 3.1.1.
 - Severity: incorrect
 - Confidence: high
 - Where: `format_page_number` in `src/document.cpp`.
@@ -63,7 +63,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### Page Numbers opens on the defaults
 
-- Fixed.
+- Fixed in 3.1.1.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::on_page_numbers` in `src/page_ui.cpp`.
@@ -72,7 +72,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### The header and footer bar lays every paragraph on the left
 
-- Fixed.
+- Fixed in 3.1.1.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::tag_story_spacing` in `src/page_ui.cpp`.
@@ -81,7 +81,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### A page number wider than one character shifts the next paragraph
 
-- Fixed.
+- Fixed in 3.1.1.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::tag_story_spacing` in `src/page_ui.cpp`. The bar measured the stored run, which has no text, so the field counted as one space.
@@ -90,7 +90,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### A page number is drawn and saved as Sans 11
 
-- Fixed.
+- Fixed in 3.1.1.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::insert_page_number` in `src/page_ui.cpp`, and the header and footer writer in `src/rtf.cpp`.
@@ -99,7 +99,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### A continuous section steals the sheet it shares
 
-- Fixed.
+- Fixed in 3.1.1.
 - Severity: incorrect
 - Confidence: high
 - Where: `printed_pages` and `section_for_sheet` in `src/document.cpp`. `MainWindow::rebuild_page_numbers` in `src/editor.cpp` uses the same rule.
