@@ -22,6 +22,8 @@ Reviewed 2026-11-12 against 3.1.0. Page numbers were checked against the 3.0 M2 
 
 Reviewed 2026-11-13 against 3.1.1. Page numbers were checked again against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Two defects are in Closed, fixed in 3.1.2. The standing typing item stays open. Checked and left out: a continuous section on the sheet it shares still keeps that count, a restarting section still takes the sheet it sits on, list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.), a page-number field stays in the section that holds it, a letter still skips the page walk, and the status bar stays the sheet count.
 
+Reviewed 2026-11-13 against 3.1.2. Page numbers were checked again against the 3.0 M2 paragraph in `DEVELOPMENT.md`. One defect is in Closed. The standing typing item stays open. Checked and left out: a page-number field stays in the section that holds it, choosing the menu still opens the bar, a header or footer that also has text still opens it, a letter still skips the page walk, and the status bar stays the sheet count.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -53,6 +55,15 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### A page number is drawn again at the bottom of the last sheet
+
+- Fixed.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::refresh_stories` in `src/page_ui.cpp`.
+- Trigger: The footer is only a page field. View → Header and Footer has not been chosen. Scroll to the end of the document while the caret is on a numbered sheet.
+- Outcome: The bar showed the caret's number, right-aligned, after the last sheet. The bar stays closed. Each sheet still draws its own number. Choosing the menu still opens the bar, and a header or footer that also has text, a picture, or a note still opens.
 
 ### A continuous section takes a sheet it did not open
 

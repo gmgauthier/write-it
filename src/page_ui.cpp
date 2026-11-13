@@ -145,11 +145,16 @@ bool blank_text(const std::string& text)
   return true;
 }
 
-bool story_present(const std::vector<Paragraph>& story)
+// A page field is drawn on each sheet. The bar would paint the caret's copy
+// of that number again, at the bottom of the last sheet. Text, a picture, or
+// a note is the bar's own content, and that still opens it.
+bool story_besides_page(const std::vector<Paragraph>& story)
 {
   for (const Paragraph& paragraph : story) {
     for (const Run& run : paragraph.runs) {
-      if (run.page || run.image || run.note != 0 || !blank_text(run.text))
+      if (run.page)
+        continue;
+      if (run.image || run.note != 0 || !blank_text(run.text))
         return true;
     }
   }
@@ -3205,11 +3210,14 @@ void MainWindow::on_story_draw(Gtk::TextView& view, const Cairo::RefPtr<Cairo::C
 void MainWindow::refresh_stories()
 {
   rebuild_page_numbers();
-  const bool has = story_present(header_) || story_present(footer_);
-  if (has && !stories_chosen_ && !stories_on_ && header_footer_item_) {
+  // The bar follows a story the user did not ask to see. A page number alone
+  // is not one: each sheet already draws it. Choosing the menu keeps the bar
+  // where they left it, including over a page number they want to edit.
+  const bool has = story_besides_page(header_) || story_besides_page(footer_);
+  if (header_footer_item_ && !stories_chosen_ && has != stories_on_) {
     suppress_stories_ = true;
-    header_footer_item_->set_active(true);
-    stories_on_ = true;
+    header_footer_item_->set_active(has);
+    stories_on_ = has;
     suppress_stories_ = false;
   }
   auto fill = [this](Gtk::TextView& view, const std::string& text, std::string& shown) {
