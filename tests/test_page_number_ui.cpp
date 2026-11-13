@@ -117,6 +117,13 @@ struct MainWindowProbe {
     window.draw_page_numbers(cr);
   }
 
+  static void place_end(MainWindow& window)
+  {
+    if (!window.buffer_)
+      return;
+    window.buffer_->place_cursor(window.buffer_->end());
+  }
+
   // Seam offsets in buffer order. A tag-table walk is not this order.
   static std::vector<int> seam_offsets(MainWindow& window)
   {
@@ -300,7 +307,7 @@ writeit::Paragraph page_field(writeit::PageSlot slot)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 112;
+constexpr int kChecks = 126;
 
 int main(int argc, char* argv[])
 {
@@ -576,6 +583,77 @@ int main(int argc, char* argv[])
     CHECK(Probe::marks(window).size() == 2);
     CHECK(Probe::marks(window)[0].footer_label == "10");
     CHECK(Probe::marks(window)[1].footer_label == "1");
+
+    // A page break opens the next sheet. A continuous section that begins
+    // later on that sheet leaves it with the count that opened it, and
+    // numbers the sheet after that in its own format.
+    writeit::Document mid;
+    mid.paragraphs.push_back(body("Alpha"));
+    writeit::Paragraph opened;
+    opened.page_break = true;
+    mid.paragraphs.push_back(opened);
+    mid.paragraphs.push_back(body("Still"));
+    writeit::Paragraph cont = body("Cont");
+    cont.section_break = writeit::SectionBreak::Continuous;
+    mid.paragraphs.push_back(cont);
+    writeit::Paragraph opened_again;
+    opened_again.page_break = true;
+    mid.paragraphs.push_back(opened_again);
+    mid.paragraphs.push_back(body("After"));
+    mid.numbering.restart = true;
+    mid.numbering.start = 10;
+    mid.footer.push_back(page_field(writeit::PageSlot::Right));
+    writeit::Section later;
+    later.break_before = writeit::SectionBreak::Continuous;
+    later.numbering.numeral = writeit::PageNumeral::LowerRoman;
+    later.footer.push_back(page_field(writeit::PageSlot::Right));
+    mid.sections.push_back(later);
+    Probe::load(window, mid);
+    settle();
+    settle();
+    CHECK(Probe::marks(window).size() == 3);
+    CHECK(Probe::marks(window)[0].footer_label == "10");
+    CHECK(Probe::marks(window)[1].footer_label == "11");
+    CHECK(Probe::marks(window)[2].footer_label == "xii");
+
+    // The same sheet is the continuous section's when that section restarts.
+    later.numbering.restart = true;
+    later.numbering.start = 1;
+    mid.sections[0] = later;
+    Probe::load(window, mid);
+    settle();
+    settle();
+    CHECK(Probe::marks(window).size() == 3);
+    CHECK(Probe::marks(window)[0].footer_label == "10");
+    CHECK(Probe::marks(window)[1].footer_label == "i");
+    CHECK(Probe::marks(window)[2].footer_label == "ii");
+
+    // Moving onto the next sheet refills the bar. The place and the space
+    // after the digits have to follow the new number.
+    writeit::Document bar;
+    bar.paragraphs.push_back(body("Hello"));
+    writeit::Paragraph broken;
+    broken.page_break = true;
+    bar.paragraphs.push_back(broken);
+    bar.paragraphs.push_back(body("Next"));
+    bar.numbering.restart = true;
+    bar.numbering.start = 9;
+    bar.footer.push_back(page_field(writeit::PageSlot::Inside));
+    writeit::Paragraph after_field = body("After");
+    after_field.spacing.before = 240;
+    bar.footer.push_back(after_field);
+    Probe::load(window, bar);
+    settle();
+    settle();
+    CHECK(Probe::footer_text(window) == "9\nAfter");
+    CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_LEFT);
+    CHECK(gap_at(Probe::footer_view(window)) == 2);
+    Probe::place_end(window);
+    settle();
+    settle();
+    CHECK(Probe::footer_text(window) == "10\nAfter");
+    CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_RIGHT);
+    CHECK(gap_at(Probe::footer_view(window)) == 3);
 
     // Inside follows the printed number: even is the right, odd is the left.
     writeit::Document inside;
