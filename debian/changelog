@@ -1,3 +1,9 @@
+write-it (3.1.3-1) unstable; urgency=medium
+
+  * A page number alone stays on the sheet, and the header bar opens only when the header or footer has other content.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Fri, 13 Nov 2026 08:13:16 +0000
+
 write-it (3.1.2-1) unstable; urgency=medium
 
   * A continuous section leaves the sheet it did not open with the count that opened it, and the header bar keeps the number's place and spacing when the caret moves to another sheet.

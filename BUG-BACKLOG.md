@@ -22,7 +22,7 @@ Reviewed 2026-11-12 against 3.1.0. Page numbers were checked against the 3.0 M2 
 
 Reviewed 2026-11-13 against 3.1.1. Page numbers were checked again against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Two defects are in Closed, fixed in 3.1.2. The standing typing item stays open. Checked and left out: a continuous section on the sheet it shares still keeps that count, a restarting section still takes the sheet it sits on, list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.), a page-number field stays in the section that holds it, a letter still skips the page walk, and the status bar stays the sheet count.
 
-Reviewed 2026-11-13 against 3.1.2. Page numbers were checked again against the 3.0 M2 paragraph in `DEVELOPMENT.md`. One defect is in Closed. The standing typing item stays open. Checked and left out: a page-number field stays in the section that holds it, choosing the menu still opens the bar, a header or footer that also has text still opens it, a letter still skips the page walk, and the status bar stays the sheet count.
+Reviewed 2026-11-13 against 3.1.2. Page numbers were checked again against the 3.0 M2 paragraph in `DEVELOPMENT.md`. One defect is in Closed, fixed in 3.1.3. The standing typing item stays open. Checked and left out: a page-number field stays in the section that holds it, choosing the menu still opens the bar, a header or footer that also has text still opens it, a letter still skips the page walk, and the status bar stays the sheet count.
 
 ## Open
 
@@ -58,7 +58,7 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 
 ### A page number is drawn again at the bottom of the last sheet
 
-- Fixed.
+- Fixed in 3.1.3.
 - Severity: incorrect
 - Confidence: high
 - Where: `MainWindow::refresh_stories` in `src/page_ui.cpp`.
