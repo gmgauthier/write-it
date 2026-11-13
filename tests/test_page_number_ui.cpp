@@ -307,7 +307,7 @@ writeit::Paragraph page_field(writeit::PageSlot slot)
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 126;
+constexpr int kChecks = 133;
 
 int main(int argc, char* argv[])
 {
@@ -646,6 +646,7 @@ int main(int argc, char* argv[])
     settle();
     settle();
     CHECK(Probe::footer_text(window) == "9\nAfter");
+    CHECK(Probe::footer_view(window).get_parent() != nullptr);
     CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_LEFT);
     CHECK(gap_at(Probe::footer_view(window)) == 2);
     Probe::place_end(window);
@@ -673,6 +674,27 @@ int main(int argc, char* argv[])
     Probe::insert(window, inside_choice);
     settle();
     CHECK(justification_at(Probe::footer_view(window), 0) == Gtk::JUSTIFY_LEFT);
+
+    // The sheet draws its own number. A footer that is only that field must
+    // not sit in the page flow, or the caret's copy is painted again at the
+    // bottom of the last sheet. The digits stay in the bar for when it opens.
+    writeit::Document only;
+    only.paragraphs.push_back(body("Hello"));
+    only.footer.push_back(page_field(writeit::PageSlot::Right));
+    Probe::load(window, only);
+    settle();
+    settle();
+    CHECK(Probe::footer_text(window) == "1");
+    CHECK(Probe::footer_view(window).get_parent() == nullptr);
+    CHECK(Probe::sheet_footer(window) == "1");
+    Gtk::MenuItem* stories_item = item_named(menu_items(window, "_View"), "_Header and Footer");
+    auto* stories = dynamic_cast<Gtk::CheckMenuItem*>(stories_item);
+    CHECK(stories && !stories->get_active());
+    if (stories)
+      stories->set_active(true);
+    settle();
+    CHECK(Probe::footer_view(window).get_parent() != nullptr);
+    CHECK(Probe::footer_text(window) == "1");
   }
   return suite_test::done("page-number-ui", kChecks);
 }
