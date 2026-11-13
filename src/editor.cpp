@@ -8438,12 +8438,24 @@ void MainWindow::rebuild_page_numbers()
       push(slot.numbering, slot.header, slot.footer);
   if (!page_field_on_)
     return;
-  std::vector<int> starts(numbering.size(), 0);
+  // The break paragraph is the only one wearing the section tag. Its sheet is
+  // where that section begins, unless it continues, does not restart, and did
+  // not open the sheet. The section that opened the sheet keeps the number,
+  // and this one numbers the sheets after it. A section with no tag yet owns
+  // nothing, so a missing origin cannot take every later sheet.
+  std::vector<int> starts(numbering.size(), -1);
+  if (!starts.empty())
+    starts[0] = 0;
   const int sheets = std::max(1, seam_sheets_valid_ ? seam_sheets_ : 1);
   if (seam_lines_valid_ && buffer_ && section_slots_.size() > 1) {
     const int count = buffer_->get_char_count();
+    int previous_page = 0;
     for (const SeamLine& line : seam_lines_) {
-      if (line.start <= 0 || line.page <= 0 || count <= 0)
+      if (line.page <= 0)
+        continue;
+      const bool opens = line.page_break || line.page != previous_page;
+      previous_page = line.page;
+      if (line.start <= 0 || count <= 0)
         continue;
       const int at = std::min(line.start, count - 1);
       SectionBreak kind = SectionBreak::None;
@@ -8453,10 +8465,20 @@ void MainWindow::rebuild_page_numbers()
       for (size_t i = 1; i < section_slots_.size() && i < starts.size(); ++i) {
         if (section_slots_[i].id != id)
           continue;
-        starts[i] = line.page - 1;
+        if (starts[i] < 0) {
+          const bool restarts = i < numbering.size() && numbering[i].restart;
+          int origin = line.page - 1;
+          if (kind == SectionBreak::Continuous && !restarts && !opens)
+            origin = line.page;
+          starts[i] = std::min(origin, sheets);
+        }
         break;
       }
     }
+  }
+  for (size_t i = 1; i < starts.size(); ++i) {
+    if (starts[i] < 0)
+      starts[i] = sheets;
   }
   const std::vector<PrintedPage> printed = printed_pages(sheets, starts, numbering);
   page_number_marks_.resize(printed.size());
@@ -8490,18 +8512,30 @@ void MainWindow::sync_page_field_views()
   if (header_view_.has_focus() || footer_view_.has_focus())
     return;
   const std::string label = caret_page_label();
+  int page_number = 1;
+  if (!page_number_marks_.empty()) {
+    int sheet = seam_sheets_valid_ ? std::max(1, seam_caret_page_) : 1;
+    if (sheet > static_cast<int>(page_number_marks_.size()))
+      sheet = static_cast<int>(page_number_marks_.size());
+    page_number = page_number_marks_[static_cast<size_t>(sheet - 1)].number;
+  }
+  // set_text drops the place and the space after the digits. Put them back
+  // for the sheet the caret is on, including when the digits did not change.
   auto refill = [&](Gtk::TextView& view, const std::vector<Paragraph>& story, std::string& shown) {
     if (!story_has_page(story))
       return;
     const std::string text = story_field_text(story, label);
     auto buffer = view.get_buffer();
-    if (!buffer || buffer->get_text().raw() != shown || shown == text)
+    if (!buffer || buffer->get_text().raw() != shown)
       return;
-    const bool was = loading_;
-    loading_ = true;
-    buffer->set_text(text);
-    shown = text;
-    loading_ = was;
+    if (shown != text) {
+      const bool was = loading_;
+      loading_ = true;
+      buffer->set_text(text);
+      shown = text;
+      loading_ = was;
+    }
+    tag_story_spacing(view, story, label, page_number);
   };
   refill(header_view_, header_, header_shown_);
   refill(footer_view_, footer_, footer_shown_);

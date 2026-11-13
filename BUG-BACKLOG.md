@@ -20,6 +20,8 @@ Reviewed 2026-11-12 against `write-it-test-document-1.rtf` and the page-number w
 
 Reviewed 2026-11-12 against 3.1.0. Page numbers were checked against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Six defects are in Closed, fixed in 3.1.1. The standing typing item stays open. Checked and left out: list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.). A page-number field stays in the section that holds it. A letter still skips the page walk. Footnote groups stay on the marker's sheet. Mixed paper stays one sheet height. 0 prints as a digit. The status bar stays the sheet count.
 
+Reviewed 2026-11-13 against 3.1.1. Page numbers were checked again against the 3.0 M2 paragraph in `DEVELOPMENT.md`. Two defects are in Closed, fixed in 3.1.2. The standing typing item stays open. Checked and left out: a continuous section on the sheet it shares still keeps that count, a restarting section still takes the sheet it sits on, list labels past z stay the bijective sequence the 1.0 tests lock (28 is ab.), a page-number field stays in the section that holds it, a letter still skips the page walk, and the status bar stays the sheet count.
+
 ## Open
 
 ### Rerun the typing-speed bench, and plan a fix round above 10 ms
@@ -51,6 +53,24 @@ These fail because of the display they run on. The package build of v1.0.0 did n
 - Outcome: `window-memory` requires the first launch to measure `960x700`. `status-bar` lays out the message, the page cell, and the zoom cell in that window. A smaller screen clamps the window and those checks fail. The window itself is fitted, frame included, in 1.0.6. These checks still require a screen that holds 960×700.
 
 ## Closed
+
+### A continuous section takes a sheet it did not open
+
+- Fixed in 3.1.2.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::rebuild_page_numbers` in `src/editor.cpp`.
+- Trigger: A section starts at 10. A page break opens the next sheet, and a continuous section begins later on that sheet and continues in roman numerals.
+- Outcome: That sheet was numbered xi. It stays 11, the count that opened it. The continuous section numbers the sheet after that, xii. A continuous section that restarts still numbers the sheet it sits on.
+
+### Moving the caret drops the page number's place and spacing
+
+- Fixed in 3.1.2.
+- Severity: incorrect
+- Confidence: high
+- Where: `MainWindow::sync_page_field_views` in `src/editor.cpp`.
+- Trigger: An Inside page number, with a paragraph after it that has space before. The caret moves from page 9 onto page 10.
+- Outcome: The bar showed 10, on the left, and the space before had gone. 10 sits on the right, and the space starts after the two digits.
 
 ### Alphabetic page numbers after z are spreadsheet columns
 

@@ -271,6 +271,15 @@ void counts()
   writeit::PageNumbering next_one = first;
   next_one.start = 1;
   CHECK(labels(writeit::printed_pages(3, {0, 0, 2}, {at_ten, shared, next_one})) == "10,11,1");
+  // A continuing section that begins on the next sheet numbers that sheet.
+  // One that begins on the sheet after the one it sits on leaves that sheet
+  // alone and numbers the sheet after it.
+  CHECK(labels(writeit::printed_pages(2, {0, 1}, {at_ten, shared_roman})) == "10,xi");
+  CHECK(labels(writeit::printed_pages(3, {0, 2}, {at_ten, shared_roman})) == "10,11,xii");
+  writeit::PageNumbering took = shared_roman;
+  took.restart = true;
+  took.start = 1;
+  CHECK(labels(writeit::printed_pages(3, {0, 1}, {at_ten, took})) == "10,i,ii");
 }
 
 void sides()
@@ -391,7 +400,7 @@ void normal_font_round_trip()
 }  // namespace
 
 // Exactly the checks this suite runs. Update it with the tests.
-constexpr int kChecks = 126;
+constexpr int kChecks = 129;
 
 int main()
 {

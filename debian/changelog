@@ -1,3 +1,9 @@
+write-it (3.1.2-1) unstable; urgency=medium
+
+  * A continuous section leaves the sheet it did not open with the count that opened it, and the header bar keeps the number's place and spacing when the caret moves to another sheet.
+
+ -- Greg Gauthier <gmgauthier@protonmail.com>  Fri, 13 Nov 2026 00:41:58 +0000
+
 write-it (3.1.1-1) unstable; urgency=medium
 
   * A letter page number repeats like Word, the Page Numbers dialog keeps the section's settings, a continuous section keeps the count, and the header bar uses the number's place, spacing, and font.
