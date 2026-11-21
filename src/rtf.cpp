@@ -306,13 +306,10 @@ bool skip_destination(const std::string& word)
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0 || run.page;
-  if (!held)
+  if (!run_present(run))
     return;
-  const bool sticky = !run.page && !run.image.has_value() && run.note == 0 &&
-                      !paragraph.runs.empty() && !paragraph.runs.back().page &&
-                      !paragraph.runs.back().image.has_value() && paragraph.runs.back().note == 0 &&
-                      same_format(paragraph.runs.back(), run);
+  const bool sticky = run_merges(run) && !paragraph.runs.empty() &&
+                      run_merges(paragraph.runs.back()) && same_format(paragraph.runs.back(), run);
   if (sticky)
     paragraph.runs.back().text += run.text;
   else
@@ -875,6 +872,7 @@ class Reader {
         if (notes_.size() < static_cast<size_t>(kMaxNotes)) {
           notes_.emplace_back();
           note_marks_.emplace_back();
+          note_end_.push_back(0);
           enter_story(Story::Note);
           // The {\super } around a marker is how the mark is drawn. It is
           // not superscript on the note, and \pard does not clear script.
@@ -966,6 +964,14 @@ class Reader {
     }
     if (word == "chftn") {
       state_.auto_note = true;
+      return;
+    }
+    // \ftnalt marks this footnote group as an endnote. It is a flag, not a
+    // destination, and it is read before the group closes and the marker
+    // is attached. A footnote file has none, so its bytes stay as they were.
+    if (word == "ftnalt") {
+      if (state_.story == Story::Note && !note_end_.empty())
+        note_end_.back() = 1;
       return;
     }
     if (word == "par" || word == "line") {
@@ -1779,6 +1785,7 @@ class Reader {
     Run run = char_run();
     run.text.clear();
     run.note = 0;
+    run.endnote = 0;
     run.image.reset();
     run.page = true;
     run.page_slot = place_set_ ? place_ : slot_from_align(state_.align);
@@ -2497,7 +2504,7 @@ class Reader {
     if (runs.empty())
       return false;
     Run& run = runs.back();
-    if (run.image || run.note != 0)
+    if (run.image || run.note != 0 || run.endnote != 0)
       return false;
     if (run.text == label) {
       run.note = index;
@@ -2521,7 +2528,21 @@ class Reader {
   {
     if (index <= 0)
       return;
-    const std::string label = std::to_string(index);
+    // The label is the number among this kind, not the combined index.
+    // Footnotes stay 1, 2, 3. Endnotes are i, ii, iii. A file with only
+    // footnotes still looks for the same digits it always did.
+    const bool end = static_cast<size_t>(index) <= note_end_.size() &&
+                     note_end_[static_cast<size_t>(index - 1)] != 0;
+    int kind = 0;
+    const int limit = std::min(index, static_cast<int>(note_end_.size()));
+    for (int i = 0; i < limit; ++i) {
+      if ((note_end_[static_cast<size_t>(i)] != 0) == end)
+        ++kind;
+    }
+    if (kind <= 0)
+      kind = index;
+    const std::string label =
+        end ? format_page_number(kind, PageNumeral::LowerRoman) : std::to_string(kind);
     const bool automatic = state_.auto_note;
     state_.auto_note = false;
     // \chftn is the reference. Do not cut the same digits out of the sentence.
@@ -2532,7 +2553,7 @@ class Reader {
     // is the marker and nothing else still belongs to the note.
     if (!automatic && !paragraphs_.empty() && !paragraphs_.back().runs.empty()) {
       Run& run = paragraphs_.back().runs.back();
-      if (!run.image && run.note == 0 && run.text == label) {
+      if (!run.image && run.note == 0 && run.endnote == 0 && run.text == label) {
         run.note = index;
         run.script = Script::None;
         return;
@@ -2842,8 +2863,47 @@ class Reader {
       }
     }
     doc.notes.clear();
-    for (size_t n = 0; n < notes_.size() && n < note_marks_.size(); ++n)
-      doc.notes.push_back(take_story(notes_[n], note_marks_[n]));
+    doc.endnotes.clear();
+    std::vector<int> as_note(notes_.size() + 1, 0);
+    std::vector<int> as_end(notes_.size() + 1, 0);
+    int footnotes = 0;
+    int endnotes = 0;
+    for (size_t n = 0; n < notes_.size() && n < note_marks_.size(); ++n) {
+      const bool end = n < note_end_.size() && note_end_[n] != 0;
+      if (end) {
+        ++endnotes;
+        as_end[n + 1] = endnotes;
+        doc.endnotes.push_back(take_story(notes_[n], note_marks_[n]));
+      } else {
+        ++footnotes;
+        as_note[n + 1] = footnotes;
+        doc.notes.push_back(take_story(notes_[n], note_marks_[n]));
+      }
+    }
+    auto remap_markers = [&](std::vector<Paragraph>& story) {
+      for (Paragraph& paragraph : story) {
+        for (Run& run : paragraph.runs) {
+          if (run.note <= 0)
+            continue;
+          const size_t combined = static_cast<size_t>(run.note);
+          if (combined >= as_end.size())
+            continue;
+          if (as_end[combined] > 0) {
+            run.endnote = as_end[combined];
+            run.note = 0;
+          } else if (as_note[combined] > 0) {
+            run.note = as_note[combined];
+          }
+        }
+      }
+    };
+    remap_markers(doc.paragraphs);
+    remap_markers(doc.header);
+    remap_markers(doc.footer);
+    for (Section& section : doc.sections) {
+      remap_markers(section.header);
+      remap_markers(section.footer);
+    }
     if (held_.empty()) {
       if (page_.landscape && page_.paper_width < page_.paper_height)
         std::swap(page_.paper_width, page_.paper_height);
@@ -2899,6 +2959,9 @@ class Reader {
       }
     }
     for (std::vector<Paragraph>& note : doc.notes)
+      for (Paragraph& paragraph : note)
+        fit(paragraph, text);
+    for (std::vector<Paragraph>& note : doc.endnotes)
       for (Paragraph& paragraph : note)
         fit(paragraph, text);
     for (Style& style : doc.styles) {
@@ -2994,6 +3057,8 @@ class Reader {
   std::vector<ListMarks> footer_marks_;
   std::vector<std::vector<Paragraph>> notes_;
   std::vector<std::vector<ListMarks>> note_marks_;
+  // Parallel to notes_. 1 when that group carried \ftnalt.
+  std::vector<char> note_end_;
   std::string pict_hex_;
   std::string pict_type_;
   int pict_w_ = 0;
@@ -3395,7 +3460,7 @@ std::string rtf_export(const Document& incoming)
   // paragraph with text takes its format from its runs.
   auto mark_of = [](const Paragraph& paragraph) -> const Run* {
     for (const Run& run : paragraph.runs) {
-      if (!run.text.empty() || run.image.has_value() || run.note != 0 || run.page)
+      if (run_present(run))
         return nullptr;
     }
     return paragraph.mark ? &*paragraph.mark : nullptr;
@@ -3419,6 +3484,10 @@ std::string rtf_export(const Document& incoming)
       index_paragraph(paragraph);
   }
   for (const std::vector<Paragraph>& note : doc.notes) {
+    for (const Paragraph& paragraph : note)
+      index_paragraph(paragraph);
+  }
+  for (const std::vector<Paragraph>& note : doc.endnotes) {
     for (const Paragraph& paragraph : note)
       index_paragraph(paragraph);
   }
@@ -3460,6 +3529,8 @@ std::string rtf_export(const Document& incoming)
     story_needs_sheet(section.footer);
   }
   for (const std::vector<Paragraph>& note : doc.notes)
+    story_needs_sheet(note);
+  for (const std::vector<Paragraph>& note : doc.endnotes)
     story_needs_sheet(note);
   const std::vector<Style> sheet = any_style ? complete_sheet(given) : std::vector<Style>{};
   auto style_index = [&](const std::string& name) {
@@ -3544,6 +3615,10 @@ std::string rtf_export(const Document& incoming)
   note_ls.reserve(doc.notes.size());
   for (const std::vector<Paragraph>& note : doc.notes)
     note_ls.push_back(collect_story(note));
+  std::vector<std::vector<int>> endnote_ls;
+  endnote_ls.reserve(doc.endnotes.size());
+  for (const std::vector<Paragraph>& note : doc.endnotes)
+    endnote_ls.push_back(collect_story(note));
   // Each list level's start, its first item's, as list_numbers() counts.
   std::array<int, kListLevels> ones{};
   ones.fill(1);
@@ -3609,6 +3684,8 @@ std::string rtf_export(const Document& incoming)
     see_paragraphs(section.footer);
   }
   for (const std::vector<Paragraph>& note : doc.notes)
+    see_paragraphs(note);
+  for (const std::vector<Paragraph>& note : doc.endnotes)
     see_paragraphs(note);
   for (const Style& style : sheet) {
     see_run(style.format);
@@ -3759,6 +3836,26 @@ std::string rtf_export(const Document& incoming)
         out << "\\pgplace" << static_cast<int>(run.page_slot) << "\\chpgn";
         continue;
       }
+      if (run.endnote > 0 && static_cast<size_t>(run.endnote) <= doc.endnotes.size()) {
+        const std::string label =
+            run.text.empty() ? format_page_number(run.endnote, PageNumeral::LowerRoman) : run.text;
+        if (uses_face)
+          out << face_words(run, true);
+        out << "{\\super " << escape_rtf(label) << "{\\footnote \\ftnalt ";
+        const std::vector<Paragraph>& note = doc.endnotes[static_cast<size_t>(run.endnote - 1)];
+        if (note.empty())
+          out << "\\pard\\par";
+        else
+          for (size_t n = 0; n < note.size(); ++n) {
+            const size_t which = static_cast<size_t>(run.endnote - 1);
+            const int item_ls = which < endnote_ls.size() && n < endnote_ls[which].size()
+                                    ? endnote_ls[which][n]
+                                    : 0;
+            write_plain(note[n], item_ls);
+          }
+        out << "}}";
+        continue;
+      }
       if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {
         const std::string label = run.text.empty() ? std::to_string(run.note) : run.text;
         if (uses_face)
@@ -3836,7 +3933,7 @@ std::string rtf_export(const Document& incoming)
     write_outline(paragraph, plain_style);
     const bool had_run = [&] {
       for (const Run& run : paragraph.runs)
-        if (!run.text.empty() || run.image || run.note != 0 || run.page)
+        if (run_present(run))
           return true;
       return false;
     }();
@@ -3988,7 +4085,7 @@ std::string rtf_export(const Document& incoming)
       emit_runs(paragraph);
       bool cell_text = false;
       for (const Run& run : paragraph.runs) {
-        if (!run.text.empty() || run.image || run.note != 0 || run.page)
+        if (run_present(run))
           cell_text = true;
       }
       if (!cell_text) {
@@ -4138,6 +4235,26 @@ std::string rtf_export(const Document& incoming)
         if (format(run))
           out << " ";
         out << "\\pgplace" << static_cast<int>(run.page_slot) << "\\chpgn";
+        continue;
+      }
+      if (run.endnote > 0 && static_cast<size_t>(run.endnote) <= doc.endnotes.size()) {
+        if (format(run, true))
+          out << " ";
+        const std::string label =
+            run.text.empty() ? format_page_number(run.endnote, PageNumeral::LowerRoman) : run.text;
+        out << "{\\super " << escape_rtf(label) << "{\\footnote \\ftnalt ";
+        const std::vector<Paragraph>& note = doc.endnotes[static_cast<size_t>(run.endnote - 1)];
+        if (note.empty())
+          out << "\\pard\\par";
+        else
+          for (size_t n = 0; n < note.size(); ++n) {
+            const size_t which = static_cast<size_t>(run.endnote - 1);
+            const int item_ls = which < endnote_ls.size() && n < endnote_ls[which].size()
+                                    ? endnote_ls[which][n]
+                                    : 0;
+            write_plain(note[n], item_ls);
+          }
+        out << "}}";
         continue;
       }
       if (run.note > 0 && static_cast<size_t>(run.note) <= doc.notes.size()) {

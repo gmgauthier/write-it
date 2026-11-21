@@ -12,7 +12,7 @@
 namespace writeit {
 
 // Which story a miss was found in. A note also carries its index.
-enum class SpellWhere { Body, Header, Footer, Note };
+enum class SpellWhere { Body, Header, Footer, Note, Endnote };
 
 // One word a spelling check did not know. `begin` and `end` are byte offsets
 // in the paragraph's text, pictures skipped. The word is the text between them.
@@ -22,7 +22,8 @@ struct SpellMiss {
   size_t end = 0;
   std::string word;
   SpellWhere where = SpellWhere::Body;
-  // notes[note] when where is Note. Unused for the other stories.
+  // notes[note] when where is Note. endnotes[note] when where is Endnote.
+  // Unused for the other stories.
   size_t note = 0;
 };
 
@@ -41,8 +42,8 @@ bool dictionary_name_ok(const std::string& name);
 std::vector<SpellMiss> spelling_misses(const std::vector<Paragraph>& paragraphs,
                                        const std::function<bool(const std::string&)>& known);
 
-// The body, then the header, the footer, and each note. A miss records which
-// story it came from, so a change can be written back there.
+// The body, then the header, the footer, each footnote, and each endnote.
+// A miss records which story it came from, so a change can be written back there.
 std::vector<SpellMiss> spelling_misses(const Document& document,
                                        const std::function<bool(const std::string&)>& known);
 

@@ -295,6 +295,13 @@ write_it_rtf_footnote_marker_tests = executable(
 )
 test('rtf-footnote-marker', write_it_rtf_footnote_marker_tests)
 
+write_it_rtf_endnote_tests = executable(
+  'write-it-rtf-endnote-tests',
+  'tests/test_rtf_endnote.cpp',
+  dependencies: [writeit_dep],
+)
+test('rtf-endnote', write_it_rtf_endnote_tests)
+
 write_it_rtf_metafile_tests = executable(
   'write-it-rtf-metafile-tests',
   'tests/test_rtf_metafile.cpp',
@@ -482,6 +489,14 @@ write_it_page_number_ui_tests = executable(
   dependencies: [writeit_dep],
 )
 test('page-number-ui', with_display, args: [write_it_page_number_ui_tests.full_path()], depends: write_it_page_number_ui_tests, timeout: 60, is_parallel: false, suite: 'ui')
+
+# Endnotes in the real window. The Footnote item opens the dialog.
+write_it_endnote_ui_tests = executable(
+  'write-it-endnote-ui-tests',
+  'tests/test_endnote_ui.cpp',
+  dependencies: [writeit_dep],
+)
+test('endnote-ui', with_display, args: [write_it_endnote_ui_tests.full_path()], depends: write_it_endnote_ui_tests, timeout: 60, is_parallel: false, suite: 'ui')
 
 # Page commands in the real window. Dialogs are not opened.
 write_it_page_ui_tests = executable(

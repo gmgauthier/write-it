@@ -241,6 +241,8 @@ std::vector<SpellMiss> spelling_misses(const Document& document,
   take(SpellWhere::Footer, 0, document.footer);
   for (size_t n = 0; n < document.notes.size(); ++n)
     take(SpellWhere::Note, n, document.notes[n]);
+  for (size_t n = 0; n < document.endnotes.size(); ++n)
+    take(SpellWhere::Endnote, n, document.endnotes[n]);
   return misses;
 }
 
@@ -261,6 +263,11 @@ Paragraph* spell_paragraph(Document& document, const SpellMiss& miss)
       if (miss.note >= document.notes.size())
         return nullptr;
       story = &document.notes[miss.note];
+      break;
+    case SpellWhere::Endnote:
+      if (miss.note >= document.endnotes.size())
+        return nullptr;
+      story = &document.endnotes[miss.note];
       break;
   }
   if (!story || miss.paragraph >= story->size())

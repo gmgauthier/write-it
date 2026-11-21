@@ -871,6 +871,8 @@ void MainWindow::build_page()
   prepare_story(header_view_);
   prepare_story(notes_view_);
   notes_view_.set_no_show_all(false);
+  prepare_story(endnote_view_);
+  endnote_view_.set_no_show_all(false);
   prepare_story(footer_view_);
   auto connect_story = [this](Gtk::TextView& view) {
     view.signal_draw().connect(
@@ -882,6 +884,7 @@ void MainWindow::build_page()
   };
   connect_story(header_view_);
   connect_story(notes_view_);
+  connect_story(endnote_view_);
   connect_story(footer_view_);
   note_label_.set_halign(Gtk::ALIGN_START);
   note_label_.set_valign(Gtk::ALIGN_START);
@@ -913,10 +916,36 @@ void MainWindow::build_page()
   note_box_.set_valign(Gtk::ALIGN_START);
   note_box_.set_no_show_all(true);
   note_box_.hide();
+  endnote_label_.set_halign(Gtk::ALIGN_START);
+  endnote_label_.set_valign(Gtk::ALIGN_START);
+  endnote_marks_.put(endnote_label_, 0, 0);
+  endnote_marks_.set_margin_right(6);
+  endnote_marks_.set_halign(Gtk::ALIGN_START);
+  endnote_marks_.set_valign(Gtk::ALIGN_START);
+  endnote_box_.pack_start(endnote_marks_, Gtk::PACK_SHRINK);
+  endnote_box_.pack_start(endnote_view_, Gtk::PACK_EXPAND_WIDGET);
+  endnote_box_.set_halign(Gtk::ALIGN_FILL);
+  endnote_box_.set_hexpand(true);
+  endnote_box_.set_valign(Gtk::ALIGN_START);
+  endnote_box_.set_no_show_all(true);
+  endnote_box_.hide();
+  endnote_view_.signal_size_allocate().connect([this](Gtk::Allocation&) { queue_note_numbers(); });
+  endnote_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
+    story_target_ = 4;
+    story_focus_view_ = &endnote_view_;
+    clear_cell_edit_on_story(false, false, true);
+    sync_format_controls();
+    return false;
+  });
+  endnote_rule_.set_halign(Gtk::ALIGN_START);
+  endnote_rule_.set_size_request(120, -1);
+  endnote_rule_.set_margin_top(6);
+  endnote_rule_.set_no_show_all(true);
+  endnote_rule_.hide();
   // The body is the only text view until a header, footer, or footnote is
-  // shown. Tests that take the first text view find this one. The overlay's
-  // main child is the page column, so that search still reaches the body
-  // before a note.
+  // shown. An endnote block is packed after the body, so the first text view
+  // is still this one. The overlay's main child is the page column, so that
+  // search still reaches the body before a note.
   page_box_.pack_start(text_, Gtk::PACK_EXPAND_WIDGET);
   page_overlay_.add(page_box_);
   page_overlay_.add_overlay(note_box_);
@@ -953,12 +982,15 @@ void MainWindow::build_page()
   remember_story_begin(header_view_);
   remember_story_begin(footer_view_);
   remember_story_begin(notes_view_);
+  remember_story_begin(endnote_view_);
   header_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&header_); });
   footer_view_.get_buffer()->signal_end_user_action().connect([this] { on_story_end(&footer_); });
   notes_view_.get_buffer()->signal_end_user_action().connect([this] { on_notes_end(); });
+  endnote_view_.get_buffer()->signal_end_user_action().connect([this] { on_endnotes_end(); });
   header_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   footer_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   notes_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
+  endnote_view_.signal_key_press_event().connect(sigc::mem_fun(*this, &MainWindow::on_story_key));
   header_view_.signal_focus_in_event().connect([this](GdkEventFocus*) {
     story_target_ = 1;
     story_focus_view_ = &header_view_;

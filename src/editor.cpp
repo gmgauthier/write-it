@@ -200,8 +200,9 @@ std::string fmt_name(const Run& run)
 {
   // The size in half points, as RTF's \fsN, so 10.5 pt keeps its tag.
   // Colour, highlight, strikethrough, and script follow the direct bits. A
-  // footnote marker adds its 1-based index after those. A tag from before
-  // them has seven parts, or eight with the note, and still parses.
+  // footnote marker adds its 1-based index after those. An endnote adds
+  // that index (0 when it is not a footnote) and then its own. A tag from
+  // before them has seven parts, or eight with the note, and still parses.
   std::string name =
       std::string("fmt") + '\x1f' + run.font + '\x1f' + std::to_string(half_points_of(run.size)) +
       '\x1f' + (run.bold ? "1" : "0") + '\x1f' + (run.italic ? "1" : "0") + '\x1f' +
@@ -209,8 +210,10 @@ std::string fmt_name(const Run& run)
       std::to_string(static_cast<int>(ink_clamp(static_cast<int>(run.color)))) + '\x1f' +
       std::to_string(static_cast<int>(ink_clamp(static_cast<int>(run.highlight)))) + '\x1f' +
       (run.strike ? "1" : "0") + '\x1f' + std::to_string(static_cast<int>(run.script));
-  if (run.note != 0)
+  if (run.note != 0 || run.endnote != 0)
     name += '\x1f' + std::to_string(run.note);
+  if (run.endnote != 0)
+    name += '\x1f' + std::to_string(run.endnote);
   return name;
 }
 
@@ -228,7 +231,7 @@ bool parse_fmt(const std::string& name, Run& run)
   }
   parts.push_back(current);
   const bool legacy = parts.size() == 7 || parts.size() == 8;
-  const bool faced = parts.size() == 11 || parts.size() == 12;
+  const bool faced = parts.size() == 11 || parts.size() == 12 || parts.size() == 13;
   if ((!legacy && !faced) || parts[0] != "fmt")
     return false;
   try {
@@ -240,6 +243,7 @@ bool parse_fmt(const std::string& name, Run& run)
     run.strike = false;
     run.script = Script::None;
     run.note = 0;
+    run.endnote = 0;
     if (faced) {
       run.color = ink_clamp(std::stoi(parts[7]));
       run.highlight = ink_clamp(std::stoi(parts[8]));
@@ -249,8 +253,10 @@ bool parse_fmt(const std::string& name, Run& run)
         run.script = Script::Super;
       else if (script == static_cast<int>(Script::Sub))
         run.script = Script::Sub;
-      if (parts.size() == 12)
+      if (parts.size() >= 12)
         run.note = std::stoi(parts[11]);
+      if (parts.size() == 13)
+        run.endnote = std::stoi(parts[12]);
     } else if (parts.size() == 8) {
       run.note = std::stoi(parts[7]);
     }
@@ -761,12 +767,11 @@ bool parse_cpara(const std::string& name, Indents& indents, Align& align, Spacin
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  const bool keep = !run.text.empty() || run.image || run.note != 0 || run.page;
-  if (!keep)
+  if (!run_present(run))
     return;
-  const bool mergeable = !run.page && !run.image && run.note == 0 && !paragraph.runs.empty() &&
-                         !paragraph.runs.back().page && !paragraph.runs.back().image &&
-                         paragraph.runs.back().note == 0 && same_format(paragraph.runs.back(), run);
+  const bool mergeable = run_merges(run) && !paragraph.runs.empty() &&
+                         run_merges(paragraph.runs.back()) &&
+                         same_format(paragraph.runs.back(), run);
   if (mergeable)
     paragraph.runs.back().text += run.text;
   else
@@ -1910,6 +1915,7 @@ Document MainWindow::capture() const
   doc.styles = styles_;
   doc.default_tab = default_tab_;
   doc.notes = notes_;
+  doc.endnotes = endnotes_;
   std::vector<SectionSlot> slots = section_slots_;
   if (slots.empty()) {
     SectionSlot slot;
@@ -1988,6 +1994,7 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
   header_ = doc.header;
   footer_ = doc.footer;
   notes_ = doc.notes;
+  endnotes_ = doc.endnotes;
   adopt_sections(doc);
   std::vector<int> sect_ids(doc.paragraphs.size(), 0);
   size_t slot_at = 1;
@@ -2036,11 +2043,13 @@ void MainWindow::replace_buffer(const Document& doc, int offset)
           continue;
         }
       }
-      if (run.text.empty() && run.note == 0)
+      if (run.text.empty() && run.note == 0 && run.endnote == 0)
         continue;
       Run shown = run;
       if (shown.text.empty() && shown.note != 0)
         shown.text = std::to_string(shown.note);
+      if (shown.text.empty() && shown.endnote != 0)
+        shown.text = format_page_number(shown.endnote, PageNumeral::LowerRoman);
       std::vector<Glib::RefPtr<Gtk::TextTag>> tags;
       tags.push_back(format_tag(shown));
       if (paragraph.heading >= 1 && paragraph.heading <= 6)
@@ -2208,7 +2217,7 @@ void MainWindow::update_actions()
   sens(table_insert_item_, true);
   sens(page_break_item_, true);
   sens(section_break_item_, true);
-  sens(footnote_item_, notes_.size() < static_cast<size_t>(kMaxNotes));
+  sens(footnote_item_, notes_.size() + endnotes_.size() < static_cast<size_t>(kMaxNotes));
   const bool in_cell =
       buffer_ && (focused_sheet() || sheet_at_cursor() || para_at(cursor_offset()).cell.table != 0);
   sens(table_row_item_, in_cell);
@@ -2639,6 +2648,7 @@ void MainWindow::finish_pending()
     entered_carry = format_of(buffer_->get_iter_at_offset(start - 1));
     entered_carry.text.clear();
     entered_carry.note = 0;
+    entered_carry.endnote = 0;
     entered_carry.image.reset();
   }
   clear_applied_fmt();
@@ -2740,7 +2750,7 @@ Glib::RefPtr<Gtk::TextTag> MainWindow::format_tag_on(const Glib::RefPtr<Gtk::Tex
     // superscript or subscript uses the same scale and rise, downwards
     // for a subscript.
     const int rise = static_cast<int>(key.size * zoom_factor() * 0.45 * Pango::SCALE);
-    if (key.note != 0) {
+    if (key.note != 0 || key.endnote != 0) {
       tag->property_scale() = 0.65;
       tag->property_rise() = rise;
     } else if (key.script != Script::None) {
@@ -2785,11 +2795,13 @@ void MainWindow::fill_cell(Gtk::TextView& view, const std::vector<Paragraph>& pa
           continue;
         }
       }
-      if (run.text.empty() && run.note == 0)
+      if (run.text.empty() && run.note == 0 && run.endnote == 0)
         continue;
       Run shown = run;
       if (shown.text.empty() && shown.note != 0)
         shown.text = std::to_string(shown.note);
+      if (shown.text.empty() && shown.endnote != 0)
+        shown.text = format_page_number(shown.endnote, PageNumeral::LowerRoman);
       buffer->insert_with_tag(buffer->end(), shown.text, format_tag_on(buffer, shown));
     }
     if (i + 1 < paragraphs.size())
@@ -3052,6 +3064,87 @@ void MainWindow::retitle_note_markers(const std::vector<int>& remap, bool body, 
       [&](const Glib::RefPtr<Gtk::TextBuffer>& buffer) { retitle_note_in(buffer, remap); });
 }
 
+void MainWindow::retitle_endnote_in(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                                    const std::vector<int>& remap)
+{
+  if (!buffer || remap.empty())
+    return;
+  struct Change {
+    int offset = 0;
+    int length = 0;
+    int neu = 0;
+    bool keep_text = false;
+    Run format;
+  };
+  std::vector<Change> changes;
+  auto iter = buffer->begin();
+  while (!iter.is_end()) {
+    if (iter.get_char() == '\n' || iter.get_pixbuf() || iter.get_child_anchor()) {
+      if (!iter.forward_char())
+        break;
+      continue;
+    }
+    const Run format = format_of(iter);
+    if (format.endnote <= 0 || format.endnote >= static_cast<int>(remap.size())) {
+      if (!iter.forward_char())
+        break;
+      continue;
+    }
+    const int old = format.endnote;
+    const int neu = remap[static_cast<size_t>(old)];
+    const int start = iter.get_offset();
+    Glib::ustring text;
+    while (!iter.is_end() && iter.get_char() != '\n' && !iter.get_pixbuf() &&
+           !iter.get_child_anchor()) {
+      if (format_of(iter).endnote != old)
+        break;
+      text.push_back(iter.get_char());
+      if (!iter.forward_char())
+        break;
+    }
+    if (neu == old)
+      continue;
+    const std::string old_text = format_page_number(old, PageNumeral::LowerRoman);
+    Change change;
+    change.offset = start;
+    change.length = static_cast<int>(text.length());
+    change.neu = neu;
+    change.format = format;
+    change.format.endnote = std::max(0, neu);
+    change.keep_text = neu > 0 && !text.empty() && text.raw() != old_text;
+    if (neu > 0 || text.empty() || text.raw() == old_text)
+      changes.push_back(change);
+  }
+  for (auto change = changes.rbegin(); change != changes.rend(); ++change) {
+    auto from = buffer->get_iter_at_offset(change->offset);
+    auto to = buffer->get_iter_at_offset(change->offset + change->length);
+    int length = change->length;
+    if (change->neu <= 0) {
+      buffer->erase(from, to);
+      continue;
+    }
+    if (!change->keep_text) {
+      buffer->erase(from, to);
+      const std::string next = format_page_number(change->neu, PageNumeral::LowerRoman);
+      buffer->insert(buffer->get_iter_at_offset(change->offset), next);
+      length = static_cast<int>(Glib::ustring(next).length());
+    }
+    set_fmt_on(buffer, buffer->get_iter_at_offset(change->offset),
+               buffer->get_iter_at_offset(change->offset + length),
+               format_tag_on(buffer, change->format));
+  }
+}
+
+void MainWindow::retitle_endnote_markers(const std::vector<int>& remap, bool body, bool cells)
+{
+  if (body)
+    retitle_endnote_in(buffer_, remap);
+  if (!cells)
+    return;
+  each_cell_buffer(
+      [&](const Glib::RefPtr<Gtk::TextBuffer>& buffer) { retitle_endnote_in(buffer, remap); });
+}
+
 namespace {
 
 std::vector<int> inverse_note_remap(const std::vector<int>& remap)
@@ -3176,31 +3269,57 @@ void MainWindow::compact_body_notes()
   // Nothing to drop, and capture() would copy every paragraph. A marker
   // with no note is left as it is: drop_unmarked_notes is a no-op on an
   // empty list.
-  if (notes_.empty())
+  if (notes_.empty() && endnotes_.empty())
     return;
   const Document doc = capture();
   const NoteDrop drop = drop_unmarked_notes(doc);
-  if (!drop.changed)
+  const NoteDrop ends = drop_unmarked_endnotes(doc);
+  if (!drop.changed && !ends.changed)
     return;
   const std::vector<std::vector<Paragraph>> old_notes = notes_;
-  notes_ = drop.notes;
-  retitle_note_markers(drop.remap, true, false);
+  const std::vector<std::vector<Paragraph>> old_endnotes = endnotes_;
+  if (drop.changed) {
+    notes_ = drop.notes;
+    retitle_note_markers(drop.remap, true, false);
+  }
+  if (ends.changed) {
+    endnotes_ = ends.notes;
+    retitle_endnote_markers(ends.remap, true, false);
+  }
   undo_.suspend(true);
-  retitle_note_markers(drop.remap, false, true);
+  if (drop.changed)
+    retitle_note_markers(drop.remap, false, true);
+  if (ends.changed)
+    retitle_endnote_markers(ends.remap, false, true);
   undo_.suspend(false);
   const std::vector<int> remap = drop.remap;
   const std::vector<int> inverse = inverse_note_remap(remap);
+  const std::vector<int> end_remap = ends.remap;
+  const std::vector<int> end_inverse = inverse_note_remap(end_remap);
   const std::vector<std::vector<Paragraph>> new_notes = notes_;
+  const std::vector<std::vector<Paragraph>> new_endnotes = endnotes_;
   undo_.record_custom(
-      [this, old_notes, inverse] {
-        notes_ = old_notes;
-        retitle_note_markers(inverse, false, true);
+      [this, old_notes, old_endnotes, inverse, end_inverse, drop, ends] {
+        if (drop.changed) {
+          notes_ = old_notes;
+          retitle_note_markers(inverse, false, true);
+        }
+        if (ends.changed) {
+          endnotes_ = old_endnotes;
+          retitle_endnote_markers(end_inverse, false, true);
+        }
         refresh_stories();
         apply_page_size();
       },
-      [this, new_notes, remap] {
-        notes_ = new_notes;
-        retitle_note_markers(remap, false, true);
+      [this, new_notes, new_endnotes, remap, end_remap, drop, ends] {
+        if (drop.changed) {
+          notes_ = new_notes;
+          retitle_note_markers(remap, false, true);
+        }
+        if (ends.changed) {
+          endnotes_ = new_endnotes;
+          retitle_endnote_markers(end_remap, false, true);
+        }
         refresh_stories();
         apply_page_size();
       });
@@ -3211,15 +3330,26 @@ void MainWindow::compact_body_notes()
 void MainWindow::compact_cell_notes(Document& after)
 {
   const NoteDrop drop = drop_unmarked_notes(after);
-  if (!drop.changed)
+  const NoteDrop ends = drop_unmarked_endnotes(after);
+  if (!drop.changed && !ends.changed)
     return;
-  apply_note_remap(after, drop.remap);
-  after.notes = drop.notes;
+  if (drop.changed) {
+    apply_note_remap(after, drop.remap);
+    after.notes = drop.notes;
+  }
+  if (ends.changed) {
+    apply_endnote_remap(after, ends.remap);
+    after.endnotes = ends.notes;
+  }
   const bool was = restoring_;
   restoring_ = true;
   undo_.suspend(true);
   notes_ = after.notes;
-  retitle_note_markers(drop.remap, true, true);
+  endnotes_ = after.endnotes;
+  if (drop.changed)
+    retitle_note_markers(drop.remap, true, true);
+  if (ends.changed)
+    retitle_endnote_markers(ends.remap, true, true);
   refresh_stories();
   apply_page_size();
   undo_.suspend(false);
@@ -4147,6 +4277,7 @@ Run MainWindow::style_typing(const std::string& name) const
   run.text.clear();
   run.direct = 0;
   run.note = 0;
+  run.endnote = 0;
   run.image.reset();
   return run;
 }
@@ -4268,7 +4399,9 @@ void MainWindow::apply_story_zoom()
   face(header_view_);
   face(footer_view_);
   face(notes_view_);
+  face(endnote_view_);
   numbers(note_label_, note_numbers_, note_marks_);
+  numbers(endnote_label_, endnote_numbers_, endnote_marks_);
   for (const auto& band : note_bands_) {
     if (!band || !band->wired)
       continue;
@@ -5356,6 +5489,8 @@ Gtk::TextView* MainWindow::focused_story_view() const
       return story_focus_view_;
     return const_cast<PageText*>(&notes_view_);
   }
+  if (story_target_ == 4)
+    return const_cast<PageText*>(&endnote_view_);
   return nullptr;
 }
 
@@ -5408,6 +5543,36 @@ bool MainWindow::note_at_view(Gtk::TextView& view, int caret, int& note_index,
   return true;
 }
 
+bool MainWindow::endnote_at(int caret, int& note_index, size_t& para_index) const
+{
+  int last_note = -1;
+  size_t last_para = 0;
+  int offset = 0;
+  for (size_t n = 0; n < endnotes_.size(); ++n) {
+    if (n)
+      offset += 2;
+    const std::vector<Paragraph>& paras = endnotes_[n];
+    for (size_t p = 0; p < paras.size(); ++p) {
+      const int len = static_cast<int>(Glib::ustring(paragraph_plain(paras[p])).length());
+      last_note = static_cast<int>(n);
+      last_para = p;
+      if (caret <= offset + len) {
+        note_index = last_note;
+        para_index = p;
+        return true;
+      }
+      offset += len;
+      if (p + 1 < paras.size())
+        offset += 1;
+    }
+  }
+  if (last_note < 0)
+    return false;
+  note_index = last_note;
+  para_index = last_para;
+  return true;
+}
+
 ParaFormat MainWindow::focused_para() const
 {
   if (editing_cell()) {
@@ -5445,6 +5610,12 @@ ParaFormat MainWindow::focused_para() const
       const int caret = view->get_buffer()->get_insert()->get_iter().get_offset();
       if (note_at_view(*view, caret, note_index, para_index))
         return para_format(notes_[static_cast<size_t>(note_index)][para_index]);
+    } else if (story_target_ == 4 && view->get_buffer()) {
+      int note_index = -1;
+      size_t para_index = 0;
+      const int caret = view->get_buffer()->get_insert()->get_iter().get_offset();
+      if (endnote_at(caret, note_index, para_index))
+        return para_format(endnotes_[static_cast<size_t>(note_index)][para_index]);
     }
   }
   return para_at(cursor_offset());
@@ -5630,6 +5801,62 @@ void MainWindow::apply_paragraphs(const std::function<void(std::vector<Paragraph
     if (!(before_doc == after)) {
       commit_document(before_doc, after);
       view->grab_focus();
+    }
+    return;
+  }
+  if (story_target_ == 4) {
+    if (!endnote_view_.get_buffer() || endnotes_.empty())
+      return;
+    auto buffer = endnote_view_.get_buffer();
+    int from = buffer->get_insert()->get_iter().get_offset();
+    int to = from;
+    Gtk::TextBuffer::iterator bound_a;
+    Gtk::TextBuffer::iterator bound_b;
+    if (buffer->get_selection_bounds(bound_a, bound_b)) {
+      from = bound_a.get_offset();
+      to = bound_b.get_offset();
+    }
+    struct Place {
+      int note = -1;
+      size_t para = 0;
+    };
+    std::vector<int> lengths;
+    std::vector<int> leading;
+    std::vector<Place> places;
+    for (size_t n = 0; n < endnotes_.size(); ++n) {
+      const std::vector<Paragraph>& paras = endnotes_[n];
+      for (size_t p = 0; p < paras.size(); ++p) {
+        int gap = 1;
+        if (lengths.empty())
+          gap = 0;
+        else if (p == 0)
+          gap = 2;
+        lengths.push_back(static_cast<int>(Glib::ustring(paragraph_plain(paras[p])).length()));
+        leading.push_back(gap);
+        places.push_back(Place{static_cast<int>(n), p});
+      }
+    }
+    const std::vector<size_t> picked = story_selection(lengths, leading, from, to);
+    if (picked.empty())
+      return;
+    const Document before_doc = capture();
+    Document after = before_doc;
+    std::vector<Paragraph> edited;
+    for (size_t index : picked) {
+      const Place& place = places[index];
+      if (place.note < 0 || static_cast<size_t>(place.note) >= after.endnotes.size() ||
+          place.para >= after.endnotes[static_cast<size_t>(place.note)].size())
+        return;
+      edited.push_back(after.endnotes[static_cast<size_t>(place.note)][place.para]);
+    }
+    edit(edited);
+    for (size_t i = 0; i < picked.size(); ++i) {
+      const Place& place = places[picked[i]];
+      after.endnotes[static_cast<size_t>(place.note)][place.para] = edited[i];
+    }
+    if (!(before_doc == after)) {
+      commit_document(before_doc, after);
+      endnote_view_.grab_focus();
     }
     return;
   }
@@ -6001,7 +6228,7 @@ void apply_label_face(const Glib::RefPtr<Pango::Layout>& layout, const Run& form
     attrs.insert(mark);
     any = true;
   }
-  if (format.note == 0 && format.script != Script::None) {
+  if (format.note == 0 && format.endnote == 0 && format.script != Script::None) {
     Pango::AttrFloat scale = Pango::Attribute::create_attr_scale(0.65);
     span(scale);
     attrs.insert(scale);
@@ -7249,6 +7476,7 @@ void MainWindow::fit_note_views()
 {
   const int column = note_column_width();
   notes_view_.set_layout_width(note_view_width(column, note_marks_));
+  endnote_view_.set_layout_width(note_view_width(column, endnote_marks_));
   for (const auto& band : note_bands_) {
     if (!band || !band->wired)
       continue;
