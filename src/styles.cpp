@@ -397,6 +397,7 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
   const std::vector<Paragraph> old_header = header_;
   const std::vector<Paragraph> old_footer = footer_;
   const std::vector<std::vector<Paragraph>> old_notes = notes_;
+  const std::vector<std::vector<Paragraph>> old_endnotes = endnotes_;
   // The section being edited. install_stories() can move the caret's section
   // when the slot count changes. Undo belongs to the section that was edited.
   const size_t edited_section = active_section_;
@@ -467,17 +468,19 @@ void MainWindow::commit_document(const Document& before, const Document& after, 
     undo_.record_custom([this, old_page, section] { apply_section_page(section, old_page); },
                         [this, new_page, section] { apply_section_page(section, new_page); });
   }
-  if (old_header != header_ || old_footer != footer_ || old_notes != notes_) {
+  if (old_header != header_ || old_footer != footer_ || old_notes != notes_ ||
+      old_endnotes != endnotes_) {
     const std::vector<Paragraph> new_header = header_;
     const std::vector<Paragraph> new_footer = footer_;
     const std::vector<std::vector<Paragraph>> new_notes = notes_;
+    const std::vector<std::vector<Paragraph>> new_endnotes = endnotes_;
     const size_t section = edited_section;
     undo_.record_custom(
-        [this, old_header, old_footer, old_notes, section] {
-          restore_section_stories(section, old_header, old_footer, old_notes);
+        [this, old_header, old_footer, old_notes, old_endnotes, section] {
+          restore_section_stories(section, old_header, old_footer, old_notes, old_endnotes);
         },
-        [this, new_header, new_footer, new_notes, section] {
-          restore_section_stories(section, new_header, new_footer, new_notes);
+        [this, new_header, new_footer, new_notes, new_endnotes, section] {
+          restore_section_stories(section, new_header, new_footer, new_notes, new_endnotes);
         });
   }
   // The story step puts the header and footer back. The count lives on the

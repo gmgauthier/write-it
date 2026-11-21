@@ -54,15 +54,12 @@ std::vector<std::string> lines_of(const std::string& text)
 
 void add_run(Paragraph& paragraph, Run run)
 {
-  // A picture has no text, and neither it nor a footnote marker merges into
-  // the run beside it.
-  const bool held = !run.text.empty() || run.image.has_value() || run.note != 0 || run.page;
-  if (!held)
+  // A picture has no text, and neither it nor a note marker merges into the
+  // run beside it.
+  if (!run_present(run))
     return;
-  const bool sticky = !run.page && !run.image.has_value() && run.note == 0 &&
-                      !paragraph.runs.empty() && !paragraph.runs.back().page &&
-                      !paragraph.runs.back().image.has_value() && paragraph.runs.back().note == 0 &&
-                      same_format(paragraph.runs.back(), run);
+  const bool sticky = run_merges(run) && !paragraph.runs.empty() &&
+                      run_merges(paragraph.runs.back()) && same_format(paragraph.runs.back(), run);
   if (sticky)
     paragraph.runs.back().text += run.text;
   else
@@ -471,6 +468,8 @@ void carry_style(Document& doc, std::vector<Style>& sheet, size_t index, const S
   carry_paragraphs(doc.footer);
   for (std::vector<Paragraph>& note : doc.notes)
     carry_paragraphs(note);
+  for (std::vector<Paragraph>& note : doc.endnotes)
+    carry_paragraphs(note);
   if (old.name != updated.name) {
     for (Style& style : sheet) {
       if (same_name(style.based_on, old.name))
@@ -580,7 +579,7 @@ bool same_look(const Run& a, const Run& b)
   return a.font == b.font && a.size == b.size && a.bold == b.bold && a.italic == b.italic &&
          a.underline == b.underline && a.color == b.color && a.highlight == b.highlight &&
          a.strike == b.strike && a.script == b.script && a.note == b.note &&
-         same_image(a.image, b.image);
+         a.endnote == b.endnote && same_image(a.image, b.image);
 }
 
 bool same_format(const Run& a, const Run& b)
@@ -611,11 +610,10 @@ static bool same_runs(const std::vector<Run>& a, const std::vector<Run>& b)
   auto looks = [](const std::vector<Run>& runs) {
     std::vector<Run> out;
     for (const Run& run : runs) {
-      if (run.text.empty() && !run.image.has_value() && run.note == 0 && !run.page)
+      if (!run_present(run))
         continue;
-      const bool sticky = !run.page && !run.image.has_value() && run.note == 0 && !out.empty() &&
-                          !out.back().page && !out.back().image.has_value() &&
-                          out.back().note == 0 && same_look(out.back(), run);
+      const bool sticky =
+          run_merges(run) && !out.empty() && run_merges(out.back()) && same_look(out.back(), run);
       if (sticky)
         out.back().text += run.text;
       else
@@ -895,7 +893,7 @@ void line_spacing_raw(const Spacing& spacing, int& sl, int& slmult)
 int basis_half_points(const Paragraph& paragraph)
 {
   for (const Run& run : paragraph.runs) {
-    if (!run.text.empty() || run.note != 0 || run.image || run.page)
+    if (run_present(run))
       return half_points_of(run.size);
   }
   if (paragraph.mark)
@@ -931,11 +929,10 @@ std::vector<Run> stored_runs(const std::vector<Run>& runs)
 {
   std::vector<Run> out;
   for (const Run& run : runs) {
-    if (run.text.empty() && !run.image.has_value() && run.note == 0 && !run.page)
+    if (!run_present(run))
       continue;
-    const bool sticky = !run.page && !run.image.has_value() && run.note == 0 && !out.empty() &&
-                        !out.back().page && !out.back().image.has_value() && out.back().note == 0 &&
-                        same_format(out.back(), run);
+    const bool sticky =
+        run_merges(run) && !out.empty() && run_merges(out.back()) && same_format(out.back(), run);
     if (sticky)
       out.back().text += run.text;
     else
@@ -1413,7 +1410,7 @@ bool operator==(const Document& a, const Document& b)
     return false;
   if (!(a.page == b.page) || !(a.numbering == b.numbering) || a.default_tab != b.default_tab ||
       a.header != b.header || a.footer != b.footer || a.sections != b.sections ||
-      a.notes != b.notes)
+      a.notes != b.notes || a.endnotes != b.endnotes)
     return false;
   return style_sheet(a) == style_sheet(b);
 }
@@ -2520,6 +2517,55 @@ void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragrap
   shift_story(doc.footer);
 }
 
+void retarget_endnote_markers(Document& doc,
+                              const std::vector<std::vector<Paragraph>>& before_endnotes)
+{
+  const int old_n = static_cast<int>(before_endnotes.size());
+  const int new_n = static_cast<int>(doc.endnotes.size());
+  const int delta = new_n - old_n;
+  if (delta == 0)
+    return;
+
+  int prefix = 0;
+  const int share = std::min(old_n, new_n);
+  while (prefix < share &&
+         before_endnotes[static_cast<size_t>(prefix)] == doc.endnotes[static_cast<size_t>(prefix)])
+    ++prefix;
+
+  int suffix = 0;
+  while (suffix < old_n - prefix && suffix < new_n - prefix &&
+         before_endnotes[static_cast<size_t>(old_n - 1 - suffix)] ==
+             doc.endnotes[static_cast<size_t>(new_n - 1 - suffix)])
+    ++suffix;
+  const int after_index = old_n - suffix;
+
+  auto shift_story = [&](std::vector<Paragraph>& story) {
+    for (Paragraph& paragraph : story) {
+      for (Run& run : paragraph.runs) {
+        if (run.endnote <= 0)
+          continue;
+        const int old = run.endnote;
+        const std::string old_text = format_page_number(old, PageNumeral::LowerRoman);
+        if (old > after_index)
+          run.endnote += delta;
+        if (run.endnote > new_n)
+          run.endnote = new_n;
+        if (run.endnote < 0)
+          run.endnote = 0;
+        if (run.text.empty() || run.text == old_text) {
+          if (run.endnote <= 0)
+            run.text.clear();
+          else
+            run.text = format_page_number(run.endnote, PageNumeral::LowerRoman);
+        }
+      }
+    }
+  };
+  shift_story(doc.paragraphs);
+  shift_story(doc.header);
+  shift_story(doc.footer);
+}
+
 bool story_focus_clears_cell(bool header, bool footer, bool note)
 {
   return header || footer || note;
@@ -2759,6 +2805,17 @@ bool note_marked(const std::vector<Paragraph>& paragraphs, int note)
   return false;
 }
 
+bool endnote_marked(const std::vector<Paragraph>& paragraphs, int endnote)
+{
+  for (const Paragraph& paragraph : paragraphs) {
+    for (const Run& run : paragraph.runs) {
+      if (run.endnote == endnote)
+        return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 NoteDrop drop_unmarked_notes(const Document& doc)
@@ -2803,6 +2860,52 @@ void apply_note_remap(Document& doc, const std::vector<int>& remap)
       run.note = neu;
       if (run.text.empty() || run.text == old_text)
         run.text = std::to_string(neu);
+    }
+  }
+}
+
+NoteDrop drop_unmarked_endnotes(const Document& doc)
+{
+  NoteDrop drop;
+  const int count = static_cast<int>(doc.endnotes.size());
+  drop.remap.assign(static_cast<size_t>(count) + 1, 0);
+  int next = 0;
+  for (int old = 1; old <= count; ++old) {
+    if (!endnote_marked(doc.paragraphs, old)) {
+      drop.changed = true;
+      continue;
+    }
+    ++next;
+    drop.remap[static_cast<size_t>(old)] = next;
+    drop.notes.push_back(doc.endnotes[static_cast<size_t>(old - 1)]);
+  }
+  if (next != count)
+    drop.changed = true;
+  return drop;
+}
+
+void apply_endnote_remap(Document& doc, const std::vector<int>& remap)
+{
+  if (remap.empty())
+    return;
+  for (Paragraph& paragraph : doc.paragraphs) {
+    for (Run& run : paragraph.runs) {
+      if (run.endnote <= 0)
+        continue;
+      const int old = run.endnote;
+      if (old >= static_cast<int>(remap.size()))
+        continue;
+      const int neu = remap[static_cast<size_t>(old)];
+      const std::string old_text = format_page_number(old, PageNumeral::LowerRoman);
+      if (neu <= 0) {
+        run.endnote = 0;
+        if (run.text.empty() || run.text == old_text)
+          run.text.clear();
+        continue;
+      }
+      run.endnote = neu;
+      if (run.text.empty() || run.text == old_text)
+        run.text = format_page_number(neu, PageNumeral::LowerRoman);
     }
   }
 }

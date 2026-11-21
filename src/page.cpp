@@ -229,8 +229,10 @@ void divide_paragraph(Paragraph& left, int at, Paragraph& right)
       if (into < static_cast<int>(text.length())) {
         Run part = run;
         part.text = text.substr(static_cast<Glib::ustring::size_type>(into)).raw();
-        if (into > 0)
+        if (into > 0) {
           part.note = 0;
+          part.endnote = 0;
+        }
         part.image.reset();
         right.runs.push_back(part);
       }
@@ -721,6 +723,7 @@ Run bare_character(Run run)
 {
   run.text.clear();
   run.note = 0;
+  run.endnote = 0;
   run.image.reset();
   run.direct &= kCharacterDirect;
   return run;
@@ -786,7 +789,7 @@ void apply_character(Run& run, const Run& format)
 
 bool paintable_run(const Run& run)
 {
-  return !run.image && run.note == 0 && !run.text.empty();
+  return !run.image && run.note == 0 && run.endnote == 0 && !run.text.empty();
 }
 
 void paint_characters(Paragraph& paragraph, int from, int to, const Run& format)

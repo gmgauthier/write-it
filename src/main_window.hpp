@@ -561,6 +561,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   Gtk::TextView* focused_story_view() const;
   // Maps a caret in a note view onto the note and paragraph it shows.
   bool note_at_view(Gtk::TextView& view, int caret, int& note_index, size_t& para_index) const;
+  // A caret in the endnote block. One column, so there is no page group.
+  bool endnote_at(int caret, int& note_index, size_t& para_index) const;
   int heading_level_of(const ParaFormat& format) const;
   bool needs_spacing_gap(const ParaFormat& format, int heading) const;
   Glib::RefPtr<Gtk::TextTag> spacing_gap_tag(const ParaFormat& format, int heading);
@@ -570,6 +572,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   void tag_note_spacing(Gtk::TextView& view, const std::vector<std::vector<Paragraph>>& notes);
   void retitle_note_in(const Glib::RefPtr<Gtk::TextBuffer>& buffer, const std::vector<int>& remap);
   void retitle_note_markers(const std::vector<int>& remap, bool body, bool cells);
+  void retitle_endnote_in(const Glib::RefPtr<Gtk::TextBuffer>& buffer,
+                          const std::vector<int>& remap);
+  void retitle_endnote_markers(const std::vector<int>& remap, bool body, bool cells);
   void compact_body_notes();
   void compact_cell_notes(Document& after);
   void end_typing_run();
@@ -604,12 +609,13 @@ class MainWindow : public Gtk::ApplicationWindow {
   // A section that has been removed is left as it is.
   void apply_section_page(size_t section, PageSetup page);
   void apply_document_page(PageSetup page);
-  // Header, footer, and notes of one section. Notes belong to the document.
-  // The header and footer on screen change only for the caret's section, or
-  // when the document has a single section.
+  // Header, footer, notes, and endnotes of one section. The notes belong to
+  // the document. The header and footer on screen change only for the caret's
+  // section, or when the document has a single section.
   void restore_section_stories(size_t section, std::vector<Paragraph> header,
                                std::vector<Paragraph> footer,
-                               std::vector<std::vector<Paragraph>> notes);
+                               std::vector<std::vector<Paragraph>> notes,
+                               std::vector<std::vector<Paragraph>> endnotes);
   void install_stories(const Document& doc);
   void refresh_stories();
   // Put each footnote number beside the first line of that note. A label of
@@ -717,6 +723,9 @@ class MainWindow : public Gtk::ApplicationWindow {
   // paste the status bar refused. False leaves Paste to the clipboard text.
   bool paste_table_selection();
   void on_footnote();
+  // Insert → Footnote, after the dialog. An endnote is collected at the end
+  // of the document. A footnote stays at the foot of its sheet.
+  void insert_note_mark(bool endnote);
   void on_picture();
   // Inserts a picture that has already been read. A cell being edited gets it
   // at that cell's caret. The file dialog has the keyboard by then, so the
@@ -796,6 +805,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void on_header_footer();
   void on_story_end(std::vector<Paragraph>* story);
   void on_notes_end();
+  void on_endnotes_end();
   // Hold the pasteboard still across a note commit. The page's allocation
   // dips while the note's lines are invalid, and GTK then clamps the scroll
   // to the top. Released once that layout has settled.
@@ -803,7 +813,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   void release_note_scroll(bool reveal);
   void align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::Label& first_label,
                        std::vector<Gtk::Label*>& labels, std::vector<int>& ys,
-                       const std::vector<int>& numbers);
+                       const std::vector<int>& numbers, bool roman = false);
   struct NoteBand;
   NoteBand& ensure_note_band(size_t index);
   void wire_note_band(NoteBand& band);
@@ -1024,6 +1034,15 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::vector<std::unique_ptr<NoteBand>> note_bands_;
   // Empty when every note shares one sheet. The first entry is note_box_.
   std::vector<NoteGroup> note_groups_;
+  // Endnotes sit under the body and above the footer, in Page and in Draft.
+  // The box is declared before the view so the view is destroyed first.
+  Gtk::Separator endnote_rule_;
+  Gtk::Box endnote_box_{Gtk::ORIENTATION_HORIZONTAL};
+  Gtk::Fixed endnote_marks_;
+  Gtk::Label endnote_label_;
+  std::vector<Gtk::Label*> endnote_numbers_;
+  std::vector<int> endnote_number_y_;
+  PageText endnote_view_;
   Gtk::TextView footer_view_;
   Glib::RefPtr<Gtk::TextBuffer> buffer_;
   Gtk::Box status_{Gtk::ORIENTATION_HORIZONTAL};
@@ -1378,8 +1397,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   int story_continue_caret_ = -1;
   Gtk::TextView* story_begin_view_ = nullptr;
   int story_begin_caret_ = -1;
-  // 0 none, 1 header, 2 footer, 3 notes. Set when that story takes the
-  // keyboard, so a paragraph command still finds it after the dialog does.
+  // 0 none, 1 header, 2 footer, 3 notes, 4 endnotes. Set when that story takes
+  // the keyboard, so a paragraph command still finds it after the dialog does.
   int story_target_ = 0;
   Gtk::TextView* story_focus_view_ = nullptr;
   // Find Next remembers the hit when the dialog, not a text view, has focus.
@@ -1419,6 +1438,8 @@ class MainWindow : public Gtk::ApplicationWindow {
   // The paragraph start follow_caret_section() last resolved. -1 walks again.
   int section_para_start_ = -1;
   std::vector<std::vector<Paragraph>> notes_;
+  // Endnotes, numbered apart from notes_. The two share kMaxNotes.
+  std::vector<std::vector<Paragraph>> endnotes_;
   // Pictures in the body, keyed by the pixbuf the buffer is showing. The
   // value is the file's bytes; the pixbuf may be a scaled copy. Mutable so
   // capture() and read_cell() can register a pasted pixbuf that was never
@@ -1452,6 +1473,7 @@ class MainWindow : public Gtk::ApplicationWindow {
   std::string header_shown_;
   std::string footer_shown_;
   std::string notes_shown_;
+  std::string endnotes_shown_;
   // The footnote just inserted. The scroll follows its note until the user
   // clicks or types in the body. 0 means the scroll follows the caret.
   int reveal_note_ = 0;

@@ -154,7 +154,7 @@ bool story_besides_page(const std::vector<Paragraph>& story)
     for (const Run& run : paragraph.runs) {
       if (run.page)
         continue;
-      if (run.image || run.note != 0 || !blank_text(run.text))
+      if (run.image || run.note != 0 || run.endnote != 0 || !blank_text(run.text))
         return true;
     }
   }
@@ -182,6 +182,7 @@ Run plain_run(const Run& typing, const std::string& text)
   Run run = typing;
   run.text = text;
   run.note = 0;
+  run.endnote = 0;
   run.image.reset();
   run.page = false;
   run.direct = 0;
@@ -277,14 +278,14 @@ void insert_run(Paragraph& paragraph, int at, const Run& incoming)
   for (const Run& run : paragraph.runs) {
     const int n = chars_of(run);
     if (placed || at >= seen + n) {
-      if (!run.text.empty() || run.image || run.note != 0 || run.page)
+      if (run_present(run))
         runs.push_back(run);
       seen += n;
       continue;
     }
     if (at == seen || run.image || run.page) {
       runs.push_back(incoming);
-      if (!run.text.empty() || run.image || run.note != 0 || run.page)
+      if (run_present(run))
         runs.push_back(run);
       placed = true;
       seen += n;
@@ -301,8 +302,10 @@ void insert_run(Paragraph& paragraph, int at, const Run& incoming)
     if (into < static_cast<int>(text.length())) {
       Run right = run;
       right.text = text.substr(into).raw();
-      if (into > 0)
+      if (into > 0) {
         right.note = 0;
+        right.endnote = 0;
+      }
       right.image.reset();
       runs.push_back(right);
     }
@@ -351,8 +354,10 @@ void split_at(Paragraph& left, int at, Paragraph& right)
       if (into < static_cast<int>(text.length())) {
         Run part = run;
         part.text = text.substr(into).raw();
-        if (into > 0)
+        if (into > 0) {
           part.note = 0;
+          part.endnote = 0;
+        }
         right.runs.push_back(part);
       }
     }
@@ -1964,6 +1969,7 @@ void MainWindow::tag_cell_insert(TableSheet& sheet, int row, int column, const G
   }
   format.text.clear();
   format.note = 0;
+  format.endnote = 0;
   format.image.reset();
   if (!continued)
     format.direct = 0;
@@ -2249,6 +2255,7 @@ void MainWindow::toggle_cell_flag(TextFlag flag)
     }
     format.text.clear();
     format.note = 0;
+    format.endnote = 0;
     format.image.reset();
     set_text_flag(format, flag, !text_flag(format, flag));
     cell_typing_ = format;
@@ -2379,6 +2386,7 @@ void MainWindow::edit_cell_runs(const std::function<void(Run&)>& edit)
     }
     format.text.clear();
     format.note = 0;
+    format.endnote = 0;
     format.image.reset();
     edit(format);
     cell_typing_ = format;
@@ -2671,6 +2679,10 @@ void MainWindow::restore_edit_focus()
     notes_view_.grab_focus();
     return;
   }
+  if (story_target_ == 4) {
+    endnote_view_.grab_focus();
+    return;
+  }
   text_.grab_focus();
 }
 
@@ -2726,9 +2738,11 @@ void MainWindow::apply_document_page(PageSetup page)
 
 void MainWindow::restore_section_stories(size_t section, std::vector<Paragraph> header,
                                          std::vector<Paragraph> footer,
-                                         std::vector<std::vector<Paragraph>> notes)
+                                         std::vector<std::vector<Paragraph>> notes,
+                                         std::vector<std::vector<Paragraph>> endnotes)
 {
   notes_ = std::move(notes);
+  endnotes_ = std::move(endnotes);
   if (section < section_slots_.size()) {
     section_slots_[section].header = header;
     section_slots_[section].footer = footer;
@@ -2763,6 +2777,7 @@ void MainWindow::install_stories(const Document& doc)
     active_section_ = 0;
   const SectionSlot& slot = section_slots_[active_section_];
   notes_ = doc.notes;
+  endnotes_ = doc.endnotes;
   header_ = slot.header;
   footer_ = slot.footer;
   if (!(page_setup_ == slot.page)) {
@@ -2790,7 +2805,7 @@ void MainWindow::queue_note_numbers()
 
 void MainWindow::align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::Label& first_label,
                                  std::vector<Gtk::Label*>& labels, std::vector<int>& ys,
-                                 const std::vector<int>& numbers)
+                                 const std::vector<int>& numbers, bool roman)
 {
   auto buffer = view.get_buffer();
   if (!buffer)
@@ -2800,7 +2815,8 @@ void MainWindow::align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::La
   // line rather than the source line the number used to occupy.
   const Glib::ustring text = buffer->get_text();
   std::vector<int> starts;
-  if (!text.empty() || !notes_.empty()) {
+  const bool any = roman ? !endnotes_.empty() : !notes_.empty();
+  if (!text.empty() || any) {
     starts.push_back(0);
     for (int i = 0; i + 1 < static_cast<int>(text.size()); ++i) {
       if (text[static_cast<size_t>(i)] != '\n' || text[static_cast<size_t>(i + 1)] != '\n')
@@ -2864,7 +2880,8 @@ void MainWindow::align_note_view(Gtk::TextView& view, Gtk::Fixed& marks, Gtk::La
       else
         number = numbers.back() + static_cast<int>(i - numbers.size()) + 1;
     }
-    const std::string shown = std::to_string(number);
+    const std::string shown =
+        roman ? format_page_number(number, PageNumeral::LowerRoman) : std::to_string(number);
     if (label->get_text() != shown)
       label->set_text(shown);
     const int y = y_at(starts[i]);
@@ -2882,22 +2899,24 @@ void MainWindow::align_note_numbers()
 {
   if (note_groups_.size() <= 1) {
     align_note_view(notes_view_, note_marks_, note_label_, note_numbers_, note_number_y_, {});
-    return;
-  }
-  for (size_t g = 0; g < note_groups_.size(); ++g) {
-    std::vector<int> numbers;
-    for (int index : note_groups_[g].indexes)
-      numbers.push_back(index + 1);
-    if (g == 0) {
-      align_note_view(notes_view_, note_marks_, note_label_, note_numbers_, note_number_y_,
-                      numbers);
-      continue;
+  } else {
+    for (size_t g = 0; g < note_groups_.size(); ++g) {
+      std::vector<int> numbers;
+      for (int index : note_groups_[g].indexes)
+        numbers.push_back(index + 1);
+      if (g == 0) {
+        align_note_view(notes_view_, note_marks_, note_label_, note_numbers_, note_number_y_,
+                        numbers);
+        continue;
+      }
+      if (g - 1 >= note_bands_.size() || !note_bands_[g - 1])
+        continue;
+      NoteBand& band = *note_bands_[g - 1];
+      align_note_view(band.view, band.marks, band.label, band.numbers, band.number_y, numbers);
     }
-    if (g - 1 >= note_bands_.size() || !note_bands_[g - 1])
-      continue;
-    NoteBand& band = *note_bands_[g - 1];
-    align_note_view(band.view, band.marks, band.label, band.numbers, band.number_y, numbers);
   }
+  align_note_view(endnote_view_, endnote_marks_, endnote_label_, endnote_numbers_,
+                  endnote_number_y_, {}, true);
 }
 
 namespace {
@@ -3183,6 +3202,10 @@ void MainWindow::on_story_draw(Gtk::TextView& view, const Cairo::RefPtr<Cairo::C
     draw_story_borders(view, footer_, cr);
     return;
   }
+  if (&view == &endnote_view_) {
+    draw_note_borders(view, endnotes_, cr);
+    return;
+  }
   auto take = [this](const NoteGroup& group) {
     std::vector<std::vector<Paragraph>> notes;
     for (int index : group.indexes) {
@@ -3285,6 +3308,8 @@ void MainWindow::refresh_stories()
       tag_note_spacing(view, slice);
     }
   }
+  fill(endnote_view_, notes_text(endnotes_), endnotes_shown_);
+  tag_note_spacing(endnote_view_, endnotes_);
   if (reveal_note_ > static_cast<int>(notes_.size()))
     reveal_note_ = 0;
   align_note_numbers();
@@ -3306,6 +3331,28 @@ void MainWindow::refresh_stories()
   };
   attach(header_view_, show_frames);
   attach(footer_view_, show_frames);
+  const bool show_endnotes = !endnotes_.empty();
+  auto attach_endnote = [this](Gtk::Widget& widget, bool on) {
+    if (!on) {
+      if (widget.get_parent() == &page_box_) {
+        widget.hide();
+        page_box_.remove(widget);
+      }
+      return;
+    }
+    if (widget.get_parent() != &page_box_)
+      page_box_.pack_start(widget, Gtk::PACK_SHRINK);
+  };
+  attach_endnote(endnote_rule_, show_endnotes);
+  attach_endnote(endnote_box_, show_endnotes);
+  if (show_endnotes) {
+    // The box and the rule opt out of show_all, so the page does not open
+    // them while they are empty. Showing them is explicit.
+    endnote_rule_.show();
+    endnote_box_.show();
+    endnote_box_.show_all_children();
+    fit_note_views();
+  }
   int pos = 0;
   auto order = [this, &pos](Gtk::Widget& widget) {
     if (widget.get_parent() == &page_box_)
@@ -3313,6 +3360,8 @@ void MainWindow::refresh_stories()
   };
   order(header_view_);
   order(text_);
+  order(endnote_rule_);
+  order(endnote_box_);
   order(footer_view_);
   place_notes();
   if (!loading_)
@@ -3529,7 +3578,7 @@ bool MainWindow::note_overlay_box(GtkWidget* widget, int& x, int& y, int& w, int
 
 bool MainWindow::is_note_view(const Gtk::Widget* widget) const
 {
-  if (widget == &notes_view_)
+  if (widget == &notes_view_ || widget == &endnote_view_)
     return true;
   for (const auto& band : note_bands_) {
     if (band && widget == &band->view)
@@ -3774,6 +3823,7 @@ std::vector<Gtk::TextView*> MainWindow::find_targets()
   views.push_back(&header_view_);
   views.push_back(&footer_view_);
   views.push_back(&notes_view_);
+  views.push_back(&endnote_view_);
   if (note_groups_.size() > 1) {
     for (size_t i = 0; i + 1 < note_groups_.size() && i < note_bands_.size(); ++i) {
       if (note_bands_[i])
@@ -3912,6 +3962,37 @@ void MainWindow::release_note_scroll(bool reveal)
 void MainWindow::on_notes_end()
 {
   on_note_view_end(notes_view_);
+}
+
+void MainWindow::on_endnotes_end()
+{
+  if (loading_ || restoring_ || !buffer_ || !endnote_view_.get_buffer())
+    return;
+  const std::string text = endnote_view_.get_buffer()->get_text().raw();
+  if (text == notes_text(endnotes_))
+    return;
+  Document before = capture();
+  Document after = before;
+  std::vector<std::vector<Paragraph>> parsed = notes_from_text(text, typing_);
+  const int room = std::max(0, kMaxNotes - static_cast<int>(notes_.size()));
+  if (static_cast<int>(parsed.size()) > room)
+    parsed.resize(static_cast<size_t>(room));
+  if (blank_text(text)) {
+    const bool was = loading_;
+    loading_ = true;
+    endnote_view_.get_buffer()->set_text("");
+    endnotes_shown_ = "";
+    loading_ = was;
+    parsed.clear();
+  }
+  const bool same_count = parsed.size() == before.endnotes.size();
+  after.endnotes = std::move(parsed);
+  if (!same_count)
+    retarget_endnote_markers(after, before.endnotes);
+  Gtk::Widget* focused = get_focus();
+  commit_document(before, after, -1, true);
+  if (focused == &endnote_view_)
+    endnote_view_.grab_focus();
 }
 
 void MainWindow::on_note_view_end(Gtk::TextView& view)
@@ -5380,14 +5461,50 @@ void MainWindow::on_table_width()
 
 void MainWindow::on_footnote()
 {
-  if (!buffer_ || notes_.size() >= static_cast<size_t>(kMaxNotes))
+  if (!buffer_ || notes_.size() + endnotes_.size() >= static_cast<size_t>(kMaxNotes))
+    return;
+  Gtk::Dialog dialog("Footnote and Endnote", *this, true);
+  dialog.set_resizable(false);
+  dialog.add_button("_Cancel", Gtk::RESPONSE_CANCEL);
+  dialog.add_button("_OK", Gtk::RESPONSE_OK);
+  dialog.set_default_response(Gtk::RESPONSE_OK);
+  auto* footnote = Gtk::manage(new Gtk::RadioButton("Footnote"));
+  auto* endnote = Gtk::manage(new Gtk::RadioButton("Endnote"));
+  Gtk::RadioButton::Group group = footnote->get_group();
+  endnote->set_group(group);
+  footnote->set_active(true);
+  auto* box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 6));
+  box->set_margin_top(12);
+  box->set_margin_bottom(12);
+  box->set_margin_start(12);
+  box->set_margin_end(12);
+  box->pack_start(*footnote, Gtk::PACK_SHRINK);
+  box->pack_start(*endnote, Gtk::PACK_SHRINK);
+  dialog.get_content_area()->pack_start(*box, Gtk::PACK_SHRINK);
+  dialog.show_all_children();
+  if (dialog.run() != Gtk::RESPONSE_OK) {
+    restore_edit_focus();
+    return;
+  }
+  insert_note_mark(endnote->get_active());
+}
+
+void MainWindow::insert_note_mark(bool endnote)
+{
+  if (!buffer_ || notes_.size() + endnotes_.size() >= static_cast<size_t>(kMaxNotes))
     return;
   Document before = capture();
   Document after = before;
   if (after.paragraphs.empty())
     after.paragraphs.emplace_back();
-  const int number = static_cast<int>(after.notes.size()) + 1;
-  after.notes.push_back(std::vector<Paragraph>{Paragraph{}});
+  const int number = endnote ? static_cast<int>(after.endnotes.size()) + 1
+                             : static_cast<int>(after.notes.size()) + 1;
+  const std::string label =
+      endnote ? format_page_number(number, PageNumeral::LowerRoman) : std::to_string(number);
+  if (endnote)
+    after.endnotes.push_back(std::vector<Paragraph>{Paragraph{}});
+  else
+    after.notes.push_back(std::vector<Paragraph>{Paragraph{}});
 
   bool in_cell = false;
   int body_caret = -1;
@@ -5435,8 +5552,11 @@ void MainWindow::on_footnote()
         if (here.get_char() != '\n')
           basis = format_of(here);
       }
-      Run marker = plain_run(basis, std::to_string(number));
-      marker.note = number;
+      Run marker = plain_run(basis, label);
+      if (endnote)
+        marker.endnote = number;
+      else
+        marker.note = number;
       insert_run(after.paragraphs[index], into, marker);
       in_cell = true;
     }
@@ -5452,18 +5572,29 @@ void MainWindow::on_footnote()
       into = 0;
     if (into > length)
       into = length;
-    Run marker = plain_run(typing_, std::to_string(number));
-    marker.note = number;
+    Run marker = plain_run(typing_, label);
+    if (endnote)
+      marker.endnote = number;
+    else
+      marker.note = number;
     insert_run(after.paragraphs[index], into, marker);
     body_caret = origin + into + static_cast<int>(Glib::ustring(marker.text).length());
   }
 
-  // Before the rebuild. The caret idle would otherwise follow the digit.
-  reveal_note_ = number;
+  if (!endnote) {
+    // Before the rebuild. The caret idle would otherwise follow the digit.
+    reveal_note_ = number;
+  }
   if (in_cell)
     commit_document(before, after);
   else
     commit_document(before, after, body_caret);
+  if (endnote) {
+    if (auto notes = endnote_view_.get_buffer())
+      notes->place_cursor(notes->end());
+    endnote_view_.grab_focus();
+    return;
+  }
   // The new marker's sheet is known once the seams are laid out. Until then
   // every note still shares the first column.
   update_page_seams();

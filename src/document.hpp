@@ -98,6 +98,10 @@ struct Run {
   // 1-based index into Document::notes. 0 is not a footnote marker. The
   // marker's text is the number the page shows.
   int note = 0;
+  // 1-based index into Document::endnotes. 0 is not an endnote marker. A run
+  // is a footnote or an endnote, not both. The marker's text is the roman
+  // numeral the page shows.
+  int endnote = 0;
   // A picture in the run. Its text is empty. Two pictures are never merged,
   // even when the bytes match.
   std::optional<Image> image;
@@ -112,6 +116,20 @@ struct Run {
   // direct, as Word does.
   unsigned direct = 0;
 };
+
+// A picture, a marker, a page field, or text. An empty run is not one.
+inline bool run_present(const Run& run)
+{
+  return !run.text.empty() || run.image.has_value() || run.note != 0 || run.endnote != 0 ||
+         run.page;
+}
+
+// Text that may join the run beside it. A marker, a picture, and a page
+// field stay their own run.
+inline bool run_merges(const Run& run)
+{
+  return !run.page && !run.image.has_value() && run.note == 0 && run.endnote == 0;
+}
 
 constexpr unsigned kDirectFont = 1;
 constexpr unsigned kDirectSize = 2;
@@ -583,6 +601,10 @@ struct Document {
   // Footnotes, in the order their markers cite. notes[i] belongs to a run
   // whose note is i + 1.
   std::vector<std::vector<Paragraph>> notes;
+  // Endnotes, in the order their markers cite. endnotes[i] belongs to a run
+  // whose endnote is i + 1. They are collected after the last section, and
+  // they are numbered apart from footnotes. The two share kMaxNotes.
+  std::vector<std::vector<Paragraph>> endnotes;
 };
 
 // Same values and the same direct bits: runs that may be one run.
@@ -953,6 +975,10 @@ void adopt_heading_styles(Document& doc, const std::string& font, double size);
 // still names the note that split stays. `doc.notes` is already the edited
 // list; `before_notes` is the list it replaced. The same count changes nothing.
 void retarget_note_markers(Document& doc, const std::vector<std::vector<Paragraph>>& before_notes);
+// The same for endnotes. A marker whose text is empty or the old roman
+// numeral takes the numeral of its new index.
+void retarget_endnote_markers(Document& doc,
+                              const std::vector<std::vector<Paragraph>>& before_endnotes);
 
 Document blank_document(const std::string& font, double size);
 Document plain_import(const std::string& text, const std::string& font, double size);
@@ -1036,10 +1062,14 @@ struct NoteDrop {
 };
 
 NoteDrop drop_unmarked_notes(const Document& doc);
+// The same for endnotes. A marker whose text is empty or the old roman
+// numeral takes the new numeral.
+NoteDrop drop_unmarked_endnotes(const Document& doc);
 // Writes the new numbers onto body markers. A marker whose text is empty or
 // the old number takes the new number's text. A dropped note's marker loses
 // its note.
 void apply_note_remap(Document& doc, const std::vector<int>& remap);
+void apply_endnote_remap(Document& doc, const std::vector<int>& remap);
 
 // Body offsets of paragraphs whose list id changed between `before` and
 // `after`. A cell is skipped: a table is one anchor, and tagging each cell
